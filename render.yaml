@@ -1,0 +1,41 @@
+# Render Blueprint: the DEMO profile (DESIGN.md section 13).
+# Deliberately minimal: one web service with the background-thread
+# projector, one managed Postgres, one nightly reset job. The separate
+# worker (outbox + projector) is the production-like profile and joins a
+# deployment only when external effects or projection lag force it.
+#
+# Open item before first deploy: verify CREATE EXTENSION timescaledb on
+# Render Postgres 18 before anything depends on it.
+
+services:
+  - type: web
+    name: glasshouse-web
+    runtime: docker
+    plan: starter
+    healthCheckPath: /healthz
+    preDeployCommand: uv run alembic upgrade head
+    envVars:
+      - key: GLASSHOUSE_ENVIRONMENT
+        value: demo
+      - key: GLASSHOUSE_DATABASE_URL
+        fromDatabase:
+          name: glasshouse-db
+          property: connectionString
+
+  - type: cron
+    name: glasshouse-seed-reset
+    runtime: docker
+    schedule: "30 2 * * *"
+    dockerCommand: uv run python -m glasshouse.cli seed --reset
+    envVars:
+      - key: GLASSHOUSE_ENVIRONMENT
+        value: demo
+      - key: GLASSHOUSE_DATABASE_URL
+        fromDatabase:
+          name: glasshouse-db
+          property: connectionString
+
+databases:
+  - name: glasshouse-db
+    plan: basic-256mb
+    postgresMajorVersion: "18"
