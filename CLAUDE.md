@@ -31,7 +31,23 @@ Build order (DESIGN.md section 5): **the vertical needle first** — one trade, 
 
 ## Morpholog (the substrate)
 
-- Local repo: `~/dev/morpholog`; built binary at `~/dev/morpholog/target/release/morpholog`. Set `GLASSHOUSE_MORPHOLOG_BIN` accordingly in dev. Embedder docs: `~/dev/morpholog/docs/embedder-integration.md`.
+### Learning Morpholog: read this before touching `glasshouse.commit`
+
+The conceptual model in one paragraph: a `.morph` file declares **predicates** (the shapes of governed facts, called claims), **transformations** (the only way state changes: guarded transitions that retract and assert claims, run by an **actor** whose authority is itself claims), and **intents** (outbox messages a commit emits for external delivery). The kernel validates the file, runs transformations against a Postgres-backed ledger under SERIALIZABLE isolation, refuses anything that breaks the rules, and can *explain* a refusal in terms of the exact missing gate. Subjects (entity identifiers) are opaque to Morpholog: it never understands power, money or trades; it understands rules. Rejection is a lawful outcome (exit 1 with a `rejected` envelope), distinct from operational failure. Everything an embedder needs goes through the CLI: `schema` (JSON Schema for a transformation's arguments, or an intent's payload), `run --args-named` (commit), `explain` (dry-run diagnosis), `inspect claims --predicate` / `inspect predicates` (read governed state back by declared field name), `outbox claim` / `complete` (deliver intents). `.morph` is the single source of truth; schema, request and response are projections of it.
+
+Reading order (all local, in `~/dev/morpholog`):
+
+1. `docs/embedder-integration.md` — **the pinned public contract**: argument codecs (`--args-named` vs tagged `--args`), the JSON envelope, what is stable vs reserved. This is the document `glasshouse.commit` is written against.
+2. `examples/etrm_embedder/etrm_lifecycle.py` + its README — **a worked Python embedder for exactly our use case**: drives a commodity trade through grant-authority, capture, confirm, price-correct, settle against `examples/10_trade_lifecycle/trade_lifecycle.morph`, stdlib only. This is the seed `glasshouse.commit` grows from, and `trade_lifecycle.morph` is the seed the Glasshouse rule model grows from.
+3. `docs/developer-intro.md` — the long-form embedder onboarding (the revenue example, reading state back, where Morpholog fits in a stack).
+4. `docs/runtime-semantics.md` — when guard/gate/transition semantics questions come up.
+5. `~/dev/morpholog/CLAUDE.md` — Morpholog's own doctrine (forced-by-example, what gets accepted upstream); read before filing any upstream issue.
+
+Learn by running, not just reading: create a disposable database and exercise the CLI directly (`morpholog schema`, `run`, `explain`, `inspect claims`) against `trade_lifecycle.morph`, and run `etrm_lifecycle.py` end to end (`DATABASE_URL=postgres:///morpholog_scratch`, **disposable DB only — the run path commits**). Ten minutes of poking the real envelope beats any summary, including this one.
+
+### Integration rules
+
+- Local repo: `~/dev/morpholog`; built binary at `~/dev/morpholog/target/release/morpholog`. Set `GLASSHOUSE_MORPHOLOG_BIN` accordingly in dev.
 - Integration is via subprocess (per-call now; `run --batch` NDJSON once it lands upstream — each batch row is its own SERIALIZABLE transition, never all-or-nothing).
 - Pydantic request models and typed decoders are **generated from `morpholog schema` in a build step, committed to the repo, and drift-checked in CI** — never runtime-dynamic.
 - Upstream work in flight for us (in order): model hash + schema manifest, `run --batch`, the per-predicate views generator, the hash-chained audit log. **v0 blocks on none of it**; adopt each surface as it lands. Full verdicts: `docs/morpholog-integration-contract.md`.
