@@ -8,3 +8,38 @@ failure, so rejection-vs-failure confusion is unrepresentable.
 The one absolute rule of the codebase: writes to governed state only ever
 go through this package. No ORM writes, no raw SQL writes, no exceptions.
 """
+
+from glasshouse.commit.adapter import MorphologAdapter, MorphologOperationalError
+from glasshouse.commit.envelope import (
+    BareValue,
+    Claim,
+    Committed,
+    EmittedIntent,
+    Explanation,
+    GateRejection,
+    InvariantRejection,
+    MissingClaim,
+    NamedArgs,
+    Outcome,
+    PredicateDecl,
+    Rejected,
+    RejectedVerdict,
+)
+
+__all__ = [
+    "BareValue",
+    "Claim",
+    "Committed",
+    "EmittedIntent",
+    "Explanation",
+    "GateRejection",
+    "InvariantRejection",
+    "MissingClaim",
+    "MorphologAdapter",
+    "MorphologOperationalError",
+    "NamedArgs",
+    "Outcome",
+    "PredicateDecl",
+    "Rejected",
+    "RejectedVerdict",
+]

@@ -30,6 +30,22 @@ Upstream generates `CREATE VIEW` per predicate with declared column names, versi
 
 Glasshouse's ledger-resident capability model ("who could approve corrections last March" as an as-of query) is the worked example that must arrive *before* the WP2 design: patterns over transformation names are claims-about-rules — constitutionally novel territory, example-first. The per-capability grant boilerplate Glasshouse accumulates is precisely the pressure pattern-based authority needs to see.
 
+## Candidate asks drafted 07/06/2026 (not yet filed)
+
+Surfaced by building `glasshouse.commit` against the real binary; each names the business shape that forces it, per the substrate's own doctrine. To be filed as separate issues once agreed.
+
+### 6. Schema provisioning from the binary (`morpholog init`)
+
+The binary cannot initialise its own database: a fresh database needs `crates/morpholog-core/sql/schema.sql` from a source checkout at the matching commit. The forcing example is the Glasshouse Docker image, which bakes in the binary only; vendoring the SQL file separately invites binary/schema drift that nothing checks. Smallest surface: an idempotent `morpholog init --database-url` applying the schema the binary was built with (or `morpholog schema --sql` emitting it, letting the embedder pipe it to psql).
+
+### 7. Named claim args on the read surface (`inspect claims --named`)
+
+`--args-named` made the write side bare and named; the read side still returns positional tagged args, so every embedder re-implements zip-by-declared-order plus an arity guard (the worked embedder carries this helper; Glasshouse's adapter does too, as `read_claims`). The accepted views generator already concedes the principle for SQL: named access is the official inspection surface. Smallest surface: a `--named` flag on `inspect claims` emitting `{"predicate": ..., "args": {field: bare}}`, the exact mirror of `--args-named`. (The same positional shape recurs in run envelopes and the audit log; the projector work will say whether that wants the same treatment, separately forced.)
+
+### 8. Same-snapshot explanation on rejection (`run --explain-on-reject`)
+
+Glasshouse's API contract promises every rejection a structured reason and an answer to "what would make this admissible?". Today that is `run` (rejected) followed by `explain`: two processes, two snapshots, so under concurrent commits the explanation can describe a different state from the one that refused the proposal. Smallest surface: a flag on `run` that, when the outcome is rejected, embeds the explain verdict structure in the rejection envelope, computed against the same pre-state the rejection was decided on. The rejected envelope is `{status, reason}` today; an optional `explanation` field is non-breaking.
+
 ## Coordination agreements
 
 - **Evidence-pack extension contract pinned now** (no waiting for full WP5): a content-addressed JSON manifest, entries `{role, hash, media_type, locator?}`, chained to the ledger by transition ids.
