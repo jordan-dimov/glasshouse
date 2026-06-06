@@ -4,6 +4,8 @@ Glasshouse depends on [Morpholog](https://github.com/jordan-dimov/morpholog) as 
 
 Asks filed 06/06/2026; upstream verdicts received same day. Upstream delivery order: (2+3) as one PR, then 1, then the views generator (in place of 4), then the hash-chained audit log — all after the in-flight time-arc PR (Timestamp/Duration + laytime example) lands. **Glasshouse v0 does not block on any of these**: it builds against current Morpholog (per-call CLI, N `schema` calls, projection-primary reads with typed decoders) and adopts each surface as it lands.
 
+Binary surface check, 07/06/2026 (morpholog-cli 0.0.1): none of surfaces 1-4 had landed yet; `morpholog verify` (audit-log replay diffed against the claims table, exit 0 consistent / 1 divergent) already exists, and is the upstream leg `glasshouse verify` composes with for ledger self-consistency.
+
 ## 1. `run --batch` — accepted, narrowed from the `--stdio` ask
 
 NDJSON proposals in, one per line: `{transformation, actor, args_named}` (actor *per row*, not a flag — an import file carries mixed provenance); the pinned per-proposal outcome envelope out, order-preserving; continue-on-rejection by default with `--fail-fast`; one parse+validate and one connection pool per batch.

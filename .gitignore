@@ -23,3 +23,6 @@ build/
 
 # OS
 .DS_Store
+
+# Local working notes (agent handover; public doctrine lives in DESIGN.md)
+CLAUDE.md
