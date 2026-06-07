@@ -48,7 +48,7 @@ The ask: `--args-named` made the write side bare and named while the read side s
 
 The ask: the API promises every rejection a structured reason and an answer to "what would make this admissible?", and run-then-explain is two snapshots that can disagree under concurrent commits. Delivered with exactly the right semantics: the rejecting proposal hands back the scoped pre-state its gates evaluated, and the pure explanation engine runs against it in memory; rejection envelopes gain an `explanation` field in the `explain --json` shape; committed envelopes and exit codes unchanged; kernel errors and serialization failures excluded (no admissibility story). Adapter surface: `run(..., explain_on_reject=True)`, surfaced as `Rejected.explanation`.
 
-## 9. The generated Python client lives in the binary (`morpholog generate python-client`) — drafted 07/06/2026, ready to file
+## 9. The generated Python client lives in the binary (`morpholog generate python-client`) — filed 07/06/2026 as [morpholog#126](https://github.com/jordan-dimov/morpholog/issues/126)
 
 ### The forcing example, quantified
 
