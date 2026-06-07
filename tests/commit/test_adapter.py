@@ -63,7 +63,46 @@ def test_non_json_stdout_raises(tmp_path: Path) -> None:
 
 def test_missing_binary_raises(tmp_path: Path) -> None:
     with pytest.raises(MorphologOperationalError, match="could not run"):
-        adapter(tmp_path / "no-such-binary").inspect_predicates()
+        adapter(tmp_path / "no-such-binary").model_hash()
+
+
+def test_init_true_on_fresh_false_on_existing(tmp_path: Path) -> None:
+    fresh = fake_binary(tmp_path, stdout='{"status": "initialised", "schema": "morpholog"}')
+    assert adapter(fresh).init() is True
+    existing = fake_binary(
+        tmp_path, stdout='{"status": "already-initialised", "schema": "morpholog"}'
+    )
+    assert adapter(existing).init(skip_if_exists=True) is False
+    argv = (tmp_path / "argv.txt").read_text().splitlines()
+    assert argv[0] == "init" and "--skip-if-exists" in argv
+
+
+def test_explain_on_reject_passes_the_flag(tmp_path: Path) -> None:
+    binary = fake_binary(tmp_path, stdout=envelopes.REJECTED_WITH_EXPLANATION, exit_code=1)
+    outcome = adapter(binary).run(
+        "capture_trade", actor="trader", args={"trade": "t1"}, explain_on_reject=True
+    )
+    assert isinstance(outcome, Rejected)
+    assert outcome.explanation is not None
+    assert "--explain-on-reject" in (tmp_path / "argv.txt").read_text().splitlines()
+
+
+def test_read_claims_goes_through_the_named_surface(tmp_path: Path) -> None:
+    binary = fake_binary(tmp_path, stdout=envelopes.NAMED_CLAIMS)
+    rows = adapter(binary).read_claims("CapturedPrice")
+    assert rows == [
+        {"trade": "t1", "price": "45.20"},
+        {
+            "trade": "t1",
+            "version_id": "v1",
+            "quantity": "100",
+            "delivery_period": "2026Q4",
+            "effective_from": "2026-06-01",
+        },
+    ]
+    argv = (tmp_path / "argv.txt").read_text().splitlines()
+    assert argv[argv.index("--named") + 1] == "model.morph"
+    assert argv[argv.index("--predicate") + 1] == "CapturedPrice"
 
 
 def test_named_args_reach_the_cli_in_wire_form(tmp_path: Path) -> None:

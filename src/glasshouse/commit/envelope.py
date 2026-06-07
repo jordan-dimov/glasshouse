@@ -1,16 +1,21 @@
 """The pinned morpholog wire contract, typed.
 
-Both directions of the value codec live here. Reading: morpholog emits
-tagged values (`{"type": "decimal", "value": "82.50"}`) whose tags map
+Both directions of the value codec live here. Writing: `--args-named`
+takes bare values, so `named_wire` only renders Decimal and date to their
+wire strings. Reading: claims inside run envelopes and intent payloads
+are tagged (`{"type": "decimal", "value": "82.50"}`), and the tags map
 one-to-one onto Python types, so `untag` decodes straight to bare values
-and no tagged-value class hierarchy exists. Writing: `--args-named` takes
-bare values, so `named_wire` only renders Decimal and date to their wire
-strings. Decimals ride as strings end to end (law 8: never via float).
+and no tagged-value class hierarchy exists. The targeted read
+(`inspect claims --named`) is bare and named by the substrate itself;
+its values are wire-true strings, and *typed* reads belong to the
+generated per-predicate models, which know each field's kind from the
+schema manifest. Decimals ride as strings end to end (law 8: never via
+float).
 
 The envelope models mirror morpholog's `docs/embedder-integration.md`,
-verified against the real binary on 07/06/2026. `extra="forbid"` is
-deliberate: an upstream envelope change breaks loudly here, before any
-integration test.
+verified against the real binary on 07/06/2026 (post PR #125).
+`extra="forbid"` is deliberate: an upstream envelope change breaks
+loudly here, before any integration test.
 """
 
 from __future__ import annotations
@@ -28,7 +33,8 @@ type BareValue = str | bool | Decimal | dt.date | list[BareValue]
 # What `--args-named` accepts, bare: Subjects as opaque strings, Decimals
 # as Decimal, Dates as date, Bools as bool. Collection parameters need the
 # tagged `--args` codec; the type excludes them until a transformation
-# forces it.
+# forces it. (Timestamp and Duration kinds exist upstream; they join here
+# when a Glasshouse transformation uses them.)
 type NamedArg = str | bool | Decimal | dt.date
 type NamedArgs = Mapping[str, NamedArg]
 
@@ -72,42 +78,6 @@ class _Envelope(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
 
-class Claim(_Envelope):
-    """One governed fact: predicate name and positional bare args. Naming
-    the positions goes through the declared vocabulary
-    (`MorphologAdapter.read_claims`), never hard-coded indices."""
-
-    predicate: str
-    args: tuple[Bare, ...]
-
-
-class EmittedIntent(_Envelope):
-    name: str
-    args: tuple[Bare, ...]
-
-
-class Committed(_Envelope):
-    status: Literal["committed"]
-    transition_id: UUID
-    actor: Bare
-    asserted_claims: tuple[Claim, ...]
-    retracted_claims: tuple[Claim, ...]
-    emitted_intents: tuple[EmittedIntent, ...]
-
-
-class Rejected(_Envelope):
-    """A lawful outcome, not an error: the proposal was understood and
-    refused by the rules (law 10)."""
-
-    status: Literal["rejected"]
-    reason: str
-
-
-type Outcome = Annotated[Committed | Rejected, Field(discriminator="status")]
-
-OUTCOME: TypeAdapter[Outcome] = TypeAdapter(Outcome)
-
-
 class MissingClaim(_Envelope):
     """A claim whose absence failed a gate, and the transformations that
     could supply it: the raw material for "what would make this
@@ -136,9 +106,10 @@ class RejectedVerdict(_Envelope):
 
 
 class Explanation(_Envelope):
-    """`morpholog explain --json`: a question answered, never an action
-    taken. The transition echo is diagnostic passthrough; the verdict is
-    the payload."""
+    """`explain --json`, and the `explanation` a rejection carries under
+    `run --explain-on-reject` (same shape, same-snapshot semantics). The
+    transition echo is diagnostic passthrough; the verdict is the
+    payload."""
 
     transition: JsonValue
     verdict: Literal["admissible"] | RejectedVerdict
@@ -148,23 +119,51 @@ class Explanation(_Envelope):
         return self.verdict == "admissible"
 
 
-class PredicateArg(_Envelope):
+class Claim(_Envelope):
+    """One governed fact as run envelopes carry it: predicate name and
+    positional bare args. For reads decoded by field name, use
+    `MorphologAdapter.read_claims` (the substrate's `--named` surface)."""
+
+    predicate: str
+    args: tuple[Bare, ...]
+
+
+class EmittedIntent(_Envelope):
     name: str
-    kind: str
+    args: tuple[Bare, ...]
 
 
-class PredicateDecl(_Envelope):
-    """A predicate's declared vocabulary: the read-side analogue of
-    `x-morpholog-arg-order`, and the only sanctioned source of field
-    names for positional claim args."""
+class Committed(_Envelope):
+    status: Literal["committed"]
+    transition_id: UUID
+    actor: Bare
+    asserted_claims: tuple[Claim, ...]
+    retracted_claims: tuple[Claim, ...]
+    emitted_intents: tuple[EmittedIntent, ...]
 
-    name: str
-    args: tuple[PredicateArg, ...]
 
-    @property
-    def field_names(self) -> tuple[str, ...]:
-        return tuple(arg.name for arg in self.args)
+class Rejected(_Envelope):
+    """A lawful outcome, not an error: the proposal was understood and
+    refused by the rules (law 10). Under `--explain-on-reject` it carries
+    the explanation computed against the exact pre-state that refused."""
+
+    status: Literal["rejected"]
+    reason: str
+    explanation: Explanation | None = None
+
+
+type Outcome = Annotated[Committed | Rejected, Field(discriminator="status")]
+
+OUTCOME: TypeAdapter[Outcome] = TypeAdapter(Outcome)
+
+
+class NamedClaim(_Envelope):
+    """`inspect claims --named`: args decoded to declared field names by
+    the substrate, values wire-true (decimals and dates stay strings)."""
+
+    predicate: str
+    args: dict[str, JsonValue]
 
 
 CLAIMS: TypeAdapter[list[Claim]] = TypeAdapter(list[Claim])
-PREDICATE_DECLS: TypeAdapter[list[PredicateDecl]] = TypeAdapter(list[PredicateDecl])
+NAMED_CLAIMS: TypeAdapter[list[NamedClaim]] = TypeAdapter(list[NamedClaim])

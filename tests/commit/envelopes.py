@@ -1,7 +1,7 @@
 """Golden envelopes captured verbatim from morpholog-cli 0.0.1 on
-07/06/2026, driving `trade_lifecycle.morph`. These pin the wire shapes the
-adapter is written against; if upstream changes an envelope, these fail
-before any integration test does."""
+07/06/2026 (post PR #125), driving `trade_lifecycle.morph`. These pin the
+wire shapes the adapter is written against; if upstream changes an
+envelope, these fail before any integration test does."""
 # ruff: noqa: E501 (verbatim wire captures are never wrapped)
 
 COMMITTED_CAPTURE = """\
@@ -51,6 +51,50 @@ REJECTED_DUPLICATE = """\
   "status": "rejected",
   "reason": "require failed: not TradeCaptured(trade, _, _) did not hold over pre-state"
 }
+"""
+
+REJECTED_WITH_EXPLANATION = """\
+{
+  "explanation": {
+    "transition": {
+      "actor": "trader",
+      "args": ["t1", "power", "buy", "v2", "100", "2026Q4", "2026-06-01", "45.20"],
+      "transformation": "capture_trade"
+    },
+    "verdict": {
+      "rejected": {
+        "directly_missing_claims": [],
+        "gate": "not TradeCaptured(trade, _, _)",
+        "kind": "gate",
+        "statement_kind": "require"
+      }
+    }
+  },
+  "reason": "require failed: not TradeCaptured(trade, _, _) did not hold over pre-state",
+  "status": "rejected"
+}
+"""
+
+NAMED_CLAIMS = """\
+[
+  {
+    "args": {
+      "price": "45.20",
+      "trade": "t1"
+    },
+    "predicate": "CapturedPrice"
+  },
+  {
+    "args": {
+      "delivery_period": "2026Q4",
+      "effective_from": "2026-06-01",
+      "quantity": "100",
+      "trade": "t1",
+      "version_id": "v1"
+    },
+    "predicate": "TradeTerms"
+  }
+]
 """
 
 EXPLAIN_ADMISSIBLE = """\

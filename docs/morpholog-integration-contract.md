@@ -6,6 +6,8 @@ Asks filed 06/06/2026; upstream verdicts received same day. Upstream delivery or
 
 Binary surface check, 07/06/2026 (morpholog-cli 0.0.1): none of surfaces 1-4 had landed yet; `morpholog verify` (audit-log replay diffed against the claims table, exit 0 consistent / 1 divergent) already exists, and is the upstream leg `glasshouse verify` composes with for ledger self-consistency.
 
+Updated later the same day: surfaces 2+3 (`morpholog hash`, `schema --all`) merged via upstream PR #124, and asks 6-8 below merged via PR #125; all five verified against the rebuilt binary and adopted in `glasshouse.commit`. Still pending upstream: `run --batch` (1), the views generator (4), the hash-chained audit log.
+
 ## 1. `run --batch` — accepted, narrowed from the `--stdio` ask
 
 NDJSON proposals in, one per line: `{transformation, actor, args_named}` (actor *per row*, not a flag — an import file carries mixed provenance); the pinned per-proposal outcome envelope out, order-preserving; continue-on-rejection by default with `--fail-fast`; one parse+validate and one connection pool per batch.
@@ -30,21 +32,21 @@ Upstream generates `CREATE VIEW` per predicate with declared column names, versi
 
 Glasshouse's ledger-resident capability model ("who could approve corrections last March" as an as-of query) is the worked example that must arrive *before* the WP2 design: patterns over transformation names are claims-about-rules — constitutionally novel territory, example-first. The per-capability grant boilerplate Glasshouse accumulates is precisely the pressure pattern-based authority needs to see.
 
-## Candidate asks drafted 07/06/2026 (not yet filed)
+## Asks 6-8: drafted and delivered 07/06/2026 (upstream PR #125, merged)
 
-Surfaced by building `glasshouse.commit` against the real binary; each names the business shape that forces it, per the substrate's own doctrine. To be filed as separate issues once agreed.
+Surfaced by building `glasshouse.commit` against the real binary; each named the business shape that forced it, per the substrate's own doctrine. All three were delivered the same day in PR #125, verified against the rebuilt binary, and adopted in `glasshouse.commit`.
 
-### 6. Schema provisioning from the binary (`morpholog init`)
+### 6. Schema provisioning from the binary (`morpholog init`) — delivered
 
-The binary cannot initialise its own database: a fresh database needs `crates/morpholog-core/sql/schema.sql` from a source checkout at the matching commit. The forcing example is the Glasshouse Docker image, which bakes in the binary only; vendoring the SQL file separately invites binary/schema drift that nothing checks. Smallest surface: an idempotent `morpholog init --database-url` applying the schema the binary was built with (or `morpholog schema --sql` emitting it, letting the embedder pipe it to psql).
+The ask: the binary could not initialise its own database; a fresh database needed `crates/morpholog-core/sql/schema.sql` from a source checkout at the matching commit, and the Glasshouse Docker image (binary only) had no drift-checked provisioning path. Delivered better than asked: the canonical schema travels inside the binary (`include_str!`), day-zero only, refuse-or-skip on an existing schema (`--skip-if-exists` for re-runnable entrypoints), never drops, never migrates. Adapter surface: `MorphologAdapter.init()`.
 
-### 7. Named claim args on the read surface (`inspect claims --named`)
+### 7. Named claim args on the read surface (`inspect claims --named`) — delivered
 
-`--args-named` made the write side bare and named; the read side still returns positional tagged args, so every embedder re-implements zip-by-declared-order plus an arity guard (the worked embedder carries this helper; Glasshouse's adapter does too, as `read_claims`). The accepted views generator already concedes the principle for SQL: named access is the official inspection surface. Smallest surface: a `--named` flag on `inspect claims` emitting `{"predicate": ..., "args": {field: bare}}`, the exact mirror of `--args-named`. (The same positional shape recurs in run envelopes and the audit log; the projector work will say whether that wants the same treatment, separately forced.)
+The ask: `--args-named` made the write side bare and named while the read side stayed positional and tagged, so every embedder re-implemented zip-by-declared-order plus an arity guard. Delivered with a deliberate authority flip: the bare read keeps the claims table as authority (unknown predicate = empty); under `--named <file.morph>` the programme is the authority, so a requested-but-undeclared predicate fails before any database read and programme/database skew is a hard error naming both sides. Values are wire-true (decimals and dates stay strings); typing belongs to the generated per-predicate models fed by the `schema --all` manifest. Adapter surface: `read_claims`, now a thin pass-through; the hand-rolled decode is deleted (upstream deleted the worked embedder's identical helper in the same PR). The positional shape still recurs in run envelopes and the audit log; whether the projector wants the same treatment is a separate, separately-forced question.
 
-### 8. Same-snapshot explanation on rejection (`run --explain-on-reject`)
+### 8. Same-snapshot explanation on rejection (`run --explain-on-reject`) — delivered
 
-Glasshouse's API contract promises every rejection a structured reason and an answer to "what would make this admissible?". Today that is `run` (rejected) followed by `explain`: two processes, two snapshots, so under concurrent commits the explanation can describe a different state from the one that refused the proposal. Smallest surface: a flag on `run` that, when the outcome is rejected, embeds the explain verdict structure in the rejection envelope, computed against the same pre-state the rejection was decided on. The rejected envelope is `{status, reason}` today; an optional `explanation` field is non-breaking.
+The ask: the API promises every rejection a structured reason and an answer to "what would make this admissible?", and run-then-explain is two snapshots that can disagree under concurrent commits. Delivered with exactly the right semantics: the rejecting proposal hands back the scoped pre-state its gates evaluated, and the pure explanation engine runs against it in memory; rejection envelopes gain an `explanation` field in the `explain --json` shape; committed envelopes and exit codes unchanged; kernel errors and serialization failures excluded (no admissibility story). Adapter surface: `run(..., explain_on_reject=True)`, surfaced as `Rejected.explanation`.
 
 ## Coordination agreements
 

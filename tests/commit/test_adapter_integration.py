@@ -3,7 +3,8 @@ worked trade lifecycle, end to end, typed.
 
 Skips cleanly (CI has no morpholog) unless a local morpholog checkout and
 a disposable database are reachable. The run path commits: the morpholog
-schema in the test database is dropped and recreated every run.
+schema in the test database is dropped every run and re-provisioned
+through the binary itself.
 
     GLASSHOUSE_MORPHOLOG_REPO   default ~/dev/morpholog
     GLASSHOUSE_TEST_DATABASE_URL default postgres:///morpholog_scratch
@@ -21,6 +22,7 @@ from glasshouse.commit import (
     Committed,
     GateRejection,
     MorphologAdapter,
+    MorphologOperationalError,
     NamedArgs,
     Rejected,
     RejectedVerdict,
@@ -30,7 +32,6 @@ REPO = Path(os.environ.get("GLASSHOUSE_MORPHOLOG_REPO", "~/dev/morpholog")).expa
 DB = os.environ.get("GLASSHOUSE_TEST_DATABASE_URL", "postgres:///morpholog_scratch")
 BINARY = REPO / "target" / "release" / "morpholog"
 MODEL = REPO / "examples" / "10_trade_lifecycle" / "trade_lifecycle.morph"
-SCHEMA_SQL = REPO / "crates" / "morpholog-core" / "sql" / "schema.sql"
 
 
 def _database_reachable() -> bool:
@@ -49,14 +50,22 @@ pytestmark = pytest.mark.skipif(
 
 @pytest.fixture(scope="module")
 def morpholog() -> MorphologAdapter:
-    # Disposable by contract: recreate the morpholog schema for a
-    # reproducible run (provisioning from the binary is an upstream ask).
+    # Disposable by contract: drop so the lifecycle test can prove
+    # provisioning through the binary (`init` is day-zero only).
     subprocess.run(["psql", DB, "-qc", "DROP SCHEMA IF EXISTS morpholog CASCADE"], check=True)
-    subprocess.run(["psql", DB, "-qf", str(SCHEMA_SQL)], check=True)
     return MorphologAdapter(model_file=MODEL, database_url=DB, binary=str(BINARY))
 
 
 def test_the_needle_lifecycle(morpholog: MorphologAdapter) -> None:
+    # Day zero: the binary provisions the exact schema its build expects.
+    assert morpholog.init() is True
+    with pytest.raises(MorphologOperationalError, match="already exists"):
+        morpholog.init()
+    assert morpholog.init(skip_if_exists=True) is False
+
+    # The rules in force have a canonical identity.
+    assert morpholog.model_hash().startswith("sha256:")
+
     captured = morpholog.run(
         "capture_trade",
         actor="trader",
@@ -76,7 +85,8 @@ def test_the_needle_lifecycle(morpholog: MorphologAdapter) -> None:
     assert terms.args[2] == Decimal("100")
     assert terms.args[4] == dt.date(2026, 6, 1)
 
-    # A duplicate capture is a lawful rejection, not an error.
+    # A duplicate capture is a lawful rejection carrying its own
+    # same-snapshot explanation, not an error.
     duplicate = morpholog.run(
         "capture_trade",
         actor="trader",
@@ -90,8 +100,11 @@ def test_the_needle_lifecycle(morpholog: MorphologAdapter) -> None:
             "captured_on": dt.date(2026, 6, 1),
             "price": Decimal("45.20"),
         },
+        explain_on_reject=True,
     )
     assert isinstance(duplicate, Rejected)
+    assert duplicate.explanation is not None
+    assert isinstance(duplicate.explanation.verdict, RejectedVerdict)
 
     # Diagnosis before action: settlement is refused for a named reason,
     # and the explanation names the transformations that would cure it.
@@ -144,13 +157,15 @@ def test_the_needle_lifecycle(morpholog: MorphologAdapter) -> None:
         outcome = morpholog.run(transformation, actor="middle_office", args=args)
         assert isinstance(outcome, Committed), (transformation, outcome)
 
-    # Read back by name: the in-force pointer moved, both figures stand.
+    # Read back by name, decoded by the substrate: the in-force pointer
+    # moved, both figures stand. Values are wire-true strings; typing is
+    # the generated models' job.
     (pointer,) = morpholog.read_claims("CurrentOfficialPrice")
     assert pointer == {"trade": "t1", "official_price_id": "op2"}
     figures = {
         row["official_price_id"]: row["price"] for row in morpholog.read_claims("OfficialPrice")
     }
-    assert figures == {"op1": Decimal("45.20"), "op2": Decimal("46.00")}
+    assert figures == {"op1": "45.20", "op2": "46.00"}
 
     # As-of the capture transition, the correction has not happened yet.
     as_of = str(captured.transition_id)
@@ -159,5 +174,9 @@ def test_the_needle_lifecycle(morpholog: MorphologAdapter) -> None:
         {"trade": "t1", "commodity": "power", "direction": "buy"}
     ]
 
-    # An unknown predicate is a true zero, not an error.
+    # The two read authorities: bare reads answer an unknown predicate
+    # with a true zero; named reads refuse it before touching the
+    # database (programme as authority).
     assert morpholog.inspect_claims("NoSuchPredicate") == []
+    with pytest.raises(MorphologOperationalError, match="not declared"):
+        morpholog.read_claims("NoSuchPredicate")

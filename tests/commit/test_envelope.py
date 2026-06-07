@@ -44,6 +44,30 @@ def test_rejected_envelope_parses() -> None:
     outcome = OUTCOME.validate_python(json.loads(envelopes.REJECTED_DUPLICATE))
     assert isinstance(outcome, Rejected)
     assert "require failed" in outcome.reason
+    assert outcome.explanation is None
+
+
+def test_rejected_with_explanation_carries_the_same_snapshot_verdict() -> None:
+    outcome = OUTCOME.validate_python(json.loads(envelopes.REJECTED_WITH_EXPLANATION))
+    assert isinstance(outcome, Rejected)
+    assert outcome.explanation is not None
+    assert isinstance(outcome.explanation.verdict, RejectedVerdict)
+    detail = outcome.explanation.verdict.rejected
+    assert isinstance(detail, GateRejection)
+    assert detail.gate == "not TradeCaptured(trade, _, _)"
+
+
+def test_named_claims_are_bare_and_wire_true() -> None:
+    from glasshouse.commit.envelope import NAMED_CLAIMS
+
+    claims = {
+        c.predicate: c.args
+        for c in NAMED_CLAIMS.validate_python(json.loads(envelopes.NAMED_CLAIMS))
+    }
+    # Wire-true: decimals and dates stay strings on the named read; the
+    # generated per-predicate models own the typing.
+    assert claims["CapturedPrice"] == {"trade": "t1", "price": "45.20"}
+    assert claims["TradeTerms"]["effective_from"] == "2026-06-01"
 
 
 def test_explain_admissible() -> None:

@@ -20,8 +20,8 @@ from glasshouse.commit.envelope import (
     InvariantRejection,
     MissingClaim,
     NamedArgs,
+    NamedClaim,
     Outcome,
-    PredicateDecl,
     Rejected,
     RejectedVerdict,
 )
@@ -38,8 +38,8 @@ __all__ = [
     "MorphologAdapter",
     "MorphologOperationalError",
     "NamedArgs",
+    "NamedClaim",
     "Outcome",
-    "PredicateDecl",
     "Rejected",
     "RejectedVerdict",
 ]
