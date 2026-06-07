@@ -24,7 +24,7 @@ class AdmitValuation(CommitRequest):
     book: str
     trade: str
     curve_version: str
-    mtm_value: Decimal
+    mtm: Decimal  # unit: EUR
 
 
 class CaptureTrade(CommitRequest):
@@ -38,7 +38,7 @@ class CaptureTrade(CommitRequest):
     counterparty: str
     market: str
     direction: str
-    quantity_mw: Decimal
+    quantity: Decimal  # unit: MW
     price: Decimal
     delivery_start: AwareDatetime
     delivery_end: AwareDatetime
@@ -149,7 +149,7 @@ class TradeTermsClaim(ClaimRow):
 
     org: str
     trade: str
-    quantity_mw: Decimal
+    quantity: Decimal  # unit: MW
     price: Decimal
     delivery_start: AwareDatetime
     delivery_end: AwareDatetime
@@ -196,8 +196,8 @@ class TradeValuedClaim(ClaimRow):
     book: str
     trade: str
     curve_version: str
-    mtm_value: Decimal
+    mtm: Decimal  # unit: EUR
 
 
-MODEL_HASH = "sha256:255fb8cd928645bfae2abf111840fc3cce0ad8258e134263a752428af9cb902a"
+MODEL_HASH = "sha256:19b8ddd8e85ad4dbd28498f7ea84392d5a5d8a6c3652472618d6bc64a2c4000c"
 PROGRAM = "glasshouse"

@@ -13,10 +13,8 @@ binary itself.
 """
 
 import datetime as dt
-import os
 import subprocess
 from decimal import Decimal
-from pathlib import Path
 
 import pytest
 from pydantic import ValidationError
@@ -27,6 +25,7 @@ from glasshouse.commit import (
     GateRejection,
     MorphologAdapter,
     MorphologOperationalError,
+    Quantity,
     Rejected,
     RejectedVerdict,
 )
@@ -42,27 +41,13 @@ from glasshouse.commit.generated import (
     RegisterCurve,
     TradeTermsClaim,
 )
-
-REPO = Path(os.environ.get("GLASSHOUSE_MORPHOLOG_REPO", "~/dev/morpholog")).expanduser()
-DB = os.environ.get("GLASSHOUSE_TEST_DATABASE_URL", "postgres:///morpholog_scratch")
-BINARY = REPO / "target" / "release" / "morpholog"
+from tests.support import BINARY, DB, needs_live_stack
 
 ORG, BOOK, MARKET = "acme-energy", "spec-de", "de-power"
 AS_OF = dt.date(2026, 6, 8)
 
 
-def _database_reachable() -> bool:
-    try:
-        ok = subprocess.run(["psql", DB, "-qc", "select 1"], capture_output=True, timeout=10)
-    except (OSError, subprocess.TimeoutExpired):
-        return False
-    return ok.returncode == 0
-
-
-pytestmark = pytest.mark.skipif(
-    not (BINARY.exists() and _database_reachable()),
-    reason=f"needs a morpholog binary at {BINARY} and a database at {DB}",
-)
+pytestmark = needs_live_stack
 
 
 @pytest.fixture(scope="module")
@@ -102,7 +87,7 @@ def test_the_needle_lifecycle(morpholog: MorphologAdapter) -> None:
             counterparty="stadtwerk-x",
             market=MARKET,
             direction="buy",
-            quantity_mw=Decimal("10"),
+            quantity=Decimal("10"),
             price=Decimal("86.25"),
             delivery_start=dt.datetime(2026, 7, 1),  # naive
             delivery_end=dt.datetime(2026, 10, 1, tzinfo=dt.UTC),
@@ -115,7 +100,7 @@ def test_the_needle_lifecycle(morpholog: MorphologAdapter) -> None:
         counterparty="stadtwerk-x",
         market=MARKET,
         direction="buy",
-        quantity_mw=Decimal("10"),
+        quantity=Decimal("10"),
         price=Decimal("86.25"),
         delivery_start=dt.datetime(2026, 7, 1, tzinfo=dt.UTC),
         delivery_end=dt.datetime(2026, 10, 1, tzinfo=dt.UTC),
@@ -128,6 +113,10 @@ def test_the_needle_lifecycle(morpholog: MorphologAdapter) -> None:
     captured = morpholog.propose(capture, actor="alice")
     assert isinstance(captured, Committed)
     assert {c.predicate for c in captured.asserted_claims} == {"TradeCaptured", "TradeTerms"}
+    # The self-describing tagged codec spells the unit out; named reads
+    # return the bare amount because the declaration fixes it.
+    terms = next(c for c in captured.asserted_claims if c.predicate == "TradeTerms")
+    assert terms.args[2] == Quantity(Decimal("10"), "MW")
 
     # A duplicate capture is refused, carrying its own same-snapshot
     # explanation.
@@ -150,7 +139,7 @@ def test_the_needle_lifecycle(morpholog: MorphologAdapter) -> None:
     # which claim is missing and which transformations could supply it.
     refused = morpholog.propose(
         AdmitValuation(
-            org=ORG, book=BOOK, trade="T-001", curve_version="crv-v0", mtm_value=Decimal("99")
+            org=ORG, book=BOOK, trade="T-001", curve_version="crv-v0", mtm=Decimal("99")
         ),
         actor="risk-engine",
         explain_on_reject=True,
@@ -171,7 +160,7 @@ def test_the_needle_lifecycle(morpholog: MorphologAdapter) -> None:
             book=BOOK,
             trade="T-001",
             curve_version="crv-v1",
-            mtm_value=Decimal("-1250.50"),
+            mtm=Decimal("-1250.50"),
         ),
         actor="risk-engine",
     )
@@ -196,9 +185,7 @@ def test_the_needle_lifecycle(morpholog: MorphologAdapter) -> None:
     # MTM against the superseded version is now structurally refused;
     # against the new official version it is admissible.
     stale = morpholog.propose(
-        AdmitValuation(
-            org=ORG, book=BOOK, trade="T-001", curve_version="crv-v1", mtm_value=Decimal("0")
-        ),
+        AdmitValuation(org=ORG, book=BOOK, trade="T-001", curve_version="crv-v1", mtm=Decimal("0")),
         actor="risk-engine",
     )
     assert isinstance(stale, Rejected)
@@ -208,7 +195,7 @@ def test_the_needle_lifecycle(morpholog: MorphologAdapter) -> None:
             book=BOOK,
             trade="T-001",
             curve_version="crv-v2",
-            mtm_value=Decimal("-1180.00"),
+            mtm=Decimal("-1180.00"),
         ),
         actor="risk-engine",
     )
@@ -219,10 +206,10 @@ def test_the_needle_lifecycle(morpholog: MorphologAdapter) -> None:
     (official,) = morpholog.read(OfficialCurveClaim)
     assert official.version == "crv-v2"
     assert official.as_of == AS_OF
-    (terms,) = morpholog.read(TradeTermsClaim)
-    assert terms.quantity_mw == Decimal("10")
-    assert terms.price == Decimal("86.25")
-    assert terms.delivery_start == dt.datetime(2026, 7, 1, tzinfo=dt.UTC)
+    (term_row,) = morpholog.read(TradeTermsClaim)
+    assert term_row.quantity == Decimal("10")  # bare amount; the declaration fixes MW
+    assert term_row.price == Decimal("86.25")
+    assert term_row.delivery_start == dt.datetime(2026, 7, 1, tzinfo=dt.UTC)
 
     # As-of the registration transition, v1 was the official curve.
     (was_official,) = morpholog.read(OfficialCurveClaim, as_of=str(registered.transition_id))

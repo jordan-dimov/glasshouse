@@ -34,7 +34,10 @@ from pathlib import Path
 from typing import Any
 
 # Predicate declarations carry kinds; transformation schemas carry JSON
-# Schema fragments. Both map onto the same four Python types plus str.
+# Schema fragments. Both map onto the same Python types; a unit-tagged
+# decimal (`Decimal[MW]`) is a `Decimal` whose unit rides as a comment,
+# because the declaration fixes the unit and the wire carries the bare
+# amount.
 KIND_TYPES = {
     "Subject": "str",
     "Decimal": "Decimal",
@@ -42,37 +45,41 @@ KIND_TYPES = {
     "Timestamp": "AwareDatetime",
     "Bool": "bool",
 }
-TYPE_IMPORTS = {
-    "Decimal": "from decimal import Decimal",
-    "dt.date": "import datetime as dt",
-    "AwareDatetime": "from pydantic import AwareDatetime",
-}
+
+# (annotation, unit-or-None)
+Field = tuple[str, str | None]
 
 
-def fragment_type(owner: str, name: str, fragment: dict[str, Any]) -> str:
+def fragment_type(owner: str, name: str, fragment: dict[str, Any]) -> Field:
     """The Python annotation for one transformation-argument schema
     fragment, refusing anything it does not positively recognise."""
     match fragment:
         case {"type": "boolean"}:
-            return "bool"
+            return "bool", None
         case {"type": "string", "format": "date"}:
-            return "dt.date"
+            return "dt.date", None
         case {"type": "string", "format": "date-time"}:
-            return "AwareDatetime"
+            return "AwareDatetime", None
         case {"type": "string", "format": fmt}:
             raise ValueError(f"{owner}.{name}: unsupported format {fmt!r}")
+        case {"type": "string", "pattern": _, "x-morpholog-unit": str(unit)}:
+            return "Decimal", unit
         case {"type": "string", "pattern": _}:
-            return "Decimal"  # the only patterned string the schema emits
+            return "Decimal", None  # the only patterned string the schema emits
         case {"type": "string"}:
-            return "str"
+            return "str", None
         case _:
             raise ValueError(f"{owner}.{name}: unsupported schema fragment {fragment!r}")
 
 
-def kind_type(owner: str, name: str, kind: str) -> str:
-    if kind not in KIND_TYPES:
-        raise ValueError(f"{owner}.{name}: unsupported kind {kind!r}")
-    return KIND_TYPES[kind]
+def kind_type(owner: str, name: str, kind: Any) -> Field:
+    match kind:
+        case {"Quantity": str(unit)}:
+            return "Decimal", unit
+        case str() if kind in KIND_TYPES:
+            return KIND_TYPES[kind], None
+        case _:
+            raise ValueError(f"{owner}.{name}: unsupported kind {kind!r}")
 
 
 def pascal(name: str) -> str:
@@ -85,7 +92,7 @@ def emit_model(
     tag_field: str,
     tag_value: str,
     doc: str,
-    fields: list[tuple[str, str]],
+    fields: list[tuple[str, Field]],
 ) -> list[str]:
     for name, _ in fields:
         if not name.isidentifier() or keyword.iskeyword(name):
@@ -99,7 +106,9 @@ def emit_model(
         f'    {tag_field}: ClassVar[str] = "{tag_value}"',
         "",
     ]
-    lines += [f"    {name}: {annotation}" for name, annotation in fields]
+    for name, (annotation, unit) in fields:
+        comment = f"  # unit: {unit}" if unit else ""
+        lines.append(f"    {name}: {annotation}{comment}")
     return lines
 
 
@@ -108,9 +117,9 @@ def generate(manifest: dict[str, Any], bases_module: str) -> str:
     bodies: list[str] = []
     used_types: set[str] = set()
 
-    def note(annotation: str) -> str:
-        used_types.add(annotation)
-        return annotation
+    def note(field: Field) -> Field:
+        used_types.add(field[0])
+        return field
 
     bases_used: set[str] = set()
     for name, schema in manifest["transformations"].items():

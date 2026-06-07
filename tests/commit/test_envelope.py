@@ -18,7 +18,14 @@ from glasshouse.commit import (
     Rejected,
     RejectedVerdict,
 )
-from glasshouse.commit.envelope import OUTCOME, Explanation, named_wire, untag
+from glasshouse.commit.envelope import (
+    NAMED_CLAIMS,
+    OUTCOME,
+    Explanation,
+    Quantity,
+    named_wire,
+    untag,
+)
 from tests.commit import envelopes
 
 # The exact Decimal pattern `morpholog schema` emits; `named_wire` must
@@ -58,8 +65,6 @@ def test_rejected_with_explanation_carries_the_same_snapshot_verdict() -> None:
 
 
 def test_named_claims_are_bare_and_wire_true() -> None:
-    from glasshouse.commit.envelope import NAMED_CLAIMS
-
     claims = {
         c.predicate: c.args
         for c in NAMED_CLAIMS.validate_python(json.loads(envelopes.NAMED_CLAIMS))
@@ -104,6 +109,13 @@ def test_untag_collection_nests() -> None:
         ],
     }
     assert untag(wire) == ["t1", Decimal("1.5"), [True]]
+
+
+def test_untag_quantity_keeps_the_unit_the_wire_spells_out() -> None:
+    # Pinned from morpholog PR #127: only the self-describing tagged
+    # codec carries the unit; named reads return the bare amount.
+    value = untag({"type": "quantity", "value": {"amount": "10.5", "unit": "MW"}})
+    assert value == Quantity(Decimal("10.5"), "MW")
 
 
 def test_untag_refuses_untagged_input() -> None:

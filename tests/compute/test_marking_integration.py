@@ -10,8 +10,6 @@ of what this test proves.
 """
 
 import datetime as dt
-import os
-import subprocess
 from decimal import Decimal
 from pathlib import Path
 
@@ -36,10 +34,8 @@ from glasshouse.compute.marking import (
     value_trade,
 )
 from glasshouse.compute.store import CurveStore, StoreError, engine_url
+from tests.support import BINARY, DB, needs_live_stack
 
-REPO = Path(os.environ.get("GLASSHOUSE_MORPHOLOG_REPO", "~/dev/morpholog")).expanduser()
-DB = os.environ.get("GLASSHOUSE_TEST_DATABASE_URL", "postgres:///morpholog_scratch")
-BINARY = REPO / "target" / "release" / "morpholog"
 ROOT = Path(__file__).resolve().parents[2]
 
 ORG, BOOK, MARKET = "acme-energy", "spec-de", "de-power"
@@ -47,18 +43,7 @@ AS_OF = dt.date(2026, 6, 8)
 T0 = dt.datetime(2026, 7, 1, tzinfo=dt.UTC)
 
 
-def _database_reachable() -> bool:
-    try:
-        ok = subprocess.run(["psql", DB, "-qc", "select 1"], capture_output=True, timeout=10)
-    except (OSError, subprocess.TimeoutExpired):
-        return False
-    return ok.returncode == 0
-
-
-pytestmark = pytest.mark.skipif(
-    not (BINARY.exists() and _database_reachable()),
-    reason=f"needs a morpholog binary at {BINARY} and a database at {DB}",
-)
+pytestmark = needs_live_stack
 
 
 def curve_of(*prices: str) -> HourlyCurve:
@@ -111,7 +96,7 @@ def test_the_monday_morning_loop(morpholog: MorphologAdapter, store: CurveStore)
                 counterparty="stadtwerk-x",
                 market=MARKET,
                 direction="buy",
-                quantity_mw=Decimal("10"),
+                quantity=Decimal("10"),
                 price=Decimal("86.25"),
                 delivery_start=T0,
                 delivery_end=T0 + dt.timedelta(hours=3),
@@ -143,7 +128,7 @@ def test_the_monday_morning_loop(morpholog: MorphologAdapter, store: CurveStore)
     assert isinstance(marked, Committed)
     (valuation,) = morpholog.read(TradeValuedClaim)
     assert valuation.curve_version == "crv-v1"
-    assert valuation.mtm_value == Decimal("55.00")
+    assert valuation.mtm == Decimal("55.00")
 
     # Marking again against the same official curve has nothing new to
     # say: a lawful rejection, decided by the ledger, not by this code.
@@ -167,7 +152,7 @@ def test_the_monday_morning_loop(morpholog: MorphologAdapter, store: CurveStore)
     assert isinstance(remarked, Committed)
 
     # Both marks stand, each pinned to the exact curve version it used.
-    marks = {v.curve_version: v.mtm_value for v in morpholog.read(TradeValuedClaim)}
+    marks = {v.curve_version: v.mtm for v in morpholog.read(TradeValuedClaim)}
     assert marks == {"crv-v1": Decimal("55.00"), "crv-v2": Decimal("85.00")}
 
 

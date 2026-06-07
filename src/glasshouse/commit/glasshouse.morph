@@ -40,15 +40,21 @@ program glasshouse
 -- lineage. `TradeValued` records one mark-to-market result, pinned to
 -- the exact curve version it was computed against, so a later
 -- correction never silently re-writes a number anyone saw.
+--
+-- Units are contractual labels on exact decimals: a quantity is
+-- `Decimal[MW]`, an MTM is `Decimal[EUR]`, and mixing them is
+-- structurally uncommittable. The price is deliberately a bare
+-- Decimal: EUR/MWh is a ratio - a field name and a formula in the
+-- compute zone, never a unit (compound symbols are not units here).
 predicate MayCaptureTrade(actor: Subject, org: Subject, book: Subject)
 predicate MayRegisterCurve(actor: Subject, org: Subject, market: Subject)
 predicate MayValueTrade(actor: Subject, org: Subject, book: Subject)
 predicate TradeCaptured(org: Subject, book: Subject, trade: Subject, counterparty: Subject, market: Subject, direction: Subject)
-predicate TradeTerms(org: Subject, trade: Subject, quantity_mw: Decimal, price: Decimal, delivery_start: Timestamp, delivery_end: Timestamp)
+predicate TradeTerms(org: Subject, trade: Subject, quantity: Decimal[MW], price: Decimal, delivery_start: Timestamp, delivery_end: Timestamp)
 predicate CurveRegistered(org: Subject, market: Subject, as_of: Date, version: Subject, payload_hash: Subject)
 predicate OfficialCurve(org: Subject, market: Subject, as_of: Date, version: Subject)
 predicate CurveSupersedes(new_version: Subject, prior_version: Subject)
-predicate TradeValued(org: Subject, book: Subject, trade: Subject, curve_version: Subject, mtm_value: Decimal)
+predicate TradeValued(org: Subject, book: Subject, trade: Subject, curve_version: Subject, mtm: Decimal[EUR])
 
 -- The rules that must always hold, by any path.
 
@@ -66,7 +72,7 @@ invariant one_terms_per_trade:
 
 -- A trade for nothing, or for negative power, is not a trade.
 invariant quantity_is_positive:
-    TradeTerms(_, _, qty, _, _, _) implies qty > 0
+    TradeTerms(_, _, qty, _, _, _) implies qty > 0 MW
 
 -- A delivery period is a real interval on the timeline.
 invariant delivery_period_is_ordered:
@@ -126,11 +132,11 @@ transformation grant_valuation_authority(principal, org, book):
 -- ties the actor's capability to this org and this book; the trade id
 -- is fixed once captured (a change of terms will be an amendment,
 -- never a silent overwrite).
-transformation capture_trade(org, book, trade, counterparty, market, direction, quantity_mw, price, delivery_start, delivery_end):
+transformation capture_trade(org, book, trade, counterparty, market, direction, quantity, price, delivery_start, delivery_end):
     require MayCaptureTrade(actor, org, book)
     require not TradeCaptured(_, _, trade, _, _, _)
     admit TradeCaptured(org, book, trade, counterparty, market, direction)
-    admit TradeTerms(org, trade, quantity_mw, price, delivery_start, delivery_end)
+    admit TradeTerms(org, trade, quantity, price, delivery_start, delivery_end)
 
 -- Register a curve version and make it official in one move. This is
 -- the first-registration path: if a curve is already official for
@@ -167,8 +173,8 @@ transformation correct_curve(org, market, as_of, prior_version, new_version, pay
 -- the one officially in force for the trade's market, at admission
 -- time. An MTM against a stale or unofficial curve is structurally
 -- uncommittable, not merely discouraged.
-transformation admit_valuation(org, book, trade, curve_version, mtm_value):
+transformation admit_valuation(org, book, trade, curve_version, mtm):
     require MayValueTrade(actor, org, book)
     require TradeCaptured(org, book, trade, _, market, _) and OfficialCurve(org, market, _, curve_version)
     require not TradeValued(_, _, trade, curve_version, _)
-    admit TradeValued(org, book, trade, curve_version, mtm_value)
+    admit TradeValued(org, book, trade, curve_version, mtm)

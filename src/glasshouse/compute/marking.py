@@ -139,16 +139,14 @@ def value_trade(
 
     value = mark_to_market(
         direction=captured.direction,
-        quantity_mw=terms.quantity_mw,
+        quantity_mw=terms.quantity,  # declared Decimal[MW]; bare amount on the wire
         price=terms.price,
         delivery_start=terms.delivery_start,
         delivery_end=terms.delivery_end,
         curve=curve,
     )
     return morpholog.propose(
-        AdmitValuation(
-            org=org, book=book, trade=trade, curve_version=official.version, mtm_value=value
-        ),
+        AdmitValuation(org=org, book=book, trade=trade, curve_version=official.version, mtm=value),
         actor=actor,
     )
 

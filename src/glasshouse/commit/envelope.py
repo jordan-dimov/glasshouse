@@ -22,13 +22,26 @@ from __future__ import annotations
 
 import datetime as dt
 from collections.abc import Mapping
+from dataclasses import dataclass
 from decimal import Decimal
 from typing import Annotated, Literal
 from uuid import UUID
 
 from pydantic import BaseModel, BeforeValidator, ConfigDict, Field, JsonValue, TypeAdapter
 
-type BareValue = str | bool | Decimal | dt.date | dt.datetime | list[BareValue]
+
+@dataclass(frozen=True, slots=True)
+class Quantity:
+    """A unit-tagged exact decimal (`Decimal[MW]`, `Decimal[EUR]`): a
+    contractual label, not a physical dimension. Only the self-describing
+    tagged codec spells the unit out; named writes and reads carry the
+    bare amount, because the declaration fixes the unit."""
+
+    amount: Decimal
+    unit: str
+
+
+type BareValue = str | bool | Decimal | dt.date | dt.datetime | Quantity | list[BareValue]
 
 # What `--args-named` accepts, bare: Subjects as opaque strings, Decimals
 # as Decimal, Dates as date, Timestamps as aware datetime (law 9:
@@ -51,6 +64,8 @@ def untag(wire: object) -> BareValue:
             return dt.date.fromisoformat(value)
         case {"type": "timestamp", "value": str(value)}:
             return dt.datetime.fromisoformat(value)  # RFC 3339; `Z` parses aware
+        case {"type": "quantity", "value": {"amount": str(amount), "unit": str(unit)}}:
+            return Quantity(Decimal(amount), unit)
         case {"type": "bool", "value": bool(value)}:
             return value
         case {"type": "collection", "value": list(items)}:

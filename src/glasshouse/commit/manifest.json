@@ -1,5 +1,5 @@
 {
-  "hash": "sha256:255fb8cd928645bfae2abf111840fc3cce0ad8258e134263a752428af9cb902a",
+  "hash": "sha256:19b8ddd8e85ad4dbd28498f7ea84392d5a5d8a6c3652472618d6bc64a2c4000c",
   "intent_order": [],
   "intents": {},
   "predicates": [
@@ -94,8 +94,10 @@
           "name": "trade"
         },
         {
-          "kind": "Decimal",
-          "name": "quantity_mw"
+          "kind": {
+            "Quantity": "MW"
+          },
+          "name": "quantity"
         },
         {
           "kind": "Decimal",
@@ -190,8 +192,10 @@
           "name": "curve_version"
         },
         {
-          "kind": "Decimal",
-          "name": "mtm_value"
+          "kind": {
+            "Quantity": "EUR"
+          },
+          "name": "mtm"
         }
       ],
       "name": "TradeValued"
@@ -220,10 +224,11 @@
           "description": "opaque Morpholog subject identifier or domain symbol. Subjects minted by `Stmt::LetNewSubject` are UUIDv7 by runtime convention; externally supplied Subjects (commodity codes, period names, direction enums, etc.) are opaque strings. The schema describes the shape, not a format constraint.",
           "type": "string"
         },
-        "mtm_value": {
-          "description": "arbitrary-precision decimal carried as a string for exactness",
+        "mtm": {
+          "description": "exact decimal amount in EUR, carried as a string for exactness. The unit is fixed by the declaration (`Decimal[EUR]`) and is not sent with the value.",
           "pattern": "^-?(0|[1-9]\\d*)(\\.\\d+)?$",
-          "type": "string"
+          "type": "string",
+          "x-morpholog-unit": "EUR"
         },
         "org": {
           "description": "opaque Morpholog subject identifier or domain symbol. Subjects minted by `Stmt::LetNewSubject` are UUIDv7 by runtime convention; externally supplied Subjects (commodity codes, period names, direction enums, etc.) are opaque strings. The schema describes the shape, not a format constraint.",
@@ -239,7 +244,7 @@
         "book",
         "trade",
         "curve_version",
-        "mtm_value"
+        "mtm"
       ],
       "title": "admit_valuation",
       "type": "object",
@@ -248,7 +253,7 @@
         "book",
         "trade",
         "curve_version",
-        "mtm_value"
+        "mtm"
       ]
     },
     "capture_trade": {
@@ -290,10 +295,11 @@
           "pattern": "^-?(0|[1-9]\\d*)(\\.\\d+)?$",
           "type": "string"
         },
-        "quantity_mw": {
-          "description": "arbitrary-precision decimal carried as a string for exactness",
+        "quantity": {
+          "description": "exact decimal amount in MW, carried as a string for exactness. The unit is fixed by the declaration (`Decimal[MW]`) and is not sent with the value.",
           "pattern": "^-?(0|[1-9]\\d*)(\\.\\d+)?$",
-          "type": "string"
+          "type": "string",
+          "x-morpholog-unit": "MW"
         },
         "trade": {
           "description": "opaque Morpholog subject identifier or domain symbol. Subjects minted by `Stmt::LetNewSubject` are UUIDv7 by runtime convention; externally supplied Subjects (commodity codes, period names, direction enums, etc.) are opaque strings. The schema describes the shape, not a format constraint.",
@@ -307,7 +313,7 @@
         "counterparty",
         "market",
         "direction",
-        "quantity_mw",
+        "quantity",
         "price",
         "delivery_start",
         "delivery_end"
@@ -321,7 +327,7 @@
         "counterparty",
         "market",
         "direction",
-        "quantity_mw",
+        "quantity",
         "price",
         "delivery_start",
         "delivery_end"
