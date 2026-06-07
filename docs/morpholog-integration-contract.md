@@ -48,11 +48,35 @@ The ask: `--args-named` made the write side bare and named while the read side s
 
 The ask: the API promises every rejection a structured reason and an answer to "what would make this admissible?", and run-then-explain is two snapshots that can disagree under concurrent commits. Delivered with exactly the right semantics: the rejecting proposal hands back the scoped pre-state its gates evaluated, and the pure explanation engine runs against it in memory; rejection envelopes gain an `explanation` field in the `explain --json` shape; committed envelopes and exit codes unchanged; kernel errors and serialization failures excluded (no admissibility story). Adapter surface: `run(..., explain_on_reject=True)`, surfaced as `Rejected.explanation`.
 
-## Towards an upstream generated Python client (in preparation)
+## 9. The generated Python client lives in the binary (`morpholog generate python-client`) — drafted 07/06/2026, ready to file
 
-Glasshouse's codegen (`scripts/generate_commit_models.py`) consumes the `schema --all` manifest and emits typed request models per transformation and read models per predicate; its core is deliberately Morpholog-agnostic (manifest in, source out, the base-class import is a parameter). This is being built as the forcing example for the upstream roadmap item "generated Python clients" (acknowledged there as a later productisation step): once proven here, the proposal is that the generator, or its contract, moves upstream so the next embedder does not write ours. A `schema --result` mode (the outcome-envelope schema, currently reserved upstream awaiting a real consumer) becomes forced at the same moment: a client generator is the consumer that wants to generate the outcome models rather than hand-pin them.
+### The forcing example, quantified
 
-Minor nit to mention upstream when convenient: PR #124's text promises manifest entries in declaration order; the binary emits the transformation and intent maps alphabetically. Byte-stable either way, so nothing breaks; the docs and the behaviour should just agree.
+Glasshouse, the first external embedder, has now built the complete Python integration twice (once hand-rolled, once after adopting asks 6-8) and the remaining surface measures as follows: 612 lines of hand-written interface Python (codecs, envelope models, subprocess adapter, model generator) plus 665 lines of tests and golden captures defending them, around a 174-line `.morph` that is the only genuinely Glasshouse artefact at the boundary. Roughly 7x as much Python protects the boundary as there is content crossing it, and **none of those 612 lines is embedder-specific**: every one is mechanically derivable from artefacts Morpholog already owns.
+
+- The tagged-value codecs (both directions) derive from the pinned codec contract; they vary only with the binary version.
+- The envelope models (`Committed | Rejected`, the Explanation shape, named claims) derive from the pinned envelope contract; same.
+- The adapter (command construction, the empty-stdout discrimination rule, `init`/`run`/`explain`/`inspect`/`hash`) derives from the pinned CLI contract; same.
+- The typed request and read models derive from the `schema --all` manifest; they vary only with the `.morph`.
+
+The two worked Python embedders (upstream's own and Glasshouse) have therefore converged on writing the same client - the bar that forced `inspect claims --named`.
+
+### The ask
+
+`morpholog generate python-client --out <dir>` (taking the `.morph`): the binary emits a complete, self-contained, typed Python client package - codecs, envelope models, the subprocess adapter, request models per transformation, read models per predicate - stamped with the binary version and the model hash. The same move as `init`: the schema travelled into the binary so a deployment provisions exactly what its build expects; here the *client* travels with the binary so an embedder talks exactly the contract its binary speaks. No PyPI release treadmill, no version skew by construction, no FFI, the subprocess contract unchanged underneath.
+
+The embedder's whole integration becomes: generate, commit the package, drift-check in CI by regenerating (pure, given the committed manifest) plus one `hash` comparison against the live binary. Glasshouse's existing layer is, almost verbatim, a prototype of the output (and is offered as the seed); its golden envelope captures become the generator's own contract tests.
+
+### What this forces alongside
+
+- **`schema --result`** (currently reserved upstream, awaiting "a real consumer that needs to discriminate dynamically"): the client generator is that consumer - it wants to generate the outcome models from a machine-readable contract rather than have them hand-pinned from documentation.
+- Nothing else: batch, views, the audit-log shape are all orthogonal and the generated adapter adopts them as they land.
+
+### Non-goals, stated to keep the ask small
+
+In-process bindings (PyO3/FFI) are explicitly not asked for: the ~9ms subprocess tax is not the pain, the hand-maintained glue is. Other languages (TypeScript) follow whenever their worked example arrives; the command name leaves room.
+
+Minor nit to bundle: PR #124's text promises manifest entries in declaration order; the binary emits the transformation and intent maps alphabetically. Byte-stable either way; the docs and behaviour should agree.
 
 ## Coordination agreements
 
