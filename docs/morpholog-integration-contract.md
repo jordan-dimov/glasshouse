@@ -76,6 +76,10 @@ The embedder's whole integration becomes: generate, commit the package, drift-ch
 
 In-process bindings (PyO3/FFI) are explicitly not asked for: the ~9ms subprocess tax is not the pain, the hand-maintained glue is. Other languages (TypeScript) follow whenever their worked example arrives; the command name leaves room.
 
+### Targeting (amended on the issue, 07/06/2026)
+
+The generated client is **stdlib-only** (frozen dataclasses, Decimal/datetime from stdlib, validation emitted as plain code), so the dependency question vanishes rather than being answered, and the worked embedder keeps its stdlib-only property. The Python version is a **declared, enforced, CI-tested floor**: stated in the generated header, checked at import time, exercised in upstream CI at the floor, emitted as a conservative subset so the floor moves only deliberately. Consequence for Glasshouse at adoption: Pydantic moves to the HTTP boundary, where API request models are built *from* the generated types (org from auth context, actor from session, never from a request body) - DESIGN.md section 7's "generated Pydantic request models" sentence gets re-pointed at that boundary then.
+
 Minor nit to bundle: PR #124's text promises manifest entries in declaration order; the binary emits the transformation and intent maps alphabetically. Byte-stable either way; the docs and behaviour should agree.
 
 ## Coordination agreements
