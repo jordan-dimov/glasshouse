@@ -28,14 +28,15 @@ from uuid import UUID
 
 from pydantic import BaseModel, BeforeValidator, ConfigDict, Field, JsonValue, TypeAdapter
 
-type BareValue = str | bool | Decimal | dt.date | list[BareValue]
+type BareValue = str | bool | Decimal | dt.date | dt.datetime | list[BareValue]
 
 # What `--args-named` accepts, bare: Subjects as opaque strings, Decimals
-# as Decimal, Dates as date, Bools as bool. Collection parameters need the
-# tagged `--args` codec; the type excludes them until a transformation
-# forces it. (Timestamp and Duration kinds exist upstream; they join here
-# when a Glasshouse transformation uses them.)
-type NamedArg = str | bool | Decimal | dt.date
+# as Decimal, Dates as date, Timestamps as aware datetime (law 9:
+# delivery periods are UTC instants; a naive datetime is refused at this
+# boundary), Bools as bool. Collection and Duration parameters need the
+# tagged `--args` codec; the types join here when a transformation
+# forces them.
+type NamedArg = str | bool | Decimal | dt.date | dt.datetime
 type NamedArgs = Mapping[str, NamedArg]
 
 
@@ -48,6 +49,8 @@ def untag(wire: object) -> BareValue:
             return Decimal(value)
         case {"type": "date", "value": str(value)}:
             return dt.date.fromisoformat(value)
+        case {"type": "timestamp", "value": str(value)}:
+            return dt.datetime.fromisoformat(value)  # RFC 3339; `Z` parses aware
         case {"type": "bool", "value": bool(value)}:
             return value
         case {"type": "collection", "value": list(items)}:
@@ -65,6 +68,10 @@ def named_wire(args: NamedArgs) -> dict[str, str | bool]:
                 return value
             case Decimal():
                 return format(value, "f")  # plain form, inside the schema pattern
+            case dt.datetime():  # before date: datetime is a date subclass
+                if value.tzinfo is None:
+                    raise ValueError(f"timestamp must be timezone-aware (law 9): {value!r}")
+                return value.isoformat()  # RFC 3339; `+00:00` verified accepted
             case dt.date():
                 return value.isoformat()
 

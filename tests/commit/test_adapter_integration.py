@@ -1,12 +1,14 @@
-"""The adapter against the real binary and a disposable database: the
-worked trade lifecycle, end to end, typed.
+"""The needle against the real binary: one trade, one official curve,
+one MTM only admissible against an official curve, one correction that
+supersedes, one as-of query - driven end to end through the generated
+typed models on a disposable database.
 
-Skips cleanly (CI has no morpholog) unless a local morpholog checkout and
-a disposable database are reachable. The run path commits: the morpholog
-schema in the test database is dropped every run and re-provisioned
-through the binary itself.
+Skips cleanly (CI has no morpholog) unless a binary and a disposable
+database are reachable. The run path commits: the morpholog schema in
+the test database is dropped every run and re-provisioned through the
+binary itself.
 
-    GLASSHOUSE_MORPHOLOG_REPO   default ~/dev/morpholog
+    GLASSHOUSE_MORPHOLOG_REPO   default ~/dev/morpholog (for the binary)
     GLASSHOUSE_TEST_DATABASE_URL default postgres:///morpholog_scratch
 """
 
@@ -17,21 +19,36 @@ from decimal import Decimal
 from pathlib import Path
 
 import pytest
+from pydantic import ValidationError
 
 from glasshouse.commit import (
+    MODEL_FILE,
     Committed,
     GateRejection,
     MorphologAdapter,
     MorphologOperationalError,
-    NamedArgs,
     Rejected,
     RejectedVerdict,
+)
+from glasshouse.commit.generated import (
+    MODEL_HASH,
+    AdmitValuation,
+    CaptureTrade,
+    CorrectCurve,
+    GrantCaptureAuthority,
+    GrantCurveAuthority,
+    GrantValuationAuthority,
+    OfficialCurveClaim,
+    RegisterCurve,
+    TradeTermsClaim,
 )
 
 REPO = Path(os.environ.get("GLASSHOUSE_MORPHOLOG_REPO", "~/dev/morpholog")).expanduser()
 DB = os.environ.get("GLASSHOUSE_TEST_DATABASE_URL", "postgres:///morpholog_scratch")
 BINARY = REPO / "target" / "release" / "morpholog"
-MODEL = REPO / "examples" / "10_trade_lifecycle" / "trade_lifecycle.morph"
+
+ORG, BOOK, MARKET = "acme-energy", "spec-de", "de-power"
+AS_OF = dt.date(2026, 6, 8)
 
 
 def _database_reachable() -> bool:
@@ -43,8 +60,8 @@ def _database_reachable() -> bool:
 
 
 pytestmark = pytest.mark.skipif(
-    not (BINARY.exists() and MODEL.exists() and _database_reachable()),
-    reason=f"needs a morpholog checkout at {REPO} and a database at {DB}",
+    not (BINARY.exists() and _database_reachable()),
+    reason=f"needs a morpholog binary at {BINARY} and a database at {DB}",
 )
 
 
@@ -53,7 +70,7 @@ def morpholog() -> MorphologAdapter:
     # Disposable by contract: drop so the lifecycle test can prove
     # provisioning through the binary (`init` is day-zero only).
     subprocess.run(["psql", DB, "-qc", "DROP SCHEMA IF EXISTS morpholog CASCADE"], check=True)
-    return MorphologAdapter(model_file=MODEL, database_url=DB, binary=str(BINARY))
+    return MorphologAdapter(model_file=MODEL_FILE, database_url=DB, binary=str(BINARY))
 
 
 def test_the_needle_lifecycle(morpholog: MorphologAdapter) -> None:
@@ -63,120 +80,157 @@ def test_the_needle_lifecycle(morpholog: MorphologAdapter) -> None:
         morpholog.init()
     assert morpholog.init(skip_if_exists=True) is False
 
-    # The rules in force have a canonical identity.
-    assert morpholog.model_hash().startswith("sha256:")
+    # The closed loop: the .morph on disk, the committed manifest, and
+    # the generated models all name the same rules.
+    assert morpholog.model_hash() == MODEL_HASH
 
-    captured = morpholog.run(
-        "capture_trade",
-        actor="trader",
-        args={
-            "trade": "t1",
-            "commodity": "power",
-            "direction": "buy",
-            "version_id": "v1",
-            "quantity": Decimal("100"),
-            "delivery_period": "2026Q4",
-            "captured_on": dt.date(2026, 6, 1),
-            "price": Decimal("45.20"),
-        },
+    # Authority is governed capability claims, granted by transitions.
+    for grant in (
+        GrantCaptureAuthority(principal="alice", org=ORG, book=BOOK),
+        GrantCurveAuthority(principal="carol", org=ORG, market=MARKET),
+        GrantValuationAuthority(principal="risk-engine", org=ORG, book=BOOK),
+    ):
+        outcome = morpholog.propose(grant, actor="bootstrap")
+        assert isinstance(outcome, Committed), outcome
+
+    # Law 9 is typed: a naive delivery instant cannot even construct.
+    with pytest.raises(ValidationError):
+        CaptureTrade(
+            org=ORG,
+            book=BOOK,
+            trade="T-bad",
+            counterparty="stadtwerk-x",
+            market=MARKET,
+            direction="buy",
+            quantity_mw=Decimal("10"),
+            price=Decimal("86.25"),
+            delivery_start=dt.datetime(2026, 7, 1),  # naive
+            delivery_end=dt.datetime(2026, 10, 1, tzinfo=dt.UTC),
+        )
+
+    capture = CaptureTrade(
+        org=ORG,
+        book=BOOK,
+        trade="T-001",
+        counterparty="stadtwerk-x",
+        market=MARKET,
+        direction="buy",
+        quantity_mw=Decimal("10"),
+        price=Decimal("86.25"),
+        delivery_start=dt.datetime(2026, 7, 1, tzinfo=dt.UTC),
+        delivery_end=dt.datetime(2026, 10, 1, tzinfo=dt.UTC),
     )
+
+    # Without the capability claim, capture is a lawful rejection.
+    unauthorised = morpholog.propose(capture, actor="mallory")
+    assert isinstance(unauthorised, Rejected)
+
+    captured = morpholog.propose(capture, actor="alice")
     assert isinstance(captured, Committed)
-    terms = next(c for c in captured.asserted_claims if c.predicate == "TradeTerms")
-    assert terms.args[2] == Decimal("100")
-    assert terms.args[4] == dt.date(2026, 6, 1)
+    assert {c.predicate for c in captured.asserted_claims} == {"TradeCaptured", "TradeTerms"}
 
-    # A duplicate capture is a lawful rejection carrying its own
-    # same-snapshot explanation, not an error.
-    duplicate = morpholog.run(
-        "capture_trade",
-        actor="trader",
-        args={
-            "trade": "t1",
-            "commodity": "power",
-            "direction": "buy",
-            "version_id": "v2",
-            "quantity": Decimal("100"),
-            "delivery_period": "2026Q4",
-            "captured_on": dt.date(2026, 6, 1),
-            "price": Decimal("45.20"),
-        },
-        explain_on_reject=True,
-    )
+    # A duplicate capture is refused, carrying its own same-snapshot
+    # explanation.
+    duplicate = morpholog.propose(capture, actor="alice", explain_on_reject=True)
     assert isinstance(duplicate, Rejected)
     assert duplicate.explanation is not None
-    assert isinstance(duplicate.explanation.verdict, RejectedVerdict)
 
-    # Diagnosis before action: settlement is refused for a named reason,
-    # and the explanation names the transformations that would cure it.
-    verdict = morpholog.explain(
-        "settle_trade",
-        actor="middle_office",
-        args={
-            "trade": "t1",
-            "settled_qty": Decimal("60"),
-            "settlement_id": "s1",
-            "official_price_id": "op1",
-            "effective_on": dt.date(2026, 12, 31),
-        },
+    # Register the official curve; the bulk price array lives in the
+    # app schema, anchored by this hash.
+    registered = morpholog.propose(
+        RegisterCurve(
+            org=ORG, market=MARKET, as_of=AS_OF, version="crv-v1", payload_hash="sha256:aaaa"
+        ),
+        actor="carol",
     )
-    assert isinstance(verdict.verdict, RejectedVerdict)
-    detail = verdict.verdict.rejected
+    assert isinstance(registered, Committed)
+
+    # The headline rule: MTM is only admissible against the official
+    # curve. Against an unknown version, the rejection explains exactly
+    # which claim is missing and which transformations could supply it.
+    refused = morpholog.propose(
+        AdmitValuation(
+            org=ORG, book=BOOK, trade="T-001", curve_version="crv-v0", mtm_value=Decimal("99")
+        ),
+        actor="risk-engine",
+        explain_on_reject=True,
+    )
+    assert isinstance(refused, Rejected)
+    assert refused.explanation is not None
+    assert isinstance(refused.explanation.verdict, RejectedVerdict)
+    detail = refused.explanation.verdict.rejected
     assert isinstance(detail, GateRejection)
     assert any(
-        "confirm_trade" in m.candidate_supplier_transformations
+        {"register_curve", "correct_curve"} <= set(m.candidate_supplier_transformations)
         for m in detail.directly_missing_claims
     )
 
-    # Confirm, then correct: the official price supersedes, never erases.
-    steps: tuple[tuple[str, NamedArgs], ...] = (
-        (
-            "grant_confirm_authority",
-            {"principal": "middle_office", "commodity": "power"},
+    valued = morpholog.propose(
+        AdmitValuation(
+            org=ORG,
+            book=BOOK,
+            trade="T-001",
+            curve_version="crv-v1",
+            mtm_value=Decimal("-1250.50"),
         ),
-        (
-            "confirm_trade",
-            {
-                "trade": "t1",
-                "counterparty": "acme",
-                "confirmation_id": "c1",
-                "official_price_id": "op1",
-                "confirmed_price": Decimal("45.20"),
-            },
-        ),
-        (
-            "correct_official_price",
-            {
-                "trade": "t1",
-                "prior_official_price_id": "op1",
-                "new_official_price_id": "op2",
-                "corrected_price": Decimal("46.00"),
-            },
-        ),
+        actor="risk-engine",
     )
-    for transformation, args in steps:
-        outcome = morpholog.run(transformation, actor="middle_office", args=args)
-        assert isinstance(outcome, Committed), (transformation, outcome)
+    assert isinstance(valued, Committed)
 
-    # Read back by name, decoded by the substrate: the in-force pointer
-    # moved, both figures stand. Values are wire-true strings; typing is
-    # the generated models' job.
-    (pointer,) = morpholog.read_claims("CurrentOfficialPrice")
-    assert pointer == {"trade": "t1", "official_price_id": "op2"}
-    figures = {
-        row["official_price_id"]: row["price"] for row in morpholog.read_claims("OfficialPrice")
-    }
-    assert figures == {"op1": "45.20", "op2": "46.00"}
+    # Correct the curve: v2 supersedes v1, the official pointer moves,
+    # v1 and its valuation stay on the record.
+    corrected = morpholog.propose(
+        CorrectCurve(
+            org=ORG,
+            market=MARKET,
+            as_of=AS_OF,
+            prior_version="crv-v1",
+            new_version="crv-v2",
+            payload_hash="sha256:bbbb",
+        ),
+        actor="carol",
+    )
+    assert isinstance(corrected, Committed)
+    assert [c.predicate for c in corrected.retracted_claims] == ["OfficialCurve"]
 
-    # As-of the capture transition, the correction has not happened yet.
-    as_of = str(captured.transition_id)
-    assert morpholog.read_claims("CurrentOfficialPrice", as_of=as_of) == []
-    assert morpholog.read_claims("TradeCaptured", as_of=as_of) == [
-        {"trade": "t1", "commodity": "power", "direction": "buy"}
-    ]
+    # MTM against the superseded version is now structurally refused;
+    # against the new official version it is admissible.
+    stale = morpholog.propose(
+        AdmitValuation(
+            org=ORG, book=BOOK, trade="T-001", curve_version="crv-v1", mtm_value=Decimal("0")
+        ),
+        actor="risk-engine",
+    )
+    assert isinstance(stale, Rejected)
+    revalued = morpholog.propose(
+        AdmitValuation(
+            org=ORG,
+            book=BOOK,
+            trade="T-001",
+            curve_version="crv-v2",
+            mtm_value=Decimal("-1180.00"),
+        ),
+        actor="risk-engine",
+    )
+    assert isinstance(revalued, Committed)
+
+    # Typed reads: the generated models parse wire-true strings into
+    # Decimal, date and aware datetime.
+    (official,) = morpholog.read(OfficialCurveClaim)
+    assert official.version == "crv-v2"
+    assert official.as_of == AS_OF
+    (terms,) = morpholog.read(TradeTermsClaim)
+    assert terms.quantity_mw == Decimal("10")
+    assert terms.price == Decimal("86.25")
+    assert terms.delivery_start == dt.datetime(2026, 7, 1, tzinfo=dt.UTC)
+
+    # As-of the registration transition, v1 was the official curve.
+    (was_official,) = morpholog.read(OfficialCurveClaim, as_of=str(registered.transition_id))
+    assert was_official.version == "crv-v1"
 
     # The two read authorities: bare reads answer an unknown predicate
     # with a true zero; named reads refuse it before touching the
-    # database (programme as authority).
+    # database.
     assert morpholog.inspect_claims("NoSuchPredicate") == []
     with pytest.raises(MorphologOperationalError, match="not declared"):
         morpholog.read_claims("NoSuchPredicate")

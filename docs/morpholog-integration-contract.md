@@ -48,6 +48,12 @@ The ask: `--args-named` made the write side bare and named while the read side s
 
 The ask: the API promises every rejection a structured reason and an answer to "what would make this admissible?", and run-then-explain is two snapshots that can disagree under concurrent commits. Delivered with exactly the right semantics: the rejecting proposal hands back the scoped pre-state its gates evaluated, and the pure explanation engine runs against it in memory; rejection envelopes gain an `explanation` field in the `explain --json` shape; committed envelopes and exit codes unchanged; kernel errors and serialization failures excluded (no admissibility story). Adapter surface: `run(..., explain_on_reject=True)`, surfaced as `Rejected.explanation`.
 
+## Towards an upstream generated Python client (in preparation)
+
+Glasshouse's codegen (`scripts/generate_commit_models.py`) consumes the `schema --all` manifest and emits typed request models per transformation and read models per predicate; its core is deliberately Morpholog-agnostic (manifest in, source out, the base-class import is a parameter). This is being built as the forcing example for the upstream roadmap item "generated Python clients" (acknowledged there as a later productisation step): once proven here, the proposal is that the generator, or its contract, moves upstream so the next embedder does not write ours. A `schema --result` mode (the outcome-envelope schema, currently reserved upstream awaiting a real consumer) becomes forced at the same moment: a client generator is the consumer that wants to generate the outcome models rather than hand-pin them.
+
+Minor nit to mention upstream when convenient: PR #124's text promises manifest entries in declaration order; the binary emits the transformation and intent maps alphabetically. Byte-stable either way, so nothing breaks; the docs and the behaviour should just agree.
+
 ## Coordination agreements
 
 - **Evidence-pack extension contract pinned now** (no waiting for full WP5): a content-addressed JSON manifest, entries `{role, hash, media_type, locator?}`, chained to the ledger by transition ids.

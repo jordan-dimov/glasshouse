@@ -1,0 +1,174 @@
+-- Glasshouse v0: the needle. One trade, one official curve, one MTM
+-- that is only admissible against an official curve, one correction
+-- that supersedes. This file is the rule model the commit layer runs;
+-- everything else in Glasshouse (API, projections, imports, screens)
+-- is machinery around what these rules admit.
+--
+-- Three Glasshouse laws are structural here, not conventions:
+--
+--   * The organisation is the tenancy boundary. Every predicate leads
+--     with its org; isolation is in the shape of the facts, not in a
+--     WHERE clause someone remembers to add.
+--   * Authority is governed capability claims. Who may capture, who
+--     may publish curves, who may admit valuations - each is a claim
+--     in the ledger, granted by a transition, auditable and as-of
+--     queryable like everything else. The app maps identity to an
+--     actor string and nothing more.
+--   * Supersede, never overwrite. A curve correction registers a new
+--     version alongside the old, links the lineage, and moves the
+--     official pointer. The old figure, and any valuation that relied
+--     on it, stays on the record.
+--
+-- Bulk curve content never enters the ledger: a curve version carries
+-- the hash of its price array, and the array itself lives in the app
+-- schema keyed by the registered identity (the read-side law: every
+-- app table is a projection or a hash-anchored payload).
+--
+-- Delivery periods are UTC instants (Timestamp), never local civil
+-- time: DST days fall out of timezone arithmetic in the compute zone
+-- and are never special-cased here.
+
+program glasshouse
+
+-- The vocabulary. `TradeCaptured` is the trade's immutable identity;
+-- its economic terms live in `TradeTerms` (one version in v0;
+-- amendment, when it arrives, will version this the way the curve is
+-- versioned, rather than ever editing it). `CurveRegistered` is a
+-- curve version's identity including the hash anchoring its payload;
+-- `OfficialCurve` is the retractable pointer naming the version in
+-- force for a market and as-of date; `CurveSupersedes` is correction
+-- lineage. `TradeValued` records one mark-to-market result, pinned to
+-- the exact curve version it was computed against, so a later
+-- correction never silently re-writes a number anyone saw.
+predicate MayCaptureTrade(actor: Subject, org: Subject, book: Subject)
+predicate MayRegisterCurve(actor: Subject, org: Subject, market: Subject)
+predicate MayValueTrade(actor: Subject, org: Subject, book: Subject)
+predicate TradeCaptured(org: Subject, book: Subject, trade: Subject, counterparty: Subject, market: Subject, direction: Subject)
+predicate TradeTerms(org: Subject, trade: Subject, quantity_mw: Decimal, price: Decimal, delivery_start: Timestamp, delivery_end: Timestamp)
+predicate CurveRegistered(org: Subject, market: Subject, as_of: Date, version: Subject, payload_hash: Subject)
+predicate OfficialCurve(org: Subject, market: Subject, as_of: Date, version: Subject)
+predicate CurveSupersedes(new_version: Subject, prior_version: Subject)
+predicate TradeValued(org: Subject, book: Subject, trade: Subject, curve_version: Subject, mtm_value: Decimal)
+
+-- The rules that must always hold, by any path.
+
+-- A trade id names one trade: identity is fixed at capture.
+invariant one_capture_per_trade:
+    TradeCaptured(org_a, book_a, trade, cp_a, mkt_a, dir_a) and TradeCaptured(org_b, book_b, trade, cp_b, mkt_b, dir_b) implies (org_a = org_b and book_a = book_b and cp_a = cp_b and mkt_a = mkt_b and dir_a = dir_b)
+
+-- Terms belong to a captured trade, in the same organisation.
+invariant terms_belong_to_captured_trade:
+    TradeTerms(org, trade, _, _, _, _) implies TradeCaptured(org, _, trade, _, _, _)
+
+-- One terms record per trade, and it is unambiguous.
+invariant one_terms_per_trade:
+    TradeTerms(org_a, trade, qty_a, px_a, ds_a, de_a) and TradeTerms(org_b, trade, qty_b, px_b, ds_b, de_b) implies (qty_a = qty_b and px_a = px_b and ds_a = ds_b and de_a = de_b)
+
+-- A trade for nothing, or for negative power, is not a trade.
+invariant quantity_is_positive:
+    TradeTerms(_, _, qty, _, _, _) implies qty > 0
+
+-- A delivery period is a real interval on the timeline.
+invariant delivery_period_is_ordered:
+    TradeTerms(_, _, _, _, delivery_start, delivery_end) implies delivery_start strictly_before delivery_end
+
+-- A curve version id names one registration: the identity a payload
+-- hash is anchored to is never ambiguous.
+invariant curve_version_identifies_one_registration:
+    CurveRegistered(org_a, mkt_a, asof_a, version, hash_a) and CurveRegistered(org_b, mkt_b, asof_b, version, hash_b) implies (org_a = org_b and mkt_a = mkt_b and asof_a = asof_b and hash_a = hash_b)
+
+-- The official pointer can never name a version that was not
+-- registered for exactly that org, market and as-of date.
+invariant official_curve_is_registered:
+    OfficialCurve(org, market, as_of, version) implies CurveRegistered(org, market, as_of, version, _)
+
+-- One curve is official at a time, per org, market and as-of date.
+invariant one_official_curve:
+    OfficialCurve(org, market, as_of, a) and OfficialCurve(org, market, as_of, b) implies a = b
+
+-- Correction history is a chain, never a fork.
+invariant curve_chain_no_fork:
+    CurveSupersedes(new_a, prior) and CurveSupersedes(new_b, prior) implies new_a = new_b
+
+-- A valuation belongs to a captured trade, in the same org and book.
+invariant valued_trade_was_captured:
+    TradeValued(org, book, trade, _, _) implies TradeCaptured(org, book, trade, _, _, _)
+
+-- A valuation's curve version exists in the same organisation. (That
+-- it was *official at admission time* is the gate's job, checked when
+-- the valuation is admitted and not retroactively disturbed by later
+-- corrections - a valuation is a record of what was computed, not a
+-- promise the curve stays current.)
+invariant valuation_curve_is_registered:
+    TradeValued(org, _, _, version, _) implies CurveRegistered(org, _, _, version, _)
+
+-- One valuation per trade per curve version, and it is unambiguous:
+-- recomputation against the same inputs has nothing new to say.
+invariant one_valuation_per_trade_and_curve:
+    TradeValued(org_a, book_a, trade, version, mtm_a) and TradeValued(org_b, book_b, trade, version, mtm_b) implies (org_a = org_b and book_a = book_b and mtm_a = mtm_b)
+
+-- The only ways state may change.
+
+-- Authority grants are ungated in v0: bootstrap seeds capabilities at
+-- organisation setup. Maker-checker on grants is a v1 two-step
+-- transformation pattern, deliberately deferred - the grant is already
+-- a governed, attributable, as-of-queryable transition.
+transformation grant_capture_authority(principal, org, book):
+    admit MayCaptureTrade(principal, org, book)
+
+transformation grant_curve_authority(principal, org, market):
+    admit MayRegisterCurve(principal, org, market)
+
+transformation grant_valuation_authority(principal, org, book):
+    admit MayValueTrade(principal, org, book)
+
+-- Capture a trade: identity and terms in one transition. The gate
+-- ties the actor's capability to this org and this book; the trade id
+-- is fixed once captured (a change of terms will be an amendment,
+-- never a silent overwrite).
+transformation capture_trade(org, book, trade, counterparty, market, direction, quantity_mw, price, delivery_start, delivery_end):
+    require MayCaptureTrade(actor, org, book)
+    require not TradeCaptured(_, _, trade, _, _, _)
+    admit TradeCaptured(org, book, trade, counterparty, market, direction)
+    admit TradeTerms(org, trade, quantity_mw, price, delivery_start, delivery_end)
+
+-- Register a curve version and make it official in one move. This is
+-- the first-registration path: if a curve is already official for
+-- this org, market and as-of date, the honest move is a correction,
+-- which keeps lineage - so this gate refuses rather than quietly
+-- replacing.
+transformation register_curve(org, market, as_of, version, payload_hash):
+    require MayRegisterCurve(actor, org, market)
+    require not CurveRegistered(_, _, _, version, _)
+    require not OfficialCurve(org, market, as_of, _)
+    admit CurveRegistered(org, market, as_of, version, payload_hash)
+    admit OfficialCurve(org, market, as_of, version)
+
+-- Correct an official curve the honest way: the prior version stays
+-- on the record, the corrected version is registered alongside it,
+-- lineage is linked, and the official pointer moves. Valuations
+-- admitted under the prior version are untouched; the correction
+-- governs what may be valued next.
+transformation correct_curve(org, market, as_of, prior_version, new_version, payload_hash):
+    require MayRegisterCurve(actor, org, market)
+    require OfficialCurve(org, market, as_of, prior_version)
+    require not CurveSupersedes(_, prior_version)
+    require not CurveRegistered(_, _, _, new_version, _)
+    admit CurveRegistered(org, market, as_of, new_version, payload_hash)
+    admit CurveSupersedes(new_version, prior_version)
+    retract OfficialCurve(org, market, as_of, prior_version)
+    admit OfficialCurve(org, market, as_of, new_version)
+
+-- Admit a mark-to-market result. The number is computed outside (the
+-- compute zone values the trade against the curve payload); the
+-- ledger governs that the result is *admissible*: the actor holds the
+-- valuation capability for this book, the trade exists here, and -
+-- the rule this product is built around - the curve version used is
+-- the one officially in force for the trade's market, at admission
+-- time. An MTM against a stale or unofficial curve is structurally
+-- uncommittable, not merely discouraged.
+transformation admit_valuation(org, book, trade, curve_version, mtm_value):
+    require MayValueTrade(actor, org, book)
+    require TradeCaptured(org, book, trade, _, market, _) and OfficialCurve(org, market, _, curve_version)
+    require not TradeValued(_, _, trade, curve_version, _)
+    admit TradeValued(org, book, trade, curve_version, mtm_value)

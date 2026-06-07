@@ -117,9 +117,29 @@ def test_named_wire_renders_each_kind() -> None:
             "trade": "t1",
             "quantity": Decimal("100.5"),
             "captured_on": dt.date(2026, 6, 7),
+            "delivery_start": dt.datetime(2026, 7, 1, tzinfo=dt.UTC),
             "firm": True,
         }
-    ) == {"trade": "t1", "quantity": "100.5", "captured_on": "2026-06-07", "firm": True}
+    ) == {
+        "trade": "t1",
+        "quantity": "100.5",
+        "captured_on": "2026-06-07",
+        "delivery_start": "2026-07-01T00:00:00+00:00",
+        "firm": True,
+    }
+
+
+def test_named_wire_refuses_naive_timestamps() -> None:
+    # Law 9: delivery periods are UTC instants; a naive datetime has no
+    # instant to name.
+    with pytest.raises(ValueError, match="timezone-aware"):
+        named_wire({"delivery_start": dt.datetime(2026, 7, 1)})
+
+
+def test_untag_timestamp_is_aware() -> None:
+    value = untag({"type": "timestamp", "value": "2026-07-01T00:00:00Z"})
+    assert value == dt.datetime(2026, 7, 1, tzinfo=dt.UTC)
+    assert isinstance(value, dt.datetime) and value.tzinfo is not None
 
 
 @given(

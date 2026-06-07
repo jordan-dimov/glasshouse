@@ -30,6 +30,7 @@ from pathlib import Path
 
 from pydantic import JsonValue
 
+from glasshouse.commit.bases import ClaimRow, CommitRequest
 from glasshouse.commit.envelope import (
     CLAIMS,
     NAMED_CLAIMS,
@@ -87,6 +88,24 @@ class MorphologAdapter:
         return OUTCOME.validate_python(
             self._invoke("run", *self._proposal(transformation, actor, args), *flags)
         )
+
+    def propose(
+        self, request: CommitRequest, *, actor: str, explain_on_reject: bool = False
+    ) -> Outcome:
+        """`run` for a generated request model: the transformation name
+        and the typed args travel together, so they cannot disagree."""
+        return self.run(
+            request.TRANSFORMATION,
+            actor=actor,
+            args=request.model_dump(),
+            explain_on_reject=explain_on_reject,
+        )
+
+    def read[R: ClaimRow](self, row: type[R], *, as_of: str | None = None) -> list[R]:
+        """`read_claims` for a generated read model: named rows parsed
+        into typed fields (Decimal, date, aware datetime) by the model
+        that knows each field's declared kind."""
+        return [row.model_validate(args) for args in self.read_claims(row.PREDICATE, as_of=as_of)]
 
     def explain(self, transformation: str, *, actor: str, args: NamedArgs) -> Explanation:
         """Dry-run diagnosis against live state: the verdict, the failed
