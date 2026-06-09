@@ -8,6 +8,8 @@ Binary surface check, 07/06/2026 (morpholog-cli 0.0.1): none of surfaces 1-4 had
 
 Updated later the same day: surfaces 2+3 (`morpholog hash`, `schema --all`) merged via upstream PR #124, and asks 6-8 below merged via PR #125; all five verified against the rebuilt binary and adopted in `glasshouse.commit`. Still pending upstream: `run --batch` (1), the views generator (4), the hash-chained audit log.
 
+Updated 09/06/2026: upstream PRs #129 (`define`) and #130 (claim disciplines) merged; #131 (`run --batch`, ask 1) green and pending merge. Disciplines adopted in the needle model the same day (section 10). Still pending upstream: the views generator (4), the hash-chained audit log.
+
 ## 1. `run --batch` — accepted, narrowed from the `--stdio` ask
 
 NDJSON proposals in, one per line: `{transformation, actor, args_named}` (actor *per row*, not a flag — an import file carries mixed provenance); the pinned per-proposal outcome envelope out, order-preserving; continue-on-rejection by default with `--fail-fast`; one parse+validate and one connection pool per batch.
@@ -81,6 +83,20 @@ In-process bindings (PyO3/FFI) are explicitly not asked for: the ~9ms subprocess
 The generated client is **stdlib-only** (frozen dataclasses, Decimal/datetime from stdlib, validation emitted as plain code), so the dependency question vanishes rather than being answered, and the worked embedder keeps its stdlib-only property. The Python version is a **declared, enforced, CI-tested floor**: stated in the generated header, checked at import time, exercised in upstream CI at the floor, emitted as a conservative subset so the floor moves only deliberately. Consequence for Glasshouse at adoption: Pydantic moves to the HTTP boundary, where API request models are built *from* the generated types (org from auth context, actor from session, never from a request body) - DESIGN.md section 7's "generated Pydantic request models" sentence gets re-pointed at that boundary then.
 
 Minor nit to bundle: PR #124's text promises manifest entries in declaration order; the binary emits the transformation and intent maps alphabetically. Byte-stable either way; the docs and behaviour should agree.
+
+## 10. Language tiers landed upstream 09/06/2026 — disciplines adopted, `define` parked
+
+Not Glasshouse asks; upstream language growth (PRs #129 and #130) adopted under the standing rule of taking each surface as it lands. Verified against the rebuilt binary before adoption.
+
+### Claim disciplines (PR #130) — adopted in the needle model same day
+
+Claim-shape law declared on predicates instead of authored invariants: `unique by (fields)` (the keys determine the whole claim), `append only` (retraction is a static authoring error), `current pointer by (fields)` paired with `superseded via <Lineage>` (the singleton pointer plus no-fork on the two-argument successor/prior lineage predicate). Six of the needle's twelve invariants were exactly these shapes and are now discipline clauses: capture/terms/registration/valuation uniqueness, the official-pointer singleton, and no-fork lineage. `inspect guarantees` confirms the generated invariants are semantically identical to the deleted ones, each traced to its clause (`from: predicate OfficialCurve, current pointer by (org, market, as_of)`); the six referential and value invariants stay authored, as no discipline claims them. The doctrinal gain: law 2 (supersede, never overwrite) is now machine-enforced on the record predicates, not a convention the transformations happen to respect. The capability predicates carry no discipline on purpose: revocation, when it arrives, is a governed retraction that `append only` would forbid.
+
+Wire impact, verified: the `disciplines` array on manifest predicate objects is serialised only when present (an undisciplined model's manifest is byte-identical), the codegen passes it through untouched, generated model shapes are unchanged, and only the model hash re-pins. Additive for the in-flight #126 client generator. The new lint tier (`check` prints `hint:` lines to stderr, `--strict` promotes them to errors; stdout stays empty on success) joins the env-gated integration leg as a strict check, since CI's pure leg never runs the binary.
+
+### `define` (PR #129) — deliberately not adopted yet
+
+Named, parameterised conditions callable from gates and invariants, proposition-valued only. The needle repeats no condition complex enough to name, so adoption now would be decoration. The forcing case is already visible: upstream's `terms_in_force_on` is precisely the versioned-terms selection the amendment milestone needs, at which point `TradeTerms` also loosens from `unique by (trade)` to `(trade, effective_from)`.
 
 ## Coordination agreements
 

@@ -69,6 +69,14 @@ def test_the_needle_lifecycle(morpholog: MorphologAdapter) -> None:
     # the generated models all name the same rules.
     assert morpholog.model_hash() == MODEL_HASH
 
+    # The authoring lint tier rides the same leg (CI's pure check never
+    # runs the binary): the disciplined model is hint-free under
+    # --strict, and a clean check is silent on both streams.
+    lint = subprocess.run(
+        [str(BINARY), "check", str(MODEL_FILE), "--strict"], capture_output=True, text=True
+    )
+    assert (lint.returncode, lint.stdout, lint.stderr) == (0, "", "")
+
     # Authority is governed capability claims, granted by transitions.
     for grant in (
         GrantCaptureAuthority(principal="alice", org=ORG, book=BOOK),

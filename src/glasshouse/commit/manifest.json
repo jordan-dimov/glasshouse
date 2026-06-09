@@ -1,5 +1,5 @@
 {
-  "hash": "sha256:19b8ddd8e85ad4dbd28498f7ea84392d5a5d8a6c3652472618d6bc64a2c4000c",
+  "hash": "sha256:7045468e03712a8bdaf66e6f2d43337bbf9b88c0803c6bbb34f597735fcc3897",
   "intent_order": [],
   "intents": {},
   "predicates": [
@@ -81,6 +81,17 @@
           "name": "direction"
         }
       ],
+      "disciplines": [
+        {
+          "discipline": "unique_by",
+          "fields": [
+            "trade"
+          ]
+        },
+        {
+          "discipline": "append_only"
+        }
+      ],
       "name": "TradeCaptured"
     },
     {
@@ -112,6 +123,17 @@
           "name": "delivery_end"
         }
       ],
+      "disciplines": [
+        {
+          "discipline": "unique_by",
+          "fields": [
+            "trade"
+          ]
+        },
+        {
+          "discipline": "append_only"
+        }
+      ],
       "name": "TradeTerms"
     },
     {
@@ -137,6 +159,17 @@
           "name": "payload_hash"
         }
       ],
+      "disciplines": [
+        {
+          "discipline": "unique_by",
+          "fields": [
+            "version"
+          ]
+        },
+        {
+          "discipline": "append_only"
+        }
+      ],
       "name": "CurveRegistered"
     },
     {
@@ -158,6 +191,20 @@
           "name": "version"
         }
       ],
+      "disciplines": [
+        {
+          "discipline": "current_pointer_by",
+          "fields": [
+            "org",
+            "market",
+            "as_of"
+          ]
+        },
+        {
+          "discipline": "superseded_via",
+          "lineage": "CurveSupersedes"
+        }
+      ],
       "name": "OfficialCurve"
     },
     {
@@ -169,6 +216,11 @@
         {
           "kind": "Subject",
           "name": "prior_version"
+        }
+      ],
+      "disciplines": [
+        {
+          "discipline": "append_only"
         }
       ],
       "name": "CurveSupersedes"
@@ -196,6 +248,18 @@
             "Quantity": "EUR"
           },
           "name": "mtm"
+        }
+      ],
+      "disciplines": [
+        {
+          "discipline": "unique_by",
+          "fields": [
+            "trade",
+            "curve_version"
+          ]
+        },
+        {
+          "discipline": "append_only"
         }
       ],
       "name": "TradeValued"

@@ -17,7 +17,16 @@
 --   * Supersede, never overwrite. A curve correction registers a new
 --     version alongside the old, links the lineage, and moves the
 --     official pointer. The old figure, and any valuation that relied
---     on it, stays on the record.
+--     on it, stays on the record. This is machine-enforced, not
+--     conventional: the record predicates are `append only` (a
+--     retract is a static authoring error), and the official pointer
+--     is a declared `current pointer` with its supersession lineage.
+--
+-- Claim-shape law (identity uniqueness, the singleton pointer, no-fork
+-- lineage, append-only records) is declared on the predicates as
+-- disciplines; morpholog generates and enforces the invariants and
+-- `inspect guarantees` traces each back to its clause. Only
+-- referential and value law remains authored by hand below.
 --
 -- Bulk curve content never enters the ledger: a curve version carries
 -- the hash of its price array, and the array itself lives in the app
@@ -31,15 +40,20 @@
 program glasshouse
 
 -- The vocabulary. `TradeCaptured` is the trade's immutable identity;
--- its economic terms live in `TradeTerms` (one version in v0;
--- amendment, when it arrives, will version this the way the curve is
--- versioned, rather than ever editing it). `CurveRegistered` is a
+-- its economic terms live in `TradeTerms` (one version in v0, so
+-- `unique by (trade)`; amendment, when it arrives, will loosen this
+-- to `(trade, effective_from)` and version terms the way the curve is
+-- versioned, rather than ever editing them). `CurveRegistered` is a
 -- curve version's identity including the hash anchoring its payload;
--- `OfficialCurve` is the retractable pointer naming the version in
--- force for a market and as-of date; `CurveSupersedes` is correction
+-- `OfficialCurve` is the current pointer naming the version in force
+-- for a market and as-of date, superseded along the `CurveSupersedes`
 -- lineage. `TradeValued` records one mark-to-market result, pinned to
 -- the exact curve version it was computed against, so a later
 -- correction never silently re-writes a number anyone saw.
+--
+-- The capability predicates carry no discipline on purpose: they are
+-- only ever admitted in v0, and revocation, when it arrives, is a
+-- governed retraction that `append only` would forbid statically.
 --
 -- Units are contractual labels on exact decimals: a quantity is
 -- `Decimal[MW]`, an MTM is `Decimal[EUR]`, and mixing them is
@@ -50,25 +64,30 @@ predicate MayCaptureTrade(actor: Subject, org: Subject, book: Subject)
 predicate MayRegisterCurve(actor: Subject, org: Subject, market: Subject)
 predicate MayValueTrade(actor: Subject, org: Subject, book: Subject)
 predicate TradeCaptured(org: Subject, book: Subject, trade: Subject, counterparty: Subject, market: Subject, direction: Subject)
+    unique by (trade)
+    append only
 predicate TradeTerms(org: Subject, trade: Subject, quantity: Decimal[MW], price: Decimal, delivery_start: Timestamp, delivery_end: Timestamp)
+    unique by (trade)
+    append only
 predicate CurveRegistered(org: Subject, market: Subject, as_of: Date, version: Subject, payload_hash: Subject)
+    unique by (version)
+    append only
 predicate OfficialCurve(org: Subject, market: Subject, as_of: Date, version: Subject)
+    current pointer by (org, market, as_of)
+    superseded via CurveSupersedes
 predicate CurveSupersedes(new_version: Subject, prior_version: Subject)
+    append only
 predicate TradeValued(org: Subject, book: Subject, trade: Subject, curve_version: Subject, mtm: Decimal[EUR])
+    unique by (trade, curve_version)
+    append only
 
--- The rules that must always hold, by any path.
-
--- A trade id names one trade: identity is fixed at capture.
-invariant one_capture_per_trade:
-    TradeCaptured(org_a, book_a, trade, cp_a, mkt_a, dir_a) and TradeCaptured(org_b, book_b, trade, cp_b, mkt_b, dir_b) implies (org_a = org_b and book_a = book_b and cp_a = cp_b and mkt_a = mkt_b and dir_a = dir_b)
+-- The referential and value rules that must always hold, by any path.
+-- (Uniqueness, the official-pointer singleton and no-fork lineage are
+-- generated from the discipline clauses above.)
 
 -- Terms belong to a captured trade, in the same organisation.
 invariant terms_belong_to_captured_trade:
     TradeTerms(org, trade, _, _, _, _) implies TradeCaptured(org, _, trade, _, _, _)
-
--- One terms record per trade, and it is unambiguous.
-invariant one_terms_per_trade:
-    TradeTerms(org_a, trade, qty_a, px_a, ds_a, de_a) and TradeTerms(org_b, trade, qty_b, px_b, ds_b, de_b) implies (qty_a = qty_b and px_a = px_b and ds_a = ds_b and de_a = de_b)
 
 -- A trade for nothing, or for negative power, is not a trade.
 invariant quantity_is_positive:
@@ -78,23 +97,10 @@ invariant quantity_is_positive:
 invariant delivery_period_is_ordered:
     TradeTerms(_, _, _, _, delivery_start, delivery_end) implies delivery_start strictly_before delivery_end
 
--- A curve version id names one registration: the identity a payload
--- hash is anchored to is never ambiguous.
-invariant curve_version_identifies_one_registration:
-    CurveRegistered(org_a, mkt_a, asof_a, version, hash_a) and CurveRegistered(org_b, mkt_b, asof_b, version, hash_b) implies (org_a = org_b and mkt_a = mkt_b and asof_a = asof_b and hash_a = hash_b)
-
 -- The official pointer can never name a version that was not
 -- registered for exactly that org, market and as-of date.
 invariant official_curve_is_registered:
     OfficialCurve(org, market, as_of, version) implies CurveRegistered(org, market, as_of, version, _)
-
--- One curve is official at a time, per org, market and as-of date.
-invariant one_official_curve:
-    OfficialCurve(org, market, as_of, a) and OfficialCurve(org, market, as_of, b) implies a = b
-
--- Correction history is a chain, never a fork.
-invariant curve_chain_no_fork:
-    CurveSupersedes(new_a, prior) and CurveSupersedes(new_b, prior) implies new_a = new_b
 
 -- A valuation belongs to a captured trade, in the same org and book.
 invariant valued_trade_was_captured:
@@ -107,11 +113,6 @@ invariant valued_trade_was_captured:
 -- promise the curve stays current.)
 invariant valuation_curve_is_registered:
     TradeValued(org, _, _, version, _) implies CurveRegistered(org, _, _, version, _)
-
--- One valuation per trade per curve version, and it is unambiguous:
--- recomputation against the same inputs has nothing new to say.
-invariant one_valuation_per_trade_and_curve:
-    TradeValued(org_a, book_a, trade, version, mtm_a) and TradeValued(org_b, book_b, trade, version, mtm_b) implies (org_a = org_b and book_a = book_b and mtm_a = mtm_b)
 
 -- The only ways state may change.
 

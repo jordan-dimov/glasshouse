@@ -199,5 +199,5 @@ class TradeValuedClaim(ClaimRow):
     mtm: Decimal  # unit: EUR
 
 
-MODEL_HASH = "sha256:19b8ddd8e85ad4dbd28498f7ea84392d5a5d8a6c3652472618d6bc64a2c4000c"
+MODEL_HASH = "sha256:7045468e03712a8bdaf66e6f2d43337bbf9b88c0803c6bbb34f597735fcc3897"
 PROGRAM = "glasshouse"
