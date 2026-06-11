@@ -110,10 +110,10 @@ BATCH_EXPLAINED = json.dumps(
 )
 
 
-def test_run_batch_composes_explain_on_reject(tmp_path: Path) -> None:
+def test_propose_batch_composes_explain_on_reject(tmp_path: Path) -> None:
     binary = fake_binary(tmp_path, BATCH_EXPLAINED)
     bridged = GlasshouseClient("model.morph", "postgres:///x", binary=str(binary))
-    (receipt,) = bridged.run_batch(
+    (receipt,) = bridged.propose_batch(
         [{"transformation": "capture_trade", "actor": "mallory", "args_named": {}}],
         explain_on_reject=True,
     )
@@ -124,21 +124,21 @@ def test_run_batch_composes_explain_on_reject(tmp_path: Path) -> None:
     assert not receipt.outcome.explanation.admissible
 
 
-def test_run_batch_omits_the_flag_by_default(tmp_path: Path) -> None:
+def test_propose_batch_omits_the_flag_by_default(tmp_path: Path) -> None:
     binary = fake_binary(tmp_path, BATCH_EXPLAINED)
     bridged = GlasshouseClient("model.morph", "postgres:///x", binary=str(binary))
-    bridged.run_batch([{"transformation": "t", "actor": "a", "args_named": {}}])
+    bridged.propose_batch([{"transformation": "t", "actor": "a", "args_named": {}}])
     assert "--explain-on-reject" not in (tmp_path / "argv.txt").read_text().splitlines()
 
 
-def test_run_batch_raises_on_operational_abort(tmp_path: Path) -> None:
+def test_propose_batch_raises_on_operational_abort(tmp_path: Path) -> None:
     binary = fake_binary(tmp_path, BATCH_EXPLAINED, stderr="connection lost", exit_code=1)
     bridged = GlasshouseClient("model.morph", "postgres:///x", binary=str(binary))
     with pytest.raises(MorphologError, match="batch aborted after 1 receipt"):
-        bridged.run_batch([{"transformation": "t", "actor": "a", "args_named": {}}])
+        bridged.propose_batch([{"transformation": "t", "actor": "a", "args_named": {}}])
 
 
-def test_run_batch_is_bounded_when_a_timeout_is_set(tmp_path: Path) -> None:
+def test_propose_batch_is_bounded_when_a_timeout_is_set(tmp_path: Path) -> None:
     sleeper = tmp_path / "fake-morpholog"
     sleeper.write_text("#!/bin/sh\nsleep 5\n")
     sleeper.chmod(0o755)
@@ -146,7 +146,7 @@ def test_run_batch_is_bounded_when_a_timeout_is_set(tmp_path: Path) -> None:
         "model.morph", "postgres:///x", binary=str(sleeper), timeout_seconds=0.1
     )
     with pytest.raises(MorphologError, match="batch timed out"):
-        bounded.run_batch([{"transformation": "t", "actor": "a", "args_named": {}}])
+        bounded.propose_batch([{"transformation": "t", "actor": "a", "args_named": {}}])
 
 
 def test_verify_ledger_refuses_a_non_object_verdict(tmp_path: Path) -> None:

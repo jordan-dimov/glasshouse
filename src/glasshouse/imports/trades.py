@@ -157,7 +157,7 @@ def import_trades(
             }
             for _, req in accepted
         ]
-        for receipt in client.run_batch(rows, explain_on_reject=explain):
+        for receipt in client.propose_batch(rows, explain_on_reject=explain):
             # receipt.row indexes the batch, which excludes quarantined
             # CSV rows; map it back to the file's own line number.
             line, _ = accepted[receipt.row - 1]
