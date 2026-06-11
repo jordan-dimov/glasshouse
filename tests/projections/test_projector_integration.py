@@ -7,6 +7,7 @@ app schema is migrated by Alembic in the fixture, so revision 0002 is
 part of what this test proves."""
 
 import datetime as dt
+import threading
 from decimal import Decimal
 
 import pytest
@@ -161,3 +162,22 @@ def test_the_projector_keeps_up_with_the_monday_morning_loop(
     # The worker's one-shot through the CLI seam.
     assert cli.main(["project", "--database-url", DB]) == 0
     assert "applied 0 transition(s)" in capsys.readouterr().out
+
+
+def test_concurrent_projectors_serialise_and_apply_exactly_once(engine: sa.Engine) -> None:
+    # Two workers racing over the same log: the advisory lock plus the
+    # cursor-in-transaction make application exactly-once, not merely
+    # PK-protected. Wipe and let them race over the full history.
+    before = _rows(engine)
+    with engine.begin() as connection:
+        for table in TABLES:
+            connection.execute(sa.delete(table))
+
+    applied: list[int] = []
+    workers = [threading.Thread(target=lambda: applied.append(catch_up(engine))) for _ in range(2)]
+    for worker in workers:
+        worker.start()
+    for worker in workers:
+        worker.join(timeout=30)
+    assert sum(applied) == 8
+    assert _rows(engine) == before

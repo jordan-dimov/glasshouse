@@ -73,11 +73,16 @@ def test_trades_import_partial_admission(
 ) -> None:
     csv_file = tmp_path / "trades.csv"
     csv_file.write_text(TRADES)
-    out = _run(["import-trades", str(csv_file), "--org", ORG, "--actor", "alice"], capsys)
+    out = _run(
+        ["import-trades", str(csv_file), "--org", ORG, "--actor", "alice", "--project"], capsys
+    )
 
     # 2 committed, the in-file duplicate lawfully rejected, the bad
     # direction quarantined - and the exit code was 0 throughout.
     assert "4 processed: 2 committed, 1 rejected, 0 error, 1 quarantined" in out
+    # The inline projector mode rode the same invocation: the two
+    # grants and the two captures are projected.
+    assert "projected: applied 4 transition(s)" in out
 
     client = GlasshouseClient(str(MODEL_FILE), DB)
     captured = {row.trade for row in client.read(models.TradeCapturedClaim)}
@@ -103,3 +108,23 @@ def test_curves_import_and_the_immutable_rerun(
     # before the ledger is asked, and the report says so per curve.
     rerun = _run(args, capsys)
     assert "2 error" in rerun and "immutable" in rerun
+
+
+def test_a_second_version_for_an_official_curve_is_a_lawful_rejection(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # A NEW version for an (org, market, as-of) that already has an
+    # official curve: the payload stores (new identity), the ledger
+    # refuses - the honest move is a correction, and the report says so.
+    csv_file = tmp_path / "curves2.csv"
+    csv_file.write_text(
+        "\n".join(
+            [
+                "market,as_of,version,period_start,price",
+                f"{MARKET},2026-06-08,crv-mon-b,2026-07-01T00:00:00Z,92",
+                f"{MARKET},2026-06-08,crv-mon-b,2026-07-01T01:00:00Z,90",
+            ]
+        )
+    )
+    out = _run(["import-curves", str(csv_file), "--org", ORG, "--actor", "carol"], capsys)
+    assert "1 processed: 0 committed, 1 rejected, 0 error, 0 quarantined" in out

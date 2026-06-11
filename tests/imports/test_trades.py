@@ -96,3 +96,55 @@ def test_import_maps_batch_receipts_back_to_csv_lines(tmp_path: Path) -> None:
     sent = [json.loads(line) for line in (tmp_path / "stdin.ndjson").read_text().splitlines()]
     assert [row["args_named"]["trade"] for row in sent] == ["T-1", "T-5"]
     assert all(row["actor"] == "alice" for row in sent)
+
+
+ERROR_RECEIPTS = "\n".join(
+    [
+        json.dumps(
+            {
+                "status": "committed",
+                "transition_id": "tr-1",
+                "actor": {"type": "subject", "value": "alice"},
+                "asserted_claims": [],
+                "retracted_claims": [],
+                "emitted_intents": [],
+                "row": 1,
+            }
+        ),
+        json.dumps({"row": 2, "status": "error", "error": "could not serialize access"}),
+    ]
+)
+
+
+def test_an_error_receipt_is_reported_per_row_not_raised(tmp_path: Path) -> None:
+    text = "\n".join([HEADER, GOOD.format(n=1), GOOD.format(n=2)])
+    binary = fake_binary(tmp_path, ERROR_RECEIPTS)
+    client = GlasshouseClient("model.morph", "postgres:///x", binary=str(binary))
+    report = import_trades(client, text, org="acme-energy", actor="alice")
+    assert (report.committed, report.errored) == (1, 1)
+    assert "could not serialize" in report.outcomes[1].detail
+
+
+def test_an_all_quarantined_file_never_reaches_the_binary(tmp_path: Path) -> None:
+    text = "\n".join(
+        [
+            HEADER,
+            "spec-de,T-1,cp,de-power,long,10,86.25,2026-07-01T00:00:00Z,2026-07-02T00:00:00Z",
+            "spec-de,T-2,cp,de-power,buy,ten,86.25,2026-07-01T00:00:00Z,2026-07-02T00:00:00Z",
+        ]
+    )
+    binary = fake_binary(tmp_path, "")
+    client = GlasshouseClient("model.morph", "postgres:///x", binary=str(binary))
+    report = import_trades(client, text, org="acme-energy", actor="alice")
+    assert report.quarantined == 2 and len(report.outcomes) == 2
+    assert not (tmp_path / "argv.txt").exists()  # no batch was run
+
+
+def test_an_unparseable_instant_quarantines_with_the_format_named() -> None:
+    text = "\n".join(
+        [HEADER, "spec-de,T-1,cp,de-power,buy,10,86.25,yesterday,2026-07-02T00:00:00Z"]
+    )
+    accepted, quarantined = parse_trades(text, org="acme-energy")
+    assert not accepted
+    ((_, outcome),) = quarantined
+    assert "RFC 3339" in outcome.detail and "'yesterday'" in outcome.detail

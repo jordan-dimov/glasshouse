@@ -30,7 +30,7 @@ from glasshouse.commit import (
     models,
     values,
 )
-from glasshouse.commit.morpholog_client.envelopes import GateRejection
+from glasshouse.commit.morpholog_client.envelopes import GateRejection, InvariantRejection
 from tests.support import BINARY, DB, needs_live_stack
 
 ORG, BOOK, MARKET = "acme-energy", "spec-de", "de-power"
@@ -217,6 +217,50 @@ def test_the_needle_lifecycle(morpholog: GlasshouseClient) -> None:
     )
     assert isinstance(revalued, Committed)
 
+    # The adversarial leg: every authored invariant reachable through a
+    # current transformation refuses an attempted violation by name.
+    # (The other authored invariants are unreachable by construction -
+    # capture admits identity and terms together - and the uniqueness
+    # family is gated before its invariants can fire.)
+    for violation, invariant in (
+        (
+            models.CaptureTradeRequest(
+                org=ORG,
+                book=BOOK,
+                trade="T-zero",
+                counterparty="stadtwerk-x",
+                market=MARKET,
+                direction="buy",
+                quantity=Decimal("0"),
+                price=Decimal("86.25"),
+                delivery_start=dt.datetime(2026, 7, 1, tzinfo=dt.UTC),
+                delivery_end=dt.datetime(2026, 10, 1, tzinfo=dt.UTC),
+            ),
+            "quantity_is_positive",
+        ),
+        (
+            models.CaptureTradeRequest(
+                org=ORG,
+                book=BOOK,
+                trade="T-backwards",
+                counterparty="stadtwerk-x",
+                market=MARKET,
+                direction="buy",
+                quantity=Decimal("10"),
+                price=Decimal("86.25"),
+                delivery_start=dt.datetime(2026, 10, 1, tzinfo=dt.UTC),
+                delivery_end=dt.datetime(2026, 7, 1, tzinfo=dt.UTC),
+            ),
+            "delivery_period_is_ordered",
+        ),
+    ):
+        refused_capture = morpholog.submit(violation, actor="alice", explain_on_reject=True)
+        assert isinstance(refused_capture, Rejected)
+        assert refused_capture.explanation is not None
+        violated = refused_capture.explanation.rejection
+        assert isinstance(violated, InvariantRejection)
+        assert violated.name == invariant
+
     # Typed reads: the generated models parse wire-true strings into
     # Decimal, date and aware datetime.
     (official,) = morpholog.read(models.OfficialCurveClaim)
@@ -239,8 +283,10 @@ def test_the_needle_lifecycle(morpholog: GlasshouseClient) -> None:
         morpholog.claims_named("NoSuchPredicate")
 
     # The coverage surface (upstream #137): by the end of the needle
-    # lifecycle every transformation in the programme has done work.
+    # lifecycle every transformation in the programme has done work, and
+    # no invariant's condition has gone unexercised by committed history.
     report = morpholog.coverage()
     in_programme = [t for t in report.transformations if not t.not_in_programme]
     assert len(in_programme) == 7
     assert all(t.transitions > 0 for t in in_programme)
+    assert not [i.invariant for i in report.invariants if i.verdict == "never_fired"]
