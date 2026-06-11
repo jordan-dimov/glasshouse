@@ -29,7 +29,7 @@ from decimal import Decimal
 import sqlalchemy as sa
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 
-from glasshouse.commit import envelopes, models
+from glasshouse.commit import envelopes, models, values
 from glasshouse.projections.tables import (
     blotter_trade,
     position_hour,
@@ -140,7 +140,9 @@ def fold_transition(
     return Fold(tuple(captured), terms, tuple(positions), tuple(valuations))
 
 
-def _apply(connection: sa.Connection, fold: Fold, committed_at: dt.datetime, tid: str) -> None:
+def _apply(
+    connection: sa.Connection, fold: Fold, committed_at: dt.datetime, tid: str, actor: str
+) -> None:
     for trade in fold.blotter:
         term = fold.terms[trade.trade]
         connection.execute(
@@ -157,6 +159,7 @@ def _apply(connection: sa.Connection, fold: Fold, committed_at: dt.datetime, tid
                 delivery_end=term.delivery_end,
                 captured_at=committed_at,
                 transition_id=tid,
+                actor=actor,
             )
         )
     if fold.positions:
@@ -192,13 +195,14 @@ def _apply(connection: sa.Connection, fold: Fold, committed_at: dt.datetime, tid
                 mtm=valuation.mtm,
                 valued_at=committed_at,
                 transition_id=tid,
+                actor=actor,
             )
         )
 
 
 _NEXT_TRANSITION = sa.text(
     """
-    SELECT transition_id, asserted_claims, retracted_claims, committed_at
+    SELECT transition_id, actor, asserted_claims, retracted_claims, committed_at
     FROM morpholog.audit
     WHERE CAST(:c AS timestamptz) IS NULL
        OR (committed_at, transition_id) > (CAST(:c AS timestamptz), CAST(:t AS uuid))
@@ -238,7 +242,8 @@ def catch_up(engine: sa.Engine) -> int:
                 [envelopes.ClaimInstance.from_json(claim) for claim in row.retracted_claims],
             )
             tid = str(row.transition_id)
-            _apply(connection, fold, row.committed_at, tid)
+            actor = str(values.decode_tagged(row.actor))
+            _apply(connection, fold, row.committed_at, tid, actor)
             advance = pg_insert(projection_progress).values(
                 name=CURSOR, committed_at=row.committed_at, transition_id=tid
             )
@@ -249,6 +254,73 @@ def catch_up(engine: sa.Engine) -> int:
                 )
             )
             applied += 1
+
+
+_ALL_TRANSITIONS = sa.text(
+    """
+    SELECT transition_id, actor, asserted_claims, retracted_claims, committed_at
+    FROM morpholog.audit
+    ORDER BY committed_at, transition_id
+    """
+)
+
+
+def accumulate(engine: sa.Engine) -> dict[str, set[tuple[object, ...]]]:
+    """Replay the whole log through the pure folds into in-memory row
+    sets matching the projection tables' column order - the
+    non-destructive half of `glasshouse verify`'s projection leg.
+    Reads the audit log and writes nothing."""
+    blotter: dict[tuple[str, str], tuple[object, ...]] = {}
+    positions: dict[tuple[str, str, str, dt.datetime], tuple[Decimal, str]] = {}
+    valuations: dict[tuple[str, str, str], tuple[object, ...]] = {}
+    cursor: tuple[object, ...] | None = None
+    with engine.connect() as connection:
+        for row in connection.execute(_ALL_TRANSITIONS):
+            fold = fold_transition(
+                [envelopes.ClaimInstance.from_json(claim) for claim in row.asserted_claims],
+                [envelopes.ClaimInstance.from_json(claim) for claim in row.retracted_claims],
+            )
+            tid = str(row.transition_id)
+            actor = str(values.decode_tagged(row.actor))
+            for trade in fold.blotter:
+                term = fold.terms[trade.trade]
+                blotter[(trade.org, trade.trade)] = (
+                    trade.org,
+                    trade.trade,
+                    trade.book,
+                    trade.counterparty,
+                    trade.market,
+                    trade.direction,
+                    term.quantity,
+                    term.price,
+                    term.delivery_start,
+                    term.delivery_end,
+                    row.committed_at,
+                    tid,
+                    actor,
+                )
+            for delta in fold.positions:
+                key = (delta.org, delta.book, delta.market, delta.period_start)
+                net = positions[key][0] if key in positions else Decimal(0)
+                positions[key] = (net + delta.delta_mw, tid)
+            for valuation in fold.valuations:
+                valuations[(valuation.org, valuation.trade, valuation.curve_version)] = (
+                    valuation.org,
+                    valuation.trade,
+                    valuation.curve_version,
+                    valuation.book,
+                    valuation.mtm,
+                    row.committed_at,
+                    tid,
+                    actor,
+                )
+            cursor = (CURSOR, row.committed_at, tid)
+    return {
+        "blotter_trade": set(blotter.values()),
+        "position_hour": {(*key, net, tid) for key, (net, tid) in positions.items()},
+        "trade_valuation": set(valuations.values()),
+        "projection_progress": {cursor} if cursor else set(),
+    }
 
 
 def rebuild(engine: sa.Engine) -> int:

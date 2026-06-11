@@ -24,12 +24,15 @@ from decimal import Decimal, InvalidOperation
 
 from glasshouse.commit import GlasshouseClient, envelopes, models, values
 from glasshouse.imports.report import (
+    ADMISSIBLE,
     COMMITTED,
     ERROR,
     QUARANTINED,
+    REFUSED,
     REJECTED,
     ImportReport,
     RowOutcome,
+    why,
 )
 
 COLUMNS = frozenset(
@@ -127,17 +130,22 @@ def _receipt_outcome(ref: str, outcome: object) -> RowOutcome:
     match outcome:
         case envelopes.Committed(transition_id=transition_id):
             return RowOutcome(ref, COMMITTED, transition_id)
-        case envelopes.Rejected(reason=reason):
-            return RowOutcome(ref, REJECTED, reason)
+        case envelopes.Rejected(reason=reason, explanation=explanation):
+            detail = f"{reason} - {why(explanation)}" if explanation else reason
+            return RowOutcome(ref, REJECTED, detail)
         case envelopes.BatchError(error=error):
             return RowOutcome(ref, ERROR, error)
         case _:
             raise TypeError(f"not a batch outcome: {outcome!r}")
 
 
-def import_trades(client: GlasshouseClient, text: str, *, org: str, actor: str) -> ImportReport:
+def import_trades(
+    client: GlasshouseClient, text: str, *, org: str, actor: str, explain: bool = True
+) -> ImportReport:
     """Import one trades CSV: quarantine locally, batch the rest, and
-    report every row's fate in file order."""
+    report every row's fate in file order. With `explain` (the default -
+    the report is for humans), a rejected row's detail carries the
+    same-snapshot why."""
     accepted, quarantined = parse_trades(text, org=org)
     outcomes = list(quarantined)
     if accepted:
@@ -149,9 +157,25 @@ def import_trades(client: GlasshouseClient, text: str, *, org: str, actor: str) 
             }
             for _, req in accepted
         ]
-        for receipt in client.run_batch(rows):
+        for receipt in client.run_batch(rows, explain_on_reject=explain):
             # receipt.row indexes the batch, which excludes quarantined
             # CSV rows; map it back to the file's own line number.
             line, _ = accepted[receipt.row - 1]
             outcomes.append((line, _receipt_outcome(f"line {line}", receipt.outcome)))
+    return ImportReport(tuple(outcome for _, outcome in sorted(outcomes, key=lambda o: o[0])))
+
+
+def preview_trades(client: GlasshouseClient, text: str, *, org: str, actor: str) -> ImportReport:
+    """The workbench's validate step: parse and quarantine exactly as an
+    import would, then dry-run every surviving row through `explain` -
+    the ledger's own admissibility verdict, against current state, with
+    nothing committed."""
+    accepted, quarantined = parse_trades(text, org=org)
+    outcomes = list(quarantined)
+    for line, req in accepted:
+        explanation = client.explain(req.TRANSFORMATION, actor, req.to_args_named())
+        if explanation.admissible:
+            outcomes.append((line, RowOutcome(f"line {line}", ADMISSIBLE, "would commit")))
+        else:
+            outcomes.append((line, RowOutcome(f"line {line}", REFUSED, why(explanation))))
     return ImportReport(tuple(outcome for _, outcome in sorted(outcomes, key=lambda o: o[0])))

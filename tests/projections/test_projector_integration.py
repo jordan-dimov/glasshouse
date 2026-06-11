@@ -23,6 +23,7 @@ from glasshouse.compute.curves import HourlyCurve
 from glasshouse.compute.marking import correct_curve_version, register_curve_version, value_trade
 from glasshouse.compute.store import CurveStore
 from glasshouse.projections import (
+    accumulate,
     blotter_trade,
     catch_up,
     position_hour,
@@ -151,6 +152,7 @@ def test_the_projector_replays_the_monday_morning_loop(
     (blotter,) = rows["blotter_trade"]
     assert blotter[:3] == (ORG, "T-001", BOOK)
     assert capture_tid in blotter
+    assert blotter[-1] == "alice"  # the evidence trail: who captured it
 
     positions = rows["position_hour"]
     assert [(row[3], row[4]) for row in positions] == [
@@ -160,6 +162,11 @@ def test_the_projector_replays_the_monday_morning_loop(
     # Both marks stand after the correction, each pinned to its version.
     marks = {row[2]: row[4] for row in rows["trade_valuation"]}
     assert marks == {"crv-v1": Decimal("55.00"), "crv-v2": Decimal("85.00")}
+    assert {row[-1] for row in rows["trade_valuation"]} == {"risk-engine"}
+
+    # The in-memory replay (verify's projection leg) lands on exactly
+    # the rows the SQL applier produced - memory and SQL agree.
+    assert accumulate(engine) == {name: set(table_rows) for name, table_rows in rows.items()}
 
     # The read-side law: wipe and replay from zero lands byte-for-byte
     # on the same read state (the seed of `glasshouse verify`).

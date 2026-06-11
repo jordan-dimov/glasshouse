@@ -33,7 +33,7 @@ def test_import_trades_prints_the_report_and_exits_zero(
 
     assert code == 0
     out = capsys.readouterr().out
-    assert "5 processed: 1 committed, 1 rejected, 0 error, 3 quarantined" in out
+    assert "5 processed: 1 committed, 1 rejected, 3 quarantined" in out
     assert "line 2: tr-1" in out
 
 

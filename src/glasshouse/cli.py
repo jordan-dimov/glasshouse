@@ -1,6 +1,7 @@
 """The operator's command line.
 
-Imports and the projector today; the demo seed joins at its milestone.
+Imports, the projector and `verify` today; the demo seed joins at its
+milestone.
 Argparse and boring on purpose: a file that does not match its column
 contract refuses whole (exit 1); a file that was processed exits 0
 whatever the per-row outcomes, because partial admission is an import's
@@ -23,8 +24,15 @@ import sqlalchemy as sa
 from glasshouse.commit import MODEL_FILE, GlasshouseClient, MorphologError
 from glasshouse.compute.store import CurveStore, engine_url
 from glasshouse.config import get_settings
-from glasshouse.imports import ImportFormatError, import_curves, import_trades
+from glasshouse.imports import (
+    ImportFormatError,
+    import_curves,
+    import_trades,
+    preview_curves,
+    preview_trades,
+)
 from glasshouse.projections import catch_up, follow
+from glasshouse.verify import verify
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -57,7 +65,17 @@ def _parser() -> argparse.ArgumentParser:
             action="store_true",
             help="catch the projections up after the import (the inline mode)",
         )
+        command.add_argument(
+            "--preview",
+            action="store_true",
+            help="dry-run: the ledger's admissibility verdict per row, nothing committed",
+        )
         database_url(command)
+
+    check = commands.add_parser(
+        "verify", help="Prove the operational database still agrees with the governed ledger."
+    )
+    database_url(check)
 
     project = commands.add_parser("project", help="Catch the projections up with the ledger.")
     project.add_argument(
@@ -72,6 +90,13 @@ def _parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> int:
     args = _parser().parse_args(argv)
     try:
+        if args.command == "verify":
+            client = GlasshouseClient(str(MODEL_FILE), args.database_url)
+            engine = sa.create_engine(engine_url(args.database_url))
+            verdict = verify(client, engine, CurveStore(engine))
+            print(verdict.render())
+            return 0 if verdict.ok else 1
+
         if args.command == "project":
             engine = sa.create_engine(engine_url(args.database_url))
             if args.follow:
@@ -83,7 +108,12 @@ def main(argv: list[str] | None = None) -> int:
         text = args.file.read_text()
         client = GlasshouseClient(str(MODEL_FILE), args.database_url)
         if args.command == "import-trades":
-            report = import_trades(client, text, org=args.org, actor=args.actor)
+            if args.preview:
+                report = preview_trades(client, text, org=args.org, actor=args.actor)
+            else:
+                report = import_trades(client, text, org=args.org, actor=args.actor)
+        elif args.preview:
+            report = preview_curves(client, text, org=args.org, actor=args.actor)
         else:
             store = CurveStore(sa.create_engine(engine_url(args.database_url)))
             report = import_curves(client, store, text, org=args.org, actor=args.actor)

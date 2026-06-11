@@ -118,6 +118,10 @@ Upstream deliberately left the audit surface unpinned, "pending the worked examp
 
 The generated `_invoke` runs the binary unbounded, which is right for batch imports and wrong for a readiness endpoint: a binary that answers `--version` and then hangs on `inspect claims` would turn `/readyz` into a stuck request instead of a fast 503. Bridged by `GlasshouseClient` (the same pattern as the as-of bridge that #138 deleted): an optional `timeout_seconds`, unset by default, enforced in an overridden `_invoke` that mirrors the generated semantics and converts `TimeoutExpired` into the operational `MorphologError`; the API boundary sets it from `GLASSHOUSE_MORPHOLOG_TIMEOUT_SECONDS` (default 10s). The ask, filed as morpholog#140: a constructor `timeout` on the generated client, enforced in `_invoke`, after which the override deletes.
 
+## 14. The generated client catches up again: `verify` and batch explanations — filed 11/06/2026 as [morpholog#141](https://github.com/jordan-dimov/morpholog/issues/141)
+
+Surfaced by the explainability pass. `glasshouse verify`'s ledger leg needs `morpholog verify` (pinned, but absent from the generated client - bridged by `GlasshouseClient.verify_ledger` over the inherited `_invoke`, whose empty-stdout rule already fits the verdict-on-stdout-at-exit-1 shape). The import reports' per-row whys need `--explain-on-reject` composed with `--batch` (the CLI supports it, the envelope already parses it, the generated `run_batch` exposes neither it nor a timeout - bridged by an override duplicating the generated body plus one flag, the drift-prone copy the generated client exists to delete; the timeout half is the #140 family). Both bridges delete on delivery, as the as-of bridge (#135 -> #138) did.
+
 ## Coordination agreements
 
 - **Evidence-pack extension contract pinned now** (no waiting for full WP5): a content-addressed JSON manifest, entries `{role, hash, media_type, locator?}`, chained to the ledger by transition ids.

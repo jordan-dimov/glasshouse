@@ -9,9 +9,14 @@ through the payload store first, so a committed claim never anchors
 missing content.
 """
 
-from glasshouse.imports.curves import import_curves, parse_curves
-from glasshouse.imports.report import ImportReport, RowOutcome
-from glasshouse.imports.trades import ImportFormatError, import_trades, parse_trades
+from glasshouse.imports.curves import import_curves, parse_curves, preview_curves
+from glasshouse.imports.report import ImportReport, RowOutcome, why
+from glasshouse.imports.trades import (
+    ImportFormatError,
+    import_trades,
+    parse_trades,
+    preview_trades,
+)
 
 __all__ = [
     "ImportFormatError",
@@ -21,4 +26,7 @@ __all__ = [
     "import_trades",
     "parse_curves",
     "parse_trades",
+    "preview_curves",
+    "preview_trades",
+    "why",
 ]

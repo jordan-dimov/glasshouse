@@ -6,7 +6,7 @@ Glasshouse is an open-source system of record for European power operations: boo
 
 The architecture in one sentence: **a governed operational ledger for power trading, where every write is a proposal, every accepted proposal is a transition, every large artefact is hash-anchored, every operational view is replayable, and every number can be explained.**
 
-> **Status: pre-v0, the vertical needle is built.** One trade, one official curve, one MTM only admissible against the official curve, one correction that supersedes, one as-of query - running end to end through a governed ledger, with CSV imports (quarantine per row), replayable projections (blotter, hourly positions, valuations) and CI that proves all of it live on every PR. Not yet deployable as a product: the HTTP API and the hosted demo are the next milestones.
+> **Status: pre-v0, the vertical needle is built.** One trade, one official curve, one MTM only admissible against the official curve, one correction that supersedes, one as-of query - running end to end through a governed ledger, with CSV imports (quarantine per row, and a dry-run preview that explains refusals in business terms), replayable projections (blotter, hourly positions, valuations), `glasshouse verify` proving the database still agrees with the ledger, and CI that proves all of it live on every PR. Not yet deployable as a product: the HTTP API and the hosted demo are the next milestones.
 
 ## Why this exists
 
