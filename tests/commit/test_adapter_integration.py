@@ -56,6 +56,7 @@ def test_the_committed_client_is_what_the_binary_generates(tmp_path: Path) -> No
         [str(BINARY), "generate", "python-client", str(MODEL_FILE), "--out", str(tmp_path)],
         capture_output=True,
         text=True,
+        check=False,
     )
     assert proc.returncode == 0, proc.stderr
     committed_pkg = MODEL_FILE.parent / "morpholog_client"
@@ -101,7 +102,7 @@ def test_the_needle_lifecycle(morpholog: GlasshouseClient) -> None:
         direction="buy",
         quantity=Decimal("10"),
         price=Decimal("86.25"),
-        delivery_start=dt.datetime(2026, 7, 1),  # naive
+        delivery_start=dt.datetime(2026, 7, 1),  # noqa: DTZ001 - the refusal under test
         delivery_end=dt.datetime(2026, 10, 1, tzinfo=dt.UTC),
     )
     with pytest.raises(values.CodecError, match="naive"):

@@ -1,0 +1,14 @@
+# Keep the toolchain current without anyone having to remember to:
+# action majors (the Node-runtime treadmill) and Python dependencies
+# (uv lockfile aware). Updates arrive as PRs and pass the same gates
+# as everything else, including the live integration job.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+  - package-ecosystem: uv
+    directory: /
+    schedule:
+      interval: weekly

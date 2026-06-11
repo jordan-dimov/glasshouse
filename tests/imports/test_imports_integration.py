@@ -100,16 +100,20 @@ def test_curves_import_and_the_immutable_rerun(
 
     out = _run(args, capsys)
     assert "3 processed: 2 committed, 0 rejected, 0 error, 1 quarantined" in out
-    assert "crv-gap: " in out and "contiguous" in out
+    assert "crv-gap: " in out
+    assert "contiguous" in out
 
     client = GlasshouseClient(str(MODEL_FILE), DB)
     registered = {row.version for row in client.read(models.CurveRegisteredClaim)}
-    assert registered == {"crv-mon", "crv-tue"}
+    # Subset, not equality: other tests in this module register their
+    # own curves, and order is not promised.
+    assert {"crv-mon", "crv-tue"} <= registered
 
     # Re-running the same file: the payload store refuses overwrites
     # before the ledger is asked, and the report says so per curve.
     rerun = _run(args, capsys)
-    assert "2 error" in rerun and "immutable" in rerun
+    assert "2 error" in rerun
+    assert "immutable" in rerun
 
 
 def test_a_second_version_for_an_official_curve_is_a_lawful_rejection(
