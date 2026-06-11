@@ -5,8 +5,8 @@ per-predicate read with `--as-of` (a transition id or an RFC 3339
 timestamp): "as-of the registration transition, v1 was the official
 curve" is a headline Glasshouse query, and the binary supports it while
 the generated `claims`/`claims_named` do not yet expose it. The gap is
-recorded for upstream (contract doc section 11); this subclass deletes
-the day the generated surface grows the parameter.
+filed upstream as morpholog#135 (contract doc section 11); this
+subclass deletes the day the generated surface grows the parameter.
 """
 
 from __future__ import annotations

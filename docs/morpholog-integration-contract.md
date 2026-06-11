@@ -104,7 +104,7 @@ Wire impact, verified: the `disciplines` array on manifest predicate objects is 
 
 Named, parameterised conditions callable from gates and invariants, proposition-valued only. The needle repeats no condition complex enough to name, so adoption now would be decoration. The forcing case is already visible: upstream's `terms_in_force_on` is precisely the versioned-terms selection the amendment milestone needs, at which point `TradeTerms` also loosens from `unique by (trade)` to `(trade, effective_from)`.
 
-## 11. `--as-of` on the generated read surface — surfaced by adopting 9, to file upstream
+## 11. `--as-of` on the generated read surface — surfaced by adopting 9, filed 11/06/2026 as [morpholog#135](https://github.com/jordan-dimov/morpholog/issues/135)
 
 The binary's `inspect claims --as-of` (a transition id or an RFC 3339 timestamp, replayed correctly) has been load-bearing for Glasshouse since the first integration pass: the needle's as-of query ("as-of the registration transition, v1 was the official curve") is a headline capability, exercised in the integration lifecycle. The generated client's `claims`/`claims_named` do not yet expose the parameter. Bridged for now by `GlasshouseClient` (`glasshouse.commit.client`), a documented subclass adding one typed `read(model, as_of=...)` over the same named surface; the subclass deletes the day the generated client grows the parameter. Per the standing rules this is reported upstream rather than worked around silently - the forcing example is the as-of leg of the killer query.
 
