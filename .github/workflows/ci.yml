@@ -21,11 +21,10 @@ jobs:
       - run: uv run ruff check .
       - run: uv run mypy
       - run: uv run pytest
-      # The pure leg of the codegen drift contract: generated.py must
-      # match the committed manifest. The manifest-matches-the-.morph
-      # leg needs the morpholog binary and runs in the env-gated
-      # integration test (model_hash() == MODEL_HASH).
-      - run: uv run python scripts/generate_commit_models.py --check
+      # The client drift contract needs the morpholog binary, so both
+      # legs run in the env-gated integration tests: regenerate the
+      # committed morpholog_client package and diff, and assert the
+      # committed MODEL_HASH against `morpholog hash`.
 
   # A Postgres {17, 18} x TimescaleDB service matrix joins this workflow
   # when the first database-backed tests land (v0 needle).

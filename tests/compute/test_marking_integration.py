@@ -18,12 +18,12 @@ import sqlalchemy as sa
 from alembic.config import Config
 
 from alembic import command
-from glasshouse.commit import MODEL_FILE, Committed, MorphologAdapter, Rejected
-from glasshouse.commit.generated import (
-    CaptureTrade,
-    GrantCaptureAuthority,
-    GrantCurveAuthority,
-    GrantValuationAuthority,
+from glasshouse.commit import MODEL_FILE, Committed, GlasshouseClient, Rejected
+from glasshouse.commit.morpholog_client.models import (
+    CaptureTradeRequest,
+    GrantCaptureAuthorityRequest,
+    GrantCurveAuthorityRequest,
+    GrantValuationAuthorityRequest,
     TradeValuedClaim,
 )
 from glasshouse.compute.curves import HourlyCurve
@@ -68,10 +68,10 @@ def engine() -> sa.Engine:
 
 
 @pytest.fixture(scope="module")
-def morpholog(engine: sa.Engine) -> MorphologAdapter:
-    adapter = MorphologAdapter(model_file=MODEL_FILE, database_url=DB, binary=str(BINARY))
-    assert adapter.init() is True
-    return adapter
+def morpholog(engine: sa.Engine) -> GlasshouseClient:
+    client = GlasshouseClient(str(MODEL_FILE), DB, binary=str(BINARY))
+    assert client.init().status == "initialised"
+    return client
 
 
 @pytest.fixture(scope="module")
@@ -79,17 +79,17 @@ def store(engine: sa.Engine) -> CurveStore:
     return CurveStore(engine)
 
 
-def test_the_monday_morning_loop(morpholog: MorphologAdapter, store: CurveStore) -> None:
+def test_the_monday_morning_loop(morpholog: GlasshouseClient, store: CurveStore) -> None:
     for grant in (
-        GrantCaptureAuthority(principal="alice", org=ORG, book=BOOK),
-        GrantCurveAuthority(principal="carol", org=ORG, market=MARKET),
-        GrantValuationAuthority(principal="risk-engine", org=ORG, book=BOOK),
+        GrantCaptureAuthorityRequest(principal="alice", org=ORG, book=BOOK),
+        GrantCurveAuthorityRequest(principal="carol", org=ORG, market=MARKET),
+        GrantValuationAuthorityRequest(principal="risk-engine", org=ORG, book=BOOK),
     ):
-        assert isinstance(morpholog.propose(grant, actor="bootstrap"), Committed)
+        assert isinstance(morpholog.submit(grant, actor="bootstrap"), Committed)
 
     assert isinstance(
-        morpholog.propose(
-            CaptureTrade(
+        morpholog.submit(
+            CaptureTradeRequest(
                 org=ORG,
                 book=BOOK,
                 trade="T-001",
@@ -157,7 +157,7 @@ def test_the_monday_morning_loop(morpholog: MorphologAdapter, store: CurveStore)
 
 
 def test_a_tampered_payload_is_refused_not_computed_from(
-    morpholog: MorphologAdapter, store: CurveStore
+    morpholog: GlasshouseClient, store: CurveStore
 ) -> None:
     # The verify story in miniature: alter one stored price behind the
     # ledger's back, and the marking flow refuses to produce a number.

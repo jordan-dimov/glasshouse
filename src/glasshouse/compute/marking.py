@@ -22,13 +22,13 @@ from __future__ import annotations
 
 import datetime as dt
 
-from glasshouse.commit import MorphologAdapter, Outcome
-from glasshouse.commit.generated import (
-    AdmitValuation,
-    CorrectCurve,
+from glasshouse.commit import GlasshouseClient, Outcome
+from glasshouse.commit.morpholog_client.models import (
+    AdmitValuationRequest,
+    CorrectCurveRequest,
     CurveRegisteredClaim,
     OfficialCurveClaim,
-    RegisterCurve,
+    RegisterCurveRequest,
     TradeCapturedClaim,
     TradeTermsClaim,
 )
@@ -43,7 +43,7 @@ class MarkingError(RuntimeError):
 
 
 def register_curve_version(
-    morpholog: MorphologAdapter,
+    morpholog: GlasshouseClient,
     store: CurveStore,
     *,
     actor: str,
@@ -54,8 +54,8 @@ def register_curve_version(
     curve: HourlyCurve,
 ) -> Outcome:
     store.save(org=org, version=version, curve=curve)
-    return morpholog.propose(
-        RegisterCurve(
+    return morpholog.submit(
+        RegisterCurveRequest(
             org=org, market=market, as_of=as_of, version=version, payload_hash=curve.payload_hash()
         ),
         actor=actor,
@@ -63,7 +63,7 @@ def register_curve_version(
 
 
 def correct_curve_version(
-    morpholog: MorphologAdapter,
+    morpholog: GlasshouseClient,
     store: CurveStore,
     *,
     actor: str,
@@ -75,8 +75,8 @@ def correct_curve_version(
     curve: HourlyCurve,
 ) -> Outcome:
     store.save(org=org, version=new_version, curve=curve)
-    return morpholog.propose(
-        CorrectCurve(
+    return morpholog.submit(
+        CorrectCurveRequest(
             org=org,
             market=market,
             as_of=as_of,
@@ -89,7 +89,7 @@ def correct_curve_version(
 
 
 def value_trade(
-    morpholog: MorphologAdapter,
+    morpholog: GlasshouseClient,
     store: CurveStore,
     *,
     actor: str,
@@ -145,8 +145,10 @@ def value_trade(
         delivery_end=terms.delivery_end,
         curve=curve,
     )
-    return morpholog.propose(
-        AdmitValuation(org=org, book=book, trade=trade, curve_version=official.version, mtm=value),
+    return morpholog.submit(
+        AdmitValuationRequest(
+            org=org, book=book, trade=trade, curve_version=official.version, mtm=value
+        ),
         actor=actor,
     )
 

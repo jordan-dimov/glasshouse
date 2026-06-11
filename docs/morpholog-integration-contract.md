@@ -10,13 +10,17 @@ Updated later the same day: surfaces 2+3 (`morpholog hash`, `schema --all`) merg
 
 Updated 09/06/2026: upstream PRs #129 (`define`) and #130 (claim disciplines) merged; #131 (`run --batch`, ask 1) green and pending merge. Disciplines adopted in the needle model the same day (section 10). Still pending upstream: the views generator (4), the hash-chained audit log.
 
-## 1. `run --batch` — accepted, narrowed from the `--stdio` ask
+Updated 11/06/2026: upstream PRs #131 (`run --batch`, ask 1), #132 (source-located diagnostics, `check --json`) and #133 (`generate python-client` + `schema --result`, closing ask 9) merged. The generated client adopted the same day: the hand-rolled commit layer (codecs, envelopes, adapter, codegen script, golden captures) deleted in favour of the package the binary emits, exactly as section 9 predicted; `check(strict=True)` returns #132's located diagnostics as data. One gap surfaced by adoption is recorded as section 11 and filed upstream. Still pending upstream: the views generator (4), the hash-chained audit log.
+
+## 1. `run --batch` — delivered (PR #131, merged 11/06/2026)
 
 NDJSON proposals in, one per line: `{transformation, actor, args_named}` (actor *per row*, not a flag — an import file carries mixed provenance); the pinned per-proposal outcome envelope out, order-preserving; continue-on-rejection by default with `--fail-fast`; one parse+validate and one connection pool per batch.
 
 **Semantics pinned explicitly: each row is its own SERIALIZABLE transition.** A batch is N independent proposals with amortised transport, never an all-or-nothing import. Atomic multi-trade admission would be one governed transition with many statements — a semantics question, to be raised separately if ever genuinely forced. Glasshouse's Imports workbench is designed to this: partial success is the normal outcome, surfaced per row.
 
 Acceptance: the upstream embedder-latency harness.
+
+Delivered with one deliberate contract divergence from single run: a batch exits 0 whenever every row was processed - rejections and malformed-row error receipts are results in NDJSON (the pinned envelope plus `row`, with a third `{"status": "error"}` variant), and non-zero is operational only; a 40001 serialization conflict is a re-submittable row receipt, not an abort. Surfaced as `run_batch(rows)` on the generated client (section 9), returning one `BatchReceipt` per row. First Glasshouse consumer: the CSV import path at the demo milestone.
 
 ## 2. `morpholog hash` — accepted, mechanism corrected
 
@@ -50,7 +54,9 @@ The ask: `--args-named` made the write side bare and named while the read side s
 
 The ask: the API promises every rejection a structured reason and an answer to "what would make this admissible?", and run-then-explain is two snapshots that can disagree under concurrent commits. Delivered with exactly the right semantics: the rejecting proposal hands back the scoped pre-state its gates evaluated, and the pure explanation engine runs against it in memory; rejection envelopes gain an `explanation` field in the `explain --json` shape; committed envelopes and exit codes unchanged; kernel errors and serialization failures excluded (no admissibility story). Adapter surface: `run(..., explain_on_reject=True)`, surfaced as `Rejected.explanation`.
 
-## 9. The generated Python client lives in the binary (`morpholog generate python-client`) — filed 07/06/2026 as [morpholog#126](https://github.com/jordan-dimov/morpholog/issues/126)
+## 9. The generated Python client lives in the binary (`morpholog generate python-client`) — delivered (PR #133, merged 11/06/2026; filed 07/06/2026 as [morpholog#126](https://github.com/jordan-dimov/morpholog/issues/126))
+
+Delivered as specified, including the stdlib-only amendment, plus two additions: `schema --result` (the machine-readable outcome-envelope contract, the consumer that unreserved it) and `check --json` from PR #132 (every parse/validation/lint finding as data with byte offsets and line/column, surfaced as `check(strict=)` returning a `CheckReport`). Adopted same day: the five-file `morpholog_client/` package is generated into `glasshouse.commit`, committed byte-exact, and drift-checked by regenerate-and-diff in the env-gated integration leg plus a `MODEL_HASH ==` `morpholog hash` assertion; `envelope.py`, `adapter.py`, `bases.py`, the codegen script and the golden captures are deleted, exactly as the ask predicted. Envelope parsing is key-set strict by design (unknown field = "regenerate" error, the drift tripwire). Pydantic now appears only at the HTTP boundary, built from the generated types. The original ask follows.
 
 ### The forcing example, quantified
 
@@ -97,6 +103,10 @@ Wire impact, verified: the `disciplines` array on manifest predicate objects is 
 ### `define` (PR #129) — deliberately not adopted yet
 
 Named, parameterised conditions callable from gates and invariants, proposition-valued only. The needle repeats no condition complex enough to name, so adoption now would be decoration. The forcing case is already visible: upstream's `terms_in_force_on` is precisely the versioned-terms selection the amendment milestone needs, at which point `TradeTerms` also loosens from `unique by (trade)` to `(trade, effective_from)`.
+
+## 11. `--as-of` on the generated read surface — surfaced by adopting 9, to file upstream
+
+The binary's `inspect claims --as-of` (a transition id or an RFC 3339 timestamp, replayed correctly) has been load-bearing for Glasshouse since the first integration pass: the needle's as-of query ("as-of the registration transition, v1 was the official curve") is a headline capability, exercised in the integration lifecycle. The generated client's `claims`/`claims_named` do not yet expose the parameter. Bridged for now by `GlasshouseClient` (`glasshouse.commit.client`), a documented subclass adding one typed `read(model, as_of=...)` over the same named surface; the subclass deletes the day the generated client grows the parameter. Per the standing rules this is reported upstream rather than worked around silently - the forcing example is the as-of leg of the killer query.
 
 ## Coordination agreements
 

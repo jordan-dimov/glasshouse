@@ -1,9 +1,13 @@
 """The commit zone: the only write path to governed state.
 
-This package wraps the morpholog binary (subprocess; `run --batch` once it
-lands upstream) behind a typed adapter. The adapter returns
-``Committed | Rejected`` as a discriminated union and raises on operational
-failure, so rejection-vs-failure confusion is unrepresentable.
+This package wraps the morpholog binary behind the typed client the
+binary itself generates (`morpholog generate python-client`), committed
+byte-exact under `morpholog_client/` and drift-checked by regenerating
+against the live binary in the integration leg. The client returns
+``Committed | Rejected`` as typed outcomes and raises ``MorphologError``
+on operational failure, so rejection-vs-failure confusion stays
+unrepresentable. `GlasshouseClient` adds the one hand-written read the
+generated surface lacks (the as-of query; filed upstream).
 
 The one absolute rule of the codebase: writes to governed state only ever
 go through this package. No ORM writes, no raw SQL writes, no exceptions.
@@ -11,45 +15,35 @@ go through this package. No ORM writes, no raw SQL writes, no exceptions.
 
 from pathlib import Path
 
-from glasshouse.commit.adapter import MorphologAdapter, MorphologOperationalError
-from glasshouse.commit.bases import ClaimRow, CommitRequest
-from glasshouse.commit.envelope import (
-    BareValue,
-    Claim,
-    Committed,
-    EmittedIntent,
-    Explanation,
-    GateRejection,
-    InvariantRejection,
-    MissingClaim,
-    NamedArgs,
-    Outcome,
-    Quantity,
-    Rejected,
-    RejectedVerdict,
+from glasshouse.commit.client import GlasshouseClient, NamedClaimModel
+from glasshouse.commit.morpholog_client import (
+    MODEL_HASH,
+    PROGRAM,
+    envelopes,
+    models,
+    values,
 )
+from glasshouse.commit.morpholog_client.adapter import MorphologError
+from glasshouse.commit.morpholog_client.envelopes import Committed, Rejected
 
-# The rule model ships inside the package; the adapter, the codegen and
+# The rule model ships inside the package; the client, the generator and
 # the deployment all point at this one file.
 MODEL_FILE = Path(__file__).parent / "glasshouse.morph"
 
+# A commit's two lawful endings; operational failure raises instead.
+type Outcome = Committed | Rejected
+
 __all__ = [
     "MODEL_FILE",
-    "BareValue",
-    "Claim",
-    "ClaimRow",
-    "CommitRequest",
+    "MODEL_HASH",
+    "PROGRAM",
     "Committed",
-    "EmittedIntent",
-    "Explanation",
-    "GateRejection",
-    "InvariantRejection",
-    "MissingClaim",
-    "MorphologAdapter",
-    "MorphologOperationalError",
-    "NamedArgs",
+    "GlasshouseClient",
+    "MorphologError",
+    "NamedClaimModel",
     "Outcome",
-    "Quantity",
     "Rejected",
-    "RejectedVerdict",
+    "envelopes",
+    "models",
+    "values",
 ]
