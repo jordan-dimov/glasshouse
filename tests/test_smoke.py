@@ -1,6 +1,7 @@
 """Scaffold smoke tests: the app constructs, answers /healthz, and
 /readyz tells deployment hooks the truth about the binary."""
 
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -51,3 +52,20 @@ def test_readyz_is_ok_with_a_working_binary(
     response = TestClient(create_app()).get("/readyz")
     assert response.status_code == 200
     assert response.json() == {"morpholog": "ok"}
+
+
+def test_readyz_reports_a_hanging_binary_as_error_not_500(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    present = tmp_path / "morpholog"
+    present.write_text("#!/bin/sh\nexit 0\n")
+    present.chmod(0o755)
+    monkeypatch.setenv("GLASSHOUSE_MORPHOLOG_BIN", str(present))
+
+    def hang(*args: object, **kwargs: object) -> object:
+        raise subprocess.TimeoutExpired(cmd="morpholog --version", timeout=10)
+
+    monkeypatch.setattr("glasshouse.api.app.subprocess.run", hang)
+    response = TestClient(create_app()).get("/readyz")
+    assert response.status_code == 503
+    assert response.json() == {"morpholog": "error"}
