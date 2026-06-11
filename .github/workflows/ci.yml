@@ -70,6 +70,18 @@ jobs:
         with:
           python-version: "3.13"
       - run: uv sync --dev
+      # The live tests skip when their prerequisites are unreachable -
+      # right for developer machines, wrong here, where running them is
+      # the job's whole point. Fail loudly before pytest can skip
+      # quietly. (The coverage gate backstops this too: a mass-skip
+      # would fall far below the threshold.)
+      - name: Assert live prerequisites are visible
+        env:
+          GLASSHOUSE_MORPHOLOG_REPO: ${{ github.workspace }}/morpholog
+          GLASSHOUSE_TEST_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/morpholog_scratch
+        run: |
+          test -x "$GLASSHOUSE_MORPHOLOG_REPO/target/release/morpholog"
+          psql "$GLASSHOUSE_TEST_DATABASE_URL" -qc 'select 1'
       - name: Full suite, integration legs live, coverage gated
         env:
           GLASSHOUSE_MORPHOLOG_REPO: ${{ github.workspace }}/morpholog
