@@ -7,7 +7,8 @@ from pathlib import Path
 import pytest
 
 from glasshouse import cli
-from tests.imports.test_trades import HEADER, MIXED, RECEIPTS, fake_binary
+from tests.imports.test_trades import HEADER, MIXED, RECEIPTS
+from tests.support import fake_binary
 
 
 def test_import_trades_prints_the_report_and_exits_zero(

@@ -6,7 +6,7 @@ Glasshouse is an open-source system of record for European power operations: boo
 
 The architecture in one sentence: **a governed operational ledger for power trading, where every write is a proposal, every accepted proposal is a transition, every large artefact is hash-anchored, every operational view is replayable, and every number can be explained.**
 
-> **Status: pre-v0 scaffold.** The design is settled ([DESIGN.md](DESIGN.md)); the build is starting. Nothing here is usable yet. Watch the repo if the sentence above is the system you wish you had.
+> **Status: pre-v0, the vertical needle is built.** One trade, one official curve, one MTM only admissible against the official curve, one correction that supersedes, one as-of query - running end to end through a governed ledger, with CSV imports (quarantine per row), replayable projections (blotter, hourly positions, valuations) and CI that proves all of it live on every PR. Not yet deployable as a product: the HTTP API and the hosted demo are the next milestones.
 
 ## Why this exists
 
@@ -34,8 +34,16 @@ Requires Python 3.13+, [uv](https://docs.astral.sh/uv/), Docker (for Postgres), 
 ```bash
 docker compose up -d          # TimescaleDB-enabled Postgres
 uv sync --dev
-uv run pytest
+uv run pytest                 # live integration legs run when the binary and a database are reachable
 uv run uvicorn glasshouse.api.app:app --reload
+```
+
+The operator CLI exists ahead of the API:
+
+```bash
+uv run python -m glasshouse.cli import-trades trades.csv --org acme --actor alice --project
+uv run python -m glasshouse.cli import-curves curves.csv --org acme --actor carol
+uv run python -m glasshouse.cli project --follow   # the projector as a worker
 ```
 
 ## Licence
