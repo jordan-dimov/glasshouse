@@ -51,7 +51,7 @@ def test_construction_refuses_dishonest_shapes() -> None:
     with pytest.raises(CurveError, match="at least one"):
         HourlyCurve(())
     with pytest.raises(CurveError, match="timezone-aware"):
-        HourlyCurve(((dt.datetime(2026, 7, 1), Decimal("90")),))
+        HourlyCurve(((dt.datetime(2026, 7, 1), Decimal("90")),))  # noqa: DTZ001 - under test
     with pytest.raises(CurveError, match="hour-aligned"):
         HourlyCurve(((dt.datetime(2026, 7, 1, 0, 30, tzinfo=dt.UTC), Decimal("90")),))
     with pytest.raises(CurveError, match="contiguous"):

@@ -23,6 +23,7 @@ dependencies = [
 dev = [
     "pytest>=8.3",
     "pytest-cov>=6.0",
+    "pytest-randomly>=3.16",
     "hypothesis>=6.120",
     "httpx>=0.28",
     "ruff>=0.8",
@@ -45,10 +46,60 @@ target-version = "py313"
 extend-exclude = ["src/glasshouse/commit/morpholog_client"]
 
 [tool.ruff.lint]
-select = ["E", "F", "I", "UP", "B", "C4", "SIM", "RUF"]
+select = [
+    "E",    # pycodestyle errors
+    "W",    # pycodestyle warnings
+    "F",    # pyflakes
+    "I",    # isort
+    "UP",   # pyupgrade
+    "B",    # bugbear
+    "C4",   # comprehensions
+    "SIM",  # simplify
+    "RUF",  # ruff's own
+    "A",    # builtins shadowing
+    "ARG",  # unused arguments
+    "DTZ",  # naive datetimes - law 9 as a lint rule
+    "ERA",  # commented-out code
+    "FURB", # modernisation
+    "G",    # logging format
+    "ISC",  # implicit string concatenation
+    "N",    # naming
+    "PERF", # performance
+    "PT",   # pytest style
+    "PTH",  # pathlib over os.path
+    "RET",  # return discipline
+    "SLF",  # private-member access
+    "T20",  # stray prints
+    "PLC",  # pylint conventions
+    "PLE",  # pylint errors
+    "PLW",  # pylint warnings
+]
+ignore = [
+    # House doctrine: money and quantities are Decimal FROM STRINGS,
+    # uniformly - even where an int literal would be exact. FURB157's
+    # Decimal("10") -> Decimal(10) fix is correct but off-doctrine.
+    "FURB157",
+]
+
+[tool.ruff.lint.per-file-ignores]
+# Fixture-dependency parameters and stub signatures are idiomatic in
+# tests; "unused argument" is usually the point.
+"tests/**" = ["ARG"]
+# print IS the CLI's interface.
+"src/glasshouse/cli.py" = ["T20"]
+
+[tool.ruff.format]
+docstring-code-format = true
 
 [tool.mypy]
 strict = true
+warn_unreachable = true
+enable_error_code = [
+    "ignore-without-code",
+    "redundant-expr",
+    "truthy-bool",
+    "possibly-undefined",
+]
 files = ["src", "tests"]
 
 [[tool.mypy.overrides]]

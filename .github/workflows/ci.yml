@@ -18,10 +18,11 @@ jobs:
       matrix:
         python-version: ["3.13", "3.14"]
     steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v5
+      - uses: actions/checkout@v6
+      - uses: astral-sh/setup-uv@v8.2.0
         with:
           python-version: ${{ matrix.python-version }}
+      - run: uv lock --check
       - run: uv sync --dev
       - run: uv run ruff format --check .
       - run: uv run ruff check .
@@ -55,8 +56,8 @@ jobs:
           --health-timeout 3s
           --health-retries 10
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
+      - uses: actions/checkout@v6
         with:
           repository: jordan-dimov/morpholog
           ref: ${{ env.MORPHOLOG_REF }}
@@ -66,7 +67,7 @@ jobs:
         with:
           workspaces: morpholog
       - run: cargo build --release --manifest-path morpholog/Cargo.toml
-      - uses: astral-sh/setup-uv@v5
+      - uses: astral-sh/setup-uv@v8.2.0
         with:
           python-version: "3.13"
       - run: uv sync --dev

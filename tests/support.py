@@ -48,7 +48,9 @@ def provision(database_url: str = DB) -> sa.Engine:
 
 def _database_reachable() -> bool:
     try:
-        ok = subprocess.run(["psql", DB, "-qc", "select 1"], capture_output=True, timeout=10)
+        ok = subprocess.run(
+            ["psql", DB, "-qc", "select 1"], capture_output=True, timeout=10, check=False
+        )
     except (OSError, subprocess.TimeoutExpired):
         return False
     return ok.returncode == 0

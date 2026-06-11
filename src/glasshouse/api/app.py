@@ -31,7 +31,7 @@ def create_app() -> FastAPI:
         else:
             try:
                 result = subprocess.run(
-                    [binary, "--version"], capture_output=True, text=True, timeout=10
+                    [binary, "--version"], capture_output=True, text=True, timeout=10, check=False
                 )
                 checks["morpholog"] = "ok" if result.returncode == 0 else "error"
             except (OSError, subprocess.TimeoutExpired):

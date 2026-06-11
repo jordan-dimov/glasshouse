@@ -88,7 +88,8 @@ def test_import_maps_batch_receipts_back_to_csv_lines(tmp_path: Path) -> None:
 
     assert (report.committed, report.rejected, report.quarantined) == (1, 1, 3)
     by_ref = {o.ref: o for o in report.outcomes}
-    assert by_ref["line 2"].status == "committed" and by_ref["line 2"].detail == "tr-1"
+    assert by_ref["line 2"].status == "committed"
+    assert by_ref["line 2"].detail == "tr-1"
     assert by_ref["line 6"].status == "rejected"
     # File order is preserved in the report.
     assert [o.ref for o in report.outcomes] == [f"line {n}" for n in (2, 3, 4, 5, 6)]
@@ -136,7 +137,8 @@ def test_an_all_quarantined_file_never_reaches_the_binary(tmp_path: Path) -> Non
     binary = fake_binary(tmp_path, "")
     client = GlasshouseClient("model.morph", "postgres:///x", binary=str(binary))
     report = import_trades(client, text, org="acme-energy", actor="alice")
-    assert report.quarantined == 2 and len(report.outcomes) == 2
+    assert report.quarantined == 2
+    assert len(report.outcomes) == 2
     assert not (tmp_path / "argv.txt").exists()  # no batch was run
 
 
@@ -147,4 +149,5 @@ def test_an_unparseable_instant_quarantines_with_the_format_named() -> None:
     accepted, quarantined = parse_trades(text, org="acme-energy")
     assert not accepted
     ((_, outcome),) = quarantined
-    assert "RFC 3339" in outcome.detail and "'yesterday'" in outcome.detail
+    assert "RFC 3339" in outcome.detail
+    assert "'yesterday'" in outcome.detail
