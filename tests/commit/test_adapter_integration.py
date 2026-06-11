@@ -237,3 +237,10 @@ def test_the_needle_lifecycle(morpholog: GlasshouseClient) -> None:
     assert morpholog.claims("NoSuchPredicate") == []
     with pytest.raises(MorphologError, match="not declared"):
         morpholog.claims_named("NoSuchPredicate")
+
+    # The coverage surface (upstream #137): by the end of the needle
+    # lifecycle every transformation in the programme has done work.
+    report = morpholog.coverage()
+    in_programme = [t for t in report.transformations if not t.not_in_programme]
+    assert len(in_programme) == 7
+    assert all(t.transitions > 0 for t in in_programme)

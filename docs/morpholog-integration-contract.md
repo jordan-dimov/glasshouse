@@ -10,6 +10,8 @@ Updated later the same day: surfaces 2+3 (`morpholog hash`, `schema --all`) merg
 
 Updated 09/06/2026: upstream PRs #129 (`define`) and #130 (claim disciplines) merged; #131 (`run --batch`, ask 1) green and pending merge. Disciplines adopted in the needle model the same day (section 10). Still pending upstream: the views generator (4), the hash-chained audit log.
 
+Updated 11/06/2026 (evening): upstream PRs #137 (`inspect coverage`) and #138 (as-of on the generated client's reads, closing ask 11/morpholog#135) merged; both adopted same day (section 11).
+
 Updated 11/06/2026: upstream PRs #131 (`run --batch`, ask 1), #132 (source-located diagnostics, `check --json`) and #133 (`generate python-client` + `schema --result`, closing ask 9) merged. The generated client adopted the same day: the hand-rolled commit layer (codecs, envelopes, adapter, codegen script, golden captures) deleted in favour of the package the binary emits, exactly as section 9 predicted; `check(strict=True)` returns #132's located diagnostics as data. One gap surfaced by adoption is recorded as section 11 and filed upstream. Still pending upstream: the views generator (4), the hash-chained audit log.
 
 ## 1. `run --batch` — delivered (PR #131, merged 11/06/2026)
@@ -104,9 +106,9 @@ Wire impact, verified: the `disciplines` array on manifest predicate objects is 
 
 Named, parameterised conditions callable from gates and invariants, proposition-valued only. The needle repeats no condition complex enough to name, so adoption now would be decoration. The forcing case is already visible: upstream's `terms_in_force_on` is precisely the versioned-terms selection the amendment milestone needs, at which point `TradeTerms` also loosens from `unique by (trade)` to `(trade, effective_from)`.
 
-## 11. `--as-of` on the generated read surface — surfaced by adopting 9, filed 11/06/2026 as [morpholog#135](https://github.com/jordan-dimov/morpholog/issues/135)
+## 11. `--as-of` on the generated read surface — delivered (PR #138, merged 11/06/2026; filed same day as [morpholog#135](https://github.com/jordan-dimov/morpholog/issues/135))
 
-The binary's `inspect claims --as-of` (a transition id or an RFC 3339 timestamp, replayed correctly) has been load-bearing for Glasshouse since the first integration pass: the needle's as-of query ("as-of the registration transition, v1 was the official curve") is a headline capability, exercised in the integration lifecycle. The generated client's `claims`/`claims_named` do not yet expose the parameter. Bridged for now by `GlasshouseClient` (`glasshouse.commit.client`), a documented subclass adding one typed `read(model, as_of=...)` over the same named surface; the subclass deletes the day the generated client grows the parameter. Per the standing rules this is reported upstream rather than worked around silently - the forcing example is the as-of leg of the killer query.
+The binary's `inspect claims --as-of` (a transition id or an RFC 3339 timestamp, replayed correctly) has been load-bearing for Glasshouse since the first integration pass: the needle's as-of query ("as-of the registration transition, v1 was the official curve") is a headline capability, exercised in the integration lifecycle. The generated client's `claims`/`claims_named` did not expose the parameter; `GlasshouseClient` bridged the gap by hand-building the inspect command. Delivered as asked (`as_of: str | None = None` on both reads) and adopted same day: the hand-built command is deleted and `GlasshouseClient.read` is now a thin typed composition over the blessed surface (the subclass itself stays - binary discovery under `GLASSHOUSE_MORPHOLOG_BIN` and the typed-read convenience are Glasshouse's own, not gaps). The same upstream pass (#137) gave the client `coverage()` (`inspect coverage`: per-invariant did-its-condition-ever-match, per-transformation usage, over replayed history); the integration lifecycle now asserts every transformation in the needle has done work by its end.
 
 ## 12. The audit-log read contract — surfaced by the projector, filed 11/06/2026 as [morpholog#136](https://github.com/jordan-dimov/morpholog/issues/136)
 
