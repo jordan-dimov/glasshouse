@@ -11,7 +11,7 @@ filed as morpholog#135 and delivered upstream in #138):
   surface composed with the generated read models, so consumers get
   frozen typed rows (optionally as of a past transition) in one call;
 * an optional operation timeout the generated `_invoke` lacks
-  (contract doc section 13, to file upstream): unset by default -
+  (filed upstream as morpholog#140, contract doc section 13): unset by default -
   imports legitimately run long - and set at the API boundary, where a
   hung binary must become a fast verdict, never a stuck request.
 """
