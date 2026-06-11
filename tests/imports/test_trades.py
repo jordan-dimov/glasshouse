@@ -1,0 +1,98 @@
+"""Trades CSV parsing, quarantine, and the receipt-to-line mapping,
+against golden CSV strings and a fake binary playing back canned batch
+receipts."""
+
+import json
+from pathlib import Path
+
+import pytest
+
+from glasshouse.commit import GlasshouseClient
+from glasshouse.imports import ImportFormatError, import_trades, parse_trades
+
+HEADER = "book,trade,counterparty,market,direction,quantity,price,delivery_start,delivery_end"
+GOOD = "spec-de,T-{n},stadtwerk-x,de-power,buy,10,86.25,2026-07-01T00:00:00Z,2026-07-02T00:00:00Z"
+
+MIXED = "\n".join(
+    [
+        HEADER,
+        GOOD.format(n=1),  # line 2: reaches the batch
+        "spec-de,T-2,cp,de-power,buy,10,86.25,2026-07-01T00:00:00,2026-07-02T00:00:00Z",  # naive
+        "spec-de,T-3,cp,de-power,buy,ten,86.25,2026-07-01T00:00:00Z,2026-07-02T00:00:00Z",  # qty
+        "spec-de,T-4,cp,de-power,long,10,86.25,2026-07-01T00:00:00Z,2026-07-02T00:00:00Z",  # dir
+        GOOD.format(n=5),  # line 6: reaches the batch
+    ]
+)
+
+RECEIPTS = "\n".join(
+    [
+        json.dumps(
+            {
+                "status": "committed",
+                "transition_id": "tr-1",
+                "actor": {"type": "subject", "value": "alice"},
+                "asserted_claims": [],
+                "retracted_claims": [],
+                "emitted_intents": [],
+                "row": 1,
+            }
+        ),
+        json.dumps({"status": "rejected", "reason": "trade already captured", "row": 2}),
+    ]
+)
+
+
+def fake_binary(tmp_path: Path, stdout: str) -> Path:
+    script = tmp_path / "fake-morpholog"
+    (tmp_path / "stdout.ndjson").write_text(stdout)
+    script.write_text(
+        "#!/bin/sh\n"
+        f'printf \'%s\\n\' "$@" > "{tmp_path}/argv.txt"\n'
+        f'cat - > "{tmp_path}/stdin.ndjson"\n'
+        f'cat "{tmp_path}/stdout.ndjson"\nexit 0\n'
+    )
+    script.chmod(0o755)
+    return script
+
+
+def test_parse_quarantines_each_dishonest_row_with_its_reason() -> None:
+    accepted, quarantined = parse_trades(MIXED, org="acme-energy")
+    assert [line for line, _ in accepted] == [2, 6]
+    reasons = {line: outcome.detail for line, outcome in quarantined}
+    assert "offset" in reasons[3]  # the codec refuses the naive instant
+    assert "exact decimals" in reasons[4]
+    assert "buy or sell" in reasons[5]
+
+
+def test_header_mismatch_refuses_the_whole_file() -> None:
+    with pytest.raises(ImportFormatError, match="missing: price"):
+        parse_trades(MIXED.replace(",price,", ",cost,"), org="acme-energy")
+
+
+def test_ragged_rows_quarantine() -> None:
+    text = "\n".join(
+        [HEADER, GOOD.format(n=1) + ",extra", GOOD.format(n=2)[: -len(",2026-07-02T00:00:00Z")]]
+    )
+    accepted, quarantined = parse_trades(text, org="acme-energy")
+    assert not accepted
+    assert ["more fields" in o.detail or "fewer fields" in o.detail for _, o in quarantined] == [
+        True,
+        True,
+    ]
+
+
+def test_import_maps_batch_receipts_back_to_csv_lines(tmp_path: Path) -> None:
+    binary = fake_binary(tmp_path, RECEIPTS)
+    client = GlasshouseClient("model.morph", "postgres:///x", binary=str(binary))
+    report = import_trades(client, MIXED, org="acme-energy", actor="alice")
+
+    assert (report.committed, report.rejected, report.quarantined) == (1, 1, 3)
+    by_ref = {o.ref: o for o in report.outcomes}
+    assert by_ref["line 2"].status == "committed" and by_ref["line 2"].detail == "tr-1"
+    assert by_ref["line 6"].status == "rejected"
+    # File order is preserved in the report.
+    assert [o.ref for o in report.outcomes] == [f"line {n}" for n in (2, 3, 4, 5, 6)]
+    # The batch carried only the two honest rows, with per-row args_named.
+    sent = [json.loads(line) for line in (tmp_path / "stdin.ndjson").read_text().splitlines()]
+    assert [row["args_named"]["trade"] for row in sent] == ["T-1", "T-5"]
+    assert all(row["actor"] == "alice" for row in sent)

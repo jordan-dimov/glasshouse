@@ -20,7 +20,7 @@ NDJSON proposals in, one per line: `{transformation, actor, args_named}` (actor 
 
 Acceptance: the upstream embedder-latency harness.
 
-Delivered with one deliberate contract divergence from single run: a batch exits 0 whenever every row was processed - rejections and malformed-row error receipts are results in NDJSON (the pinned envelope plus `row`, with a third `{"status": "error"}` variant), and non-zero is operational only; a 40001 serialization conflict is a re-submittable row receipt, not an abort. Surfaced as `run_batch(rows)` on the generated client (section 9), returning one `BatchReceipt` per row. First Glasshouse consumer: the CSV import path at the demo milestone.
+Delivered with one deliberate contract divergence from single run: a batch exits 0 whenever every row was processed - rejections and malformed-row error receipts are results in NDJSON (the pinned envelope plus `row`, with a third `{"status": "error"}` variant), and non-zero is operational only; a 40001 serialization conflict is a re-submittable row receipt, not an abort. Surfaced as `run_batch(rows)` on the generated client (section 9), returning one `BatchReceipt` per row. First Glasshouse consumer shipped 11/06/2026: `glasshouse.imports` (the trades CSV path - quarantine locally, one batch invocation, per-row receipts mapped back to file lines in the import report).
 
 ## 2. `morpholog hash` — accepted, mechanism corrected
 
