@@ -9,6 +9,7 @@ from pathlib import Path
 import pytest
 
 from glasshouse.commit import GlasshouseClient, models
+from tests.support import fake_binary
 
 NAMED_OFFICIAL_CURVE = json.dumps(
     [
@@ -23,19 +24,6 @@ NAMED_OFFICIAL_CURVE = json.dumps(
         }
     ]
 )
-
-
-def fake_binary(tmp_path: Path, stdout: str) -> Path:
-    """A stand-in morpholog: records its argv, plays back a canned reply."""
-    script = tmp_path / "fake-morpholog"
-    (tmp_path / "stdout.json").write_text(stdout)
-    script.write_text(
-        "#!/bin/sh\n"
-        f'printf \'%s\\n\' "$@" > "{tmp_path}/argv.txt"\n'
-        f'cat "{tmp_path}/stdout.json"\nexit 0\n'
-    )
-    script.chmod(0o755)
-    return script
 
 
 def client(tmp_path: Path) -> GlasshouseClient:

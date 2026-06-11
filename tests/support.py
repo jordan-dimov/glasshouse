@@ -46,6 +46,26 @@ def provision(database_url: str = DB) -> sa.Engine:
     return engine
 
 
+def fake_binary(tmp_path: Path, stdout: str, *, stderr: str = "", exit_code: int = 0) -> Path:
+    """A stand-in morpholog for pure tests: records its argv
+    (argv.txt) and any piped stdin (stdin.txt), plays back a canned
+    reply. The stdin capture is guarded so invocations without piped
+    input do not block on a terminal."""
+    script = tmp_path / "fake-morpholog"
+    (tmp_path / "stdout.txt").write_text(stdout)
+    (tmp_path / "stderr.txt").write_text(stderr)
+    script.write_text(
+        "#!/bin/sh\n"
+        f'printf \'%s\\n\' "$@" > "{tmp_path}/argv.txt"\n'
+        f'[ -t 0 ] || cat - > "{tmp_path}/stdin.txt"\n'
+        f'cat "{tmp_path}/stdout.txt"\n'
+        f'cat "{tmp_path}/stderr.txt" >&2\n'
+        f"exit {exit_code}\n"
+    )
+    script.chmod(0o755)
+    return script
+
+
 def _database_reachable() -> bool:
     try:
         ok = subprocess.run(

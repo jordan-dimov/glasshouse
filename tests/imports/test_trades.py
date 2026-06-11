@@ -9,6 +9,7 @@ import pytest
 
 from glasshouse.commit import GlasshouseClient
 from glasshouse.imports import ImportFormatError, import_trades, parse_trades
+from tests.support import fake_binary
 
 HEADER = "book,trade,counterparty,market,direction,quantity,price,delivery_start,delivery_end"
 GOOD = "spec-de,T-{n},stadtwerk-x,de-power,buy,10,86.25,2026-07-01T00:00:00Z,2026-07-02T00:00:00Z"
@@ -40,19 +41,6 @@ RECEIPTS = "\n".join(
         json.dumps({"status": "rejected", "reason": "trade already captured", "row": 2}),
     ]
 )
-
-
-def fake_binary(tmp_path: Path, stdout: str) -> Path:
-    script = tmp_path / "fake-morpholog"
-    (tmp_path / "stdout.ndjson").write_text(stdout)
-    script.write_text(
-        "#!/bin/sh\n"
-        f'printf \'%s\\n\' "$@" > "{tmp_path}/argv.txt"\n'
-        f'cat - > "{tmp_path}/stdin.ndjson"\n'
-        f'cat "{tmp_path}/stdout.ndjson"\nexit 0\n'
-    )
-    script.chmod(0o755)
-    return script
 
 
 def test_parse_quarantines_each_dishonest_row_with_its_reason() -> None:
@@ -94,7 +82,7 @@ def test_import_maps_batch_receipts_back_to_csv_lines(tmp_path: Path) -> None:
     # File order is preserved in the report.
     assert [o.ref for o in report.outcomes] == [f"line {n}" for n in (2, 3, 4, 5, 6)]
     # The batch carried only the two honest rows, with per-row args_named.
-    sent = [json.loads(line) for line in (tmp_path / "stdin.ndjson").read_text().splitlines()]
+    sent = [json.loads(line) for line in (tmp_path / "stdin.txt").read_text().splitlines()]
     assert [row["args_named"]["trade"] for row in sent] == ["T-1", "T-5"]
     assert all(row["actor"] == "alice" for row in sent)
 

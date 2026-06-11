@@ -36,9 +36,10 @@ def start_projector_thread(
 
 def follow(engine: sa.Engine, *, interval_seconds: float = 1.0) -> None:
     """The worker mode: poll `catch_up` until interrupted."""
+    pace = threading.Event()
     try:
         while True:
             catch_up(engine)
-            threading.Event().wait(interval_seconds)
+            pace.wait(interval_seconds)
     except KeyboardInterrupt:
         return
