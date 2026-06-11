@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pytest
 
-from glasshouse.commit import GlasshouseClient, models
+from glasshouse.commit import GlasshouseClient, MorphologError, models
 from tests.support import fake_binary
 
 NAMED_OFFICIAL_CURVE = json.dumps(
@@ -60,3 +60,14 @@ def test_binary_discovery_honours_the_glasshouse_env_var(
     monkeypatch.delenv("GLASSHOUSE_MORPHOLOG_BIN")
     monkeypatch.setenv("MORPHOLOG_BIN", "/usr/local/bin/morpholog")
     assert GlasshouseClient("m.morph", "postgres:///x").binary == "/usr/local/bin/morpholog"
+
+
+def test_operations_are_bounded_when_a_timeout_is_set(tmp_path: Path) -> None:
+    sleeper = tmp_path / "fake-morpholog"
+    sleeper.write_text("#!/bin/sh\nsleep 5\n")
+    sleeper.chmod(0o755)
+    bounded = GlasshouseClient(
+        "model.morph", "postgres:///x", binary=str(sleeper), timeout_seconds=0.1
+    )
+    with pytest.raises(MorphologError, match=r"timed out after 0\.1"):
+        bounded.hash()

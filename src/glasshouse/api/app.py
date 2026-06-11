@@ -58,14 +58,15 @@ def create_app() -> FastAPI:
         except sa.exc.SQLAlchemyError:
             checks["database"] = "error"
 
-        # The commit layer: binary, database and provisioned schema
-        # agreeing through one cheap governed read (an unknown
-        # predicate is a true zero on a provisioned ledger, and an
-        # operational error on anything less).
+        # The commit layer: binary, database, the committed model file
+        # and the provisioned schema agreeing through one cheap governed
+        # read. Named on purpose - the named surface makes the programme
+        # the authority, so this proves the model too; the client's
+        # timeout makes a hang a fast verdict.
         try:
-            app.state.client.claims("ReadinessProbe")
+            app.state.client.claims_named("MayCaptureTrade")
             checks["commit"] = "ok"
-        except (MorphologError, OSError, subprocess.TimeoutExpired):
+        except (MorphologError, OSError):
             checks["commit"] = "error"
 
         if any(verdict != "ok" for verdict in checks.values()):

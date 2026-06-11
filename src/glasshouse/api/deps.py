@@ -25,7 +25,14 @@ def build_engine(settings: Settings) -> sa.Engine:
 
 
 def build_client(settings: Settings) -> GlasshouseClient:
-    return GlasshouseClient(str(MODEL_FILE), settings.database_url, binary=settings.morpholog_bin)
+    # Bounded at the API boundary: a hung binary must become a fast
+    # verdict, never a stuck request. The CLI's imports run unbounded.
+    return GlasshouseClient(
+        str(MODEL_FILE),
+        settings.database_url,
+        binary=settings.morpholog_bin,
+        timeout_seconds=settings.morpholog_timeout_seconds,
+    )
 
 
 def get_engine(request: Request) -> sa.Engine:

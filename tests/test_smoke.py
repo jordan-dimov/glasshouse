@@ -7,6 +7,7 @@ are deterministic whatever is running locally; the all-ok 200 lives in
 the env-gated integration leg (tests/api/)."""
 
 import subprocess
+import time
 from pathlib import Path
 
 import pytest
@@ -80,3 +81,24 @@ def test_readyz_reports_a_hanging_binary_as_error_not_500(
     response = TestClient(create_app()).get("/readyz")
     assert response.status_code == 503
     assert response.json()["morpholog"] == "error"
+
+
+def test_readyz_bounds_a_commit_probe_that_hangs(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # --version answers instantly; the governed read hangs. The client's
+    # timeout turns that into a fast error verdict, not a stuck request.
+    two_faced = tmp_path / "morpholog"
+    two_faced.write_text('#!/bin/sh\nif [ "$1" = "--version" ]; then exit 0; fi\nsleep 5\n')
+    two_faced.chmod(0o755)
+    monkeypatch.setenv("GLASSHOUSE_MORPHOLOG_BIN", str(two_faced))
+    monkeypatch.setenv("GLASSHOUSE_MORPHOLOG_TIMEOUT_SECONDS", "0.2")
+
+    started = time.monotonic()
+    response = TestClient(create_app()).get("/readyz")
+    elapsed = time.monotonic() - started
+
+    assert response.status_code == 503
+    assert response.json()["morpholog"] == "ok"
+    assert response.json()["commit"] == "error"
+    assert elapsed < 3  # the probe was bounded, not the sleep

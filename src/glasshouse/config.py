@@ -15,6 +15,7 @@ class Settings(BaseSettings):
 
     database_url: str = "postgresql://glasshouse:glasshouse@localhost:5432/glasshouse"
     morpholog_bin: str = "morpholog"
+    morpholog_timeout_seconds: float = 10.0  # API-boundary operations; imports run unbounded
     environment: str = "dev"  # dev | demo | production
 
 

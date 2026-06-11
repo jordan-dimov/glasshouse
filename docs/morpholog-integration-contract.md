@@ -114,6 +114,10 @@ The binary's `inspect claims --as-of` (a transition id or an RFC 3339 timestamp,
 
 Upstream deliberately left the audit surface unpinned, "pending the worked example that forces the shape". The Glasshouse projector (`glasshouse.projections`, 11/06/2026) is that example: it tails `morpholog.audit` ordered `(committed_at, transition_id)` (the same causal order `morpholog verify` replays), reads `transition_id`/`asserted_claims`/`retracted_claims`/`committed_at`, and decodes the `{predicate, args}` tagged-claim shape with the generated client's own codecs. The ask, filed as morpholog#136: pin the table's read contract (columns, claim shape, ordering guarantee, stable-vs-reserved), or bless an `inspect audit --after --named` NDJSON surface that the generated client could then carry - which would also give projectors the named decode for free. No new semantics: the data and ordering already exist. Until one of the two lands, the projector documents that it reads an unpinned surface.
 
+## 13. An operation timeout on the generated client — surfaced by the readiness probe, to file upstream
+
+The generated `_invoke` runs the binary unbounded, which is right for batch imports and wrong for a readiness endpoint: a binary that answers `--version` and then hangs on `inspect claims` would turn `/readyz` into a stuck request instead of a fast 503. Bridged by `GlasshouseClient` (the same pattern as the as-of bridge that #138 deleted): an optional `timeout_seconds`, unset by default, enforced in an overridden `_invoke` that mirrors the generated semantics and converts `TimeoutExpired` into the operational `MorphologError`; the API boundary sets it from `GLASSHOUSE_MORPHOLOG_TIMEOUT_SECONDS` (default 10s). The ask, to file upstream: a constructor `timeout` on the generated client, enforced in `_invoke`, after which the override deletes.
+
 ## Coordination agreements
 
 - **Evidence-pack extension contract pinned now** (no waiting for full WP5): a content-addressed JSON manifest, entries `{role, hash, media_type, locator?}`, chained to the ledger by transition ids.
