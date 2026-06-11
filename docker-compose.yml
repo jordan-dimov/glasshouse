@@ -2,7 +2,8 @@
 # The app itself runs on the host during development (uv run uvicorn ...),
 # with GLASSHOUSE_MORPHOLOG_BIN pointing at a locally built morpholog binary.
 #
-# Postgres floor is 17 (matching Morpholog); demo and CI lead on 18.
+# Postgres floor is 17 (matching Morpholog); CI exercises this same
+# PG17 Timescale image, the demo leads on 18.
 services:
   db:
     image: timescale/timescaledb:latest-pg17
