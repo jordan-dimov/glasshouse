@@ -11,13 +11,10 @@ of what this test proves.
 
 import datetime as dt
 from decimal import Decimal
-from pathlib import Path
 
 import pytest
 import sqlalchemy as sa
-from alembic.config import Config
 
-from alembic import command
 from glasshouse.commit import MODEL_FILE, Committed, GlasshouseClient, Rejected
 from glasshouse.commit.morpholog_client.models import (
     CaptureTradeRequest,
@@ -33,10 +30,8 @@ from glasshouse.compute.marking import (
     register_curve_version,
     value_trade,
 )
-from glasshouse.compute.store import CurveStore, StoreError, engine_url
-from tests.support import BINARY, DB, needs_live_stack
-
-ROOT = Path(__file__).resolve().parents[2]
+from glasshouse.compute.store import CurveStore, StoreError
+from tests.support import BINARY, DB, needs_live_stack, provision
 
 ORG, BOOK, MARKET = "acme-energy", "spec-de", "de-power"
 AS_OF = dt.date(2026, 6, 8)
@@ -54,17 +49,7 @@ def curve_of(*prices: str) -> HourlyCurve:
 
 @pytest.fixture(scope="module")
 def engine() -> sa.Engine:
-    engine = sa.create_engine(engine_url(DB))
-    # A clean slate for both legs: the governed ledger and the app
-    # schema, the latter migrated by Alembic so the revision is proven.
-    with engine.begin() as connection:
-        connection.execute(sa.text("DROP SCHEMA IF EXISTS morpholog CASCADE"))
-        connection.execute(sa.text("DROP TABLE IF EXISTS curve_payload_period"))
-        connection.execute(sa.text("DROP TABLE IF EXISTS alembic_version"))
-    config = Config(str(ROOT / "alembic.ini"))
-    config.set_main_option("sqlalchemy.url", engine_url(DB))
-    command.upgrade(config, "head")
-    return engine
+    return provision()
 
 
 @pytest.fixture(scope="module")

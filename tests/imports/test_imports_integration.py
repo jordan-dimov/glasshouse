@@ -10,16 +10,11 @@ from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
-import sqlalchemy as sa
-from alembic.config import Config
 
-from alembic import command
 from glasshouse import cli
 from glasshouse.commit import MODEL_FILE, Committed, GlasshouseClient, models
-from glasshouse.compute.store import engine_url
-from tests.support import BINARY, DB, needs_live_stack
+from tests.support import BINARY, DB, needs_live_stack, provision
 
-ROOT = Path(__file__).resolve().parents[2]
 ORG, BOOK, MARKET = "acme-energy", "spec-de", "de-power"
 
 TRADES = "\n".join(
@@ -50,15 +45,7 @@ pytestmark = needs_live_stack
 
 @pytest.fixture(scope="module", autouse=True)
 def provisioned(monkeypatch_module: pytest.MonkeyPatch) -> None:
-    engine = sa.create_engine(engine_url(DB))
-    with engine.begin() as connection:
-        connection.execute(sa.text("DROP SCHEMA IF EXISTS morpholog CASCADE"))
-        connection.execute(sa.text("DROP TABLE IF EXISTS curve_payload_period"))
-        connection.execute(sa.text("DROP TABLE IF EXISTS alembic_version"))
-    config = Config(str(ROOT / "alembic.ini"))
-    config.set_main_option("sqlalchemy.url", engine_url(DB))
-    command.upgrade(config, "head")
-
+    provision()
     monkeypatch_module.setenv("GLASSHOUSE_MORPHOLOG_BIN", str(BINARY))
     client = GlasshouseClient(str(MODEL_FILE), DB)
     assert client.init().status == "initialised"
