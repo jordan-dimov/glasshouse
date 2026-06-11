@@ -1,11 +1,20 @@
-"""The projector: morpholog.audit in, projection rows out, exactly once.
+"""The projector: the audit tail in, projection rows out, exactly once.
 
-The transition log is tailed in its causal order, `(committed_at,
-transition_id)`. Each transition's effects and the cursor advance happen
-in one app-schema transaction, so application is exactly-once by
-construction and a second `catch_up` applies nothing. `rebuild` deletes
-every projection row and replays from zero - the read-side law as a
-callable, and the seed of `glasshouse verify`.
+The transition log arrives through the blessed tail (`inspect audit`
+via the generated client - the surface this projector forced upstream
+as morpholog#136): committed transitions in `(committed_at,
+transition_id)` order, resumed losslessly with `--after`. Lossless is
+the binary's guarantee, not ours: `committed_at` is the writer's
+transaction START instant while visibility follows commit order, so a
+naive cursor over the raw table can skip a slow writer's transition
+forever - the tail computes the resume horizon before snapshotting, and
+rows it withholds surface on the next call.
+
+Each fetched page's effects and the cursor advance happen in one
+app-schema transaction under an advisory lock, so application is
+exactly-once by construction and a second `catch_up` applies nothing.
+`rebuild` deletes every projection row and replays from zero - the
+read-side law as a callable, and the seed of `glasshouse verify`.
 
 The fold itself (`fold_transition`) is a pure function from a
 transition's claims to row effects, so the projection logic is testable
@@ -14,10 +23,6 @@ predicates it deliberately ignores are named, and anything outside that
 - a retraction of a projected predicate, an unknown direction - raises
 `ProjectionError`, because the model changing under the folds should
 stop the projector, never quietly corrupt the read side.
-
-Note: the audit table's shape is not yet a pinned upstream surface; this
-projector is the worked example forcing that contract (morpholog#136,
-recorded in docs/morpholog-integration-contract.md section 12).
 """
 
 from __future__ import annotations
@@ -29,7 +34,7 @@ from decimal import Decimal
 import sqlalchemy as sa
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 
-from glasshouse.commit import envelopes, models, values
+from glasshouse.commit import GlasshouseClient, envelopes, models
 from glasshouse.projections.tables import (
     blotter_trade,
     position_hour,
@@ -200,121 +205,114 @@ def _apply(
         )
 
 
-_NEXT_TRANSITION = sa.text(
-    """
-    SELECT transition_id, actor, asserted_claims, retracted_claims, committed_at
-    FROM morpholog.audit
-    WHERE CAST(:c AS timestamptz) IS NULL
-       OR (committed_at, transition_id) > (CAST(:c AS timestamptz), CAST(:t AS uuid))
-    ORDER BY committed_at, transition_id
-    LIMIT 1
-    """
-)
-
-
-def catch_up(engine: sa.Engine) -> int:
+def catch_up(client: GlasshouseClient, engine: sa.Engine) -> int:
     """Apply every transition after the cursor, one app-schema
-    transaction per transition. Returns the number applied. Safe to run
-    concurrently: an advisory lock serialises projectors per transition."""
+    transaction per fetched page. Returns the number of transitions
+    applied. Safe to run concurrently: the advisory lock serialises
+    projectors, and the page is fetched under the authoritative cursor
+    inside the locked transaction."""
     applied = 0
     while True:
         with engine.begin() as connection:
-            # One writer per transition: the transaction-scoped advisory
-            # lock serialises concurrent projectors, and re-reading the
-            # cursor after acquiring it makes double-application
-            # impossible rather than merely unlikely.
+            # One writer per page: the transaction-scoped advisory lock
+            # serialises concurrent projectors, and reading the cursor
+            # after acquiring it (then fetching against that cursor)
+            # makes double-application impossible rather than unlikely.
             connection.execute(
                 sa.text("SELECT pg_advisory_xact_lock(hashtext('glasshouse.projector'))")
             )
             cursor = connection.execute(
-                sa.select(
-                    projection_progress.c.committed_at, projection_progress.c.transition_id
-                ).where(projection_progress.c.name == CURSOR)
-            ).one_or_none()
-            row = connection.execute(
-                _NEXT_TRANSITION,
-                {"c": cursor[0] if cursor else None, "t": cursor[1] if cursor else None},
-            ).one_or_none()
-            if row is None:
+                sa.select(projection_progress.c.transition_id).where(
+                    projection_progress.c.name == CURSOR
+                )
+            ).scalar_one_or_none()
+            page = client.audit(after=cursor)
+            if not page:
                 return applied
-            fold = fold_transition(
-                [envelopes.ClaimInstance.from_json(claim) for claim in row.asserted_claims],
-                [envelopes.ClaimInstance.from_json(claim) for claim in row.retracted_claims],
-            )
-            tid = str(row.transition_id)
-            actor = str(values.decode_tagged(row.actor))
-            _apply(connection, fold, row.committed_at, tid, actor)
+            for row in page:
+                fold = fold_transition(row.asserted_claims, row.retracted_claims)
+                _apply(connection, fold, row.committed_at, row.transition_id, row.actor)
+            last = page[-1]
             advance = pg_insert(projection_progress).values(
-                name=CURSOR, committed_at=row.committed_at, transition_id=tid
+                name=CURSOR, committed_at=last.committed_at, transition_id=last.transition_id
             )
             connection.execute(
                 advance.on_conflict_do_update(
                     index_elements=["name"],
-                    set_={"committed_at": row.committed_at, "transition_id": tid},
+                    set_={
+                        "committed_at": last.committed_at,
+                        "transition_id": last.transition_id,
+                    },
                 )
             )
-            applied += 1
+            applied += len(page)
 
 
-_ALL_TRANSITIONS = sa.text(
-    """
-    SELECT transition_id, actor, asserted_claims, retracted_claims, committed_at
-    FROM morpholog.audit
-    ORDER BY committed_at, transition_id
-    """
-)
+def accumulate(
+    client: GlasshouseClient, up_to: str | None = None
+) -> dict[str, set[tuple[object, ...]]]:
+    """Replay the tail through the pure folds into in-memory row sets
+    matching the projection tables' column order - the non-destructive
+    half of `glasshouse verify`'s projection leg. Reads the blessed
+    tail and writes nothing.
 
-
-def accumulate(engine: sa.Engine) -> dict[str, set[tuple[object, ...]]]:
-    """Replay the whole log through the pure folds into in-memory row
-    sets matching the projection tables' column order - the
-    non-destructive half of `glasshouse verify`'s projection leg.
-    Reads the audit log and writes nothing."""
+    With `up_to` (a transition id), folding stops after that
+    transition: the caller is verifying tables that claim to reflect
+    the log exactly up to their cursor, and anything beyond it is the
+    projector's lag, not divergence. A `up_to` the tail does not
+    contain raises `ProjectionError` - a cursor naming an unknown
+    transition is corruption, never lag (committed-row visibility is
+    monotonic, so a previously applied transition cannot vanish from a
+    later snapshot)."""
     blotter: dict[tuple[str, str], tuple[object, ...]] = {}
     positions: dict[tuple[str, str, str, dt.datetime], tuple[Decimal, str]] = {}
     valuations: dict[tuple[str, str, str], tuple[object, ...]] = {}
     cursor: tuple[object, ...] | None = None
-    with engine.connect() as connection:
-        for row in connection.execute(_ALL_TRANSITIONS):
-            fold = fold_transition(
-                [envelopes.ClaimInstance.from_json(claim) for claim in row.asserted_claims],
-                [envelopes.ClaimInstance.from_json(claim) for claim in row.retracted_claims],
+    reached_up_to = up_to is None
+    for row in client.audit():
+        if up_to is not None and reached_up_to:
+            break
+        fold = fold_transition(row.asserted_claims, row.retracted_claims)
+        for trade in fold.blotter:
+            term = fold.terms[trade.trade]
+            blotter[(trade.org, trade.trade)] = (
+                trade.org,
+                trade.trade,
+                trade.book,
+                trade.counterparty,
+                trade.market,
+                trade.direction,
+                term.quantity,
+                term.price,
+                term.delivery_start,
+                term.delivery_end,
+                row.committed_at,
+                row.transition_id,
+                row.actor,
             )
-            tid = str(row.transition_id)
-            actor = str(values.decode_tagged(row.actor))
-            for trade in fold.blotter:
-                term = fold.terms[trade.trade]
-                blotter[(trade.org, trade.trade)] = (
-                    trade.org,
-                    trade.trade,
-                    trade.book,
-                    trade.counterparty,
-                    trade.market,
-                    trade.direction,
-                    term.quantity,
-                    term.price,
-                    term.delivery_start,
-                    term.delivery_end,
-                    row.committed_at,
-                    tid,
-                    actor,
-                )
-            for delta in fold.positions:
-                key = (delta.org, delta.book, delta.market, delta.period_start)
-                net = positions[key][0] if key in positions else Decimal(0)
-                positions[key] = (net + delta.delta_mw, tid)
-            for valuation in fold.valuations:
-                valuations[(valuation.org, valuation.trade, valuation.curve_version)] = (
-                    valuation.org,
-                    valuation.trade,
-                    valuation.curve_version,
-                    valuation.book,
-                    valuation.mtm,
-                    row.committed_at,
-                    tid,
-                    actor,
-                )
-            cursor = (CURSOR, row.committed_at, tid)
+        for delta in fold.positions:
+            key = (delta.org, delta.book, delta.market, delta.period_start)
+            net = positions[key][0] if key in positions else Decimal(0)
+            positions[key] = (net + delta.delta_mw, row.transition_id)
+        for valuation in fold.valuations:
+            valuations[(valuation.org, valuation.trade, valuation.curve_version)] = (
+                valuation.org,
+                valuation.trade,
+                valuation.curve_version,
+                valuation.book,
+                valuation.mtm,
+                row.committed_at,
+                row.transition_id,
+                row.actor,
+            )
+        cursor = (CURSOR, row.committed_at, row.transition_id)
+        if row.transition_id == up_to:
+            reached_up_to = True
+    if not reached_up_to:
+        raise ProjectionError(
+            f"the projection cursor names transition {up_to!r}, which the audit tail "
+            "does not contain - the cursor does not describe this ledger"
+        )
     return {
         "blotter_trade": set(blotter.values()),
         "position_hour": {(*key, net, tid) for key, (net, tid) in positions.items()},
@@ -323,10 +321,10 @@ def accumulate(engine: sa.Engine) -> dict[str, set[tuple[object, ...]]]:
     }
 
 
-def rebuild(engine: sa.Engine) -> int:
+def rebuild(client: GlasshouseClient, engine: sa.Engine) -> int:
     """The read-side law as a callable: delete every projection row and
-    replay the log from zero. Returns the number of transitions applied."""
+    replay the tail from zero. Returns the number of transitions applied."""
     with engine.begin() as connection:
         for table in (blotter_trade, position_hour, trade_valuation, projection_progress):
             connection.execute(sa.delete(table))
-    return catch_up(engine)
+    return catch_up(client, engine)

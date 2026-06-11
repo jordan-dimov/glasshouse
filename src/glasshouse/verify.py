@@ -24,8 +24,10 @@ import sqlalchemy as sa
 
 from glasshouse.commit import MODEL_HASH, GlasshouseClient, models
 from glasshouse.compute.store import CurveStore, StoreError, curve_payload_period
-from glasshouse.projections import accumulate
+from glasshouse.projections import ProjectionError, accumulate
+from glasshouse.projections.projector import CURSOR as PROJECTION_CURSOR
 from glasshouse.projections.tables import metadata as projection_metadata
+from glasshouse.projections.tables import projection_progress
 
 
 @dataclass(frozen=True)
@@ -79,21 +81,42 @@ def _ledger_leg(client: GlasshouseClient) -> Leg:
     )
 
 
-def _projection_leg(engine: sa.Engine) -> Leg:
-    expected = accumulate(engine)
+def _projection_leg(client: GlasshouseClient, engine: sa.Engine) -> Leg:
+    # One REPEATABLE READ snapshot for the cursor AND the tables: the
+    # projector advances both atomically, so a consistent snapshot of
+    # our schema is internally coherent whatever a concurrent catch-up
+    # does. The tail is then folded only UP TO that cursor (anything
+    # beyond is lag, not divergence), and the cursor's transition is
+    # guaranteed visible in any later tail snapshot - committed-row
+    # visibility is monotonic - so the comparison is race-free.
+    actual: dict[str, set[tuple[object, ...]]] = {}
+    with (
+        engine.connect().execution_options(isolation_level="REPEATABLE READ") as connection,
+        connection.begin(),
+    ):
+        up_to = connection.execute(
+            sa.select(projection_progress.c.transition_id).where(
+                projection_progress.c.name == PROJECTION_CURSOR
+            )
+        ).scalar_one_or_none()
+        for name, table in projection_metadata.tables.items():
+            actual[name] = {tuple(row) for row in connection.execute(sa.select(table))}
+
+    try:
+        expected = accumulate(client, up_to=up_to)
+    except ProjectionError as corruption:
+        return Leg("projections", False, str(corruption))
+
     problems = []
-    with engine.connect() as connection:
-        for name, expected_rows in expected.items():
-            table = projection_metadata.tables[name]
-            actual_rows = {tuple(row) for row in connection.execute(sa.select(table))}
-            missing = len(expected_rows - actual_rows)
-            unexpected = len(actual_rows - expected_rows)
-            if missing or unexpected:
-                problems.append(f"{name}: {missing} missing, {unexpected} unexpected")
+    for name, expected_rows in expected.items():
+        missing = len(expected_rows - actual[name])
+        unexpected = len(actual[name] - expected_rows)
+        if missing or unexpected:
+            problems.append(f"{name}: {missing} missing, {unexpected} unexpected")
     if problems:
         return Leg("projections", False, "; ".join(problems))
     total = sum(len(rows) for rows in expected.values())
-    return Leg("projections", True, f"{total} row(s) match a replay from zero")
+    return Leg("projections", True, f"{total} row(s) match a replay up to the cursor")
 
 
 def _payload_leg(client: GlasshouseClient, store: CurveStore) -> Leg:
@@ -144,7 +167,7 @@ def verify(client: GlasshouseClient, engine: sa.Engine, store: CurveStore) -> Ve
         (
             _model_leg(client),
             _ledger_leg(client),
-            _projection_leg(engine),
+            _projection_leg(client, engine),
             _payload_leg(client, store),
         )
     )

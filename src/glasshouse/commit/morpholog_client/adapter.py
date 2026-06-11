@@ -81,15 +81,18 @@ class Morpholog:
     # The commit path.
     # ------------------------------------------------------------
 
-    def run(
+    def propose(
         self,
         transformation: str,
         actor: str,
         args_named: dict,
         explain_on_reject: bool = False,
     ) -> "envelopes.Committed | envelopes.Rejected":
+        """Propose a change by transformation name: it commits only if
+        every rule holds; a refusal is a lawful outcome, returned as
+        ``Rejected``."""
         args = [
-            "run", self.file, transformation,
+            "propose", self.file, transformation,
             "--actor", actor,
             "--args-named", json.dumps({k: v for k, v in args_named.items()}),
             "--database-url", self.database_url,
@@ -103,15 +106,15 @@ class Morpholog:
     ) -> "envelopes.Committed | envelopes.Rejected":
         """Commit a generated request model: its class names the
         transformation, its fields encode themselves."""
-        return self.run(
+        return self.propose(
             request.TRANSFORMATION,  # type: ignore[attr-defined]
             actor,
             request.to_args_named(),  # type: ignore[attr-defined]
             explain_on_reject=explain_on_reject,
         )
 
-    def run_batch(self, rows: list) -> list:
-        """Admit many rows in one invocation (`run --batch -`).
+    def propose_batch(self, rows: list) -> list:
+        """Admit many rows in one invocation (`propose --batch -`).
 
         Each row is a dict with ``transformation``, ``actor``, and one
         of ``args``/``args_named``. Returns one ``BatchReceipt`` per
@@ -123,7 +126,7 @@ class Morpholog:
         proc = subprocess.run(
             [
                 self.binary,
-                "run", self.file,
+                "propose", self.file,
                 "--batch", "-",
                 "--database-url", self.database_url,
             ],
@@ -194,11 +197,53 @@ class Morpholog:
         )
         return [envelopes.NamedClaim.from_json(c) for c in payload]
 
+    def audit(self, after: str | None = None) -> list:
+        """The audit tail: committed transitions in commit order, one
+        ``AuditRow`` per NDJSON line. ``after`` resumes strictly after
+        a previously seen transition id - lossless: rows whose writers
+        were still in flight are withheld until the next call, never
+        skipped. An empty tail is a lawful empty list."""
+        return [
+            envelopes.AuditRow.from_json(row)
+            for row in self._audit_lines(after, named=False)
+        ]
+
+    def audit_named(self, after: str | None = None) -> list:
+        """The audit tail with asserted/retracted claims decoded by
+        declared field name under this programme's authority (skew is
+        a hard error on the binary side). ``arguments`` and intent
+        payloads stay positional - a different vocabulary."""
+        return [
+            envelopes.AuditRowNamed.from_json(row)
+            for row in self._audit_lines(after, named=True)
+        ]
+
+    def _audit_lines(self, after: str | None, named: bool) -> list:
+        # Not _invoke: an empty tail is a lawful empty stdout, not a
+        # protocol violation - so the discrimination here is on the
+        # exit code alone.
+        argv = [self.binary, "inspect", "audit"]
+        if after is not None:
+            argv.extend(["--after", after])
+        if named:
+            argv.extend(["--named", self.file])
+        argv.extend(["--database-url", self.database_url])
+        proc = subprocess.run(argv, capture_output=True, text=True)
+        if proc.returncode != 0:
+            raise MorphologError(
+                f"inspect audit failed (exit {proc.returncode}):\n{proc.stderr.strip()}"
+            )
+        return [
+            json.loads(line) for line in proc.stdout.splitlines() if line.strip()
+        ]
+
     def coverage(self) -> envelopes.CoverageReport:
         """Replay the audit log and report which rules have ever
         actually done work - per invariant, whether its condition ever
-        matched anything; per transformation, whether it was ever
-        used. Read-only."""
+        matched anything and whether it ever refused a real proposal
+        (the `constrained` verdict, counted from the operational
+        rejection log); per transformation, whether it was ever used
+        and how often it was refused. Read-only."""
         return envelopes.CoverageReport.from_json(
             self._json(
                 "inspect", "coverage", self.file,

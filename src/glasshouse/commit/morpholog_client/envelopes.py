@@ -142,7 +142,9 @@ class Errored:
 
 
 def parse_run_outcome(payload: object) -> "Committed | Rejected":
-    """The ``run`` envelope: a lawful business outcome either way."""
+    """The ``propose`` outcome envelope: a lawful business outcome
+    either way. (The wire keeps the historical ``run_outcome`` name in
+    the pinned schema; only the command verb changed.)"""
     status = payload.get("status") if isinstance(payload, dict) else None
     match status:
         case "committed":
@@ -150,7 +152,7 @@ def parse_run_outcome(payload: object) -> "Committed | Rejected":
         case "rejected":
             return Rejected.from_json(payload)
         case _:
-            raise EnvelopeError(f"not a run outcome: {payload!r}")
+            raise EnvelopeError(f"not a propose outcome: {payload!r}")
 
 
 @dataclass(frozen=True)
@@ -391,11 +393,116 @@ class OutboxUpdate:
 
 
 @dataclass(frozen=True)
+class AuditedInvariantCheck:
+    """One invariant that governed an admission: name plus the
+    version active at commit time."""
+
+    name: str
+    version: int
+
+    @classmethod
+    def from_json(cls, payload: object) -> "AuditedInvariantCheck":
+        data = _strict("audited invariant check", payload, {"name", "version"})
+        return cls(name=data["name"], version=data["version"])
+
+
+_AUDIT_ROW_KEYS = {
+    "transition_id",
+    "transformation_name",
+    "arguments",
+    "actor",
+    "invariant_epoch",
+    "invariants_checked",
+    "asserted_claims",
+    "retracted_claims",
+    "emitted_intents",
+    "committed_at",
+}
+
+
+@dataclass(frozen=True)
+class AuditRow:
+    """One committed transition from the audit tail (`inspect
+    audit`): who proposed what, which rules governed the admission,
+    and what was asserted, retracted, and emitted. Claim and intent
+    arrays carry decoded positional values; see `AuditRowNamed` for
+    the field-keyed claim decode."""
+
+    transition_id: str
+    transformation_name: str
+    arguments: list
+    actor: str
+    invariant_epoch: int
+    invariants_checked: list
+    asserted_claims: list
+    retracted_claims: list
+    emitted_intents: list
+    committed_at: datetime
+
+    @classmethod
+    def from_json(cls, payload: object) -> "AuditRow":
+        data = _strict("audit row", payload, _AUDIT_ROW_KEYS)
+        return cls(
+            transition_id=data["transition_id"],
+            transformation_name=data["transformation_name"],
+            arguments=[values.decode_tagged(a) for a in data["arguments"]],
+            actor=str(values.decode_tagged(data["actor"])),
+            invariant_epoch=data["invariant_epoch"],
+            invariants_checked=[
+                AuditedInvariantCheck.from_json(c) for c in data["invariants_checked"]
+            ],
+            asserted_claims=[ClaimInstance.from_json(c) for c in data["asserted_claims"]],
+            retracted_claims=[ClaimInstance.from_json(c) for c in data["retracted_claims"]],
+            emitted_intents=[IntentInstance.from_json(i) for i in data["emitted_intents"]],
+            committed_at=values.parse_timestamp(data["committed_at"]),
+        )
+
+
+@dataclass(frozen=True)
+class AuditRowNamed:
+    """`AuditRow` with the asserted/retracted claims decoded by
+    declared field name (the `--named` tail). `arguments` and
+    `emitted_intents` stay positional - they belong to the
+    transformation/intent vocabularies, not predicate declarations."""
+
+    transition_id: str
+    transformation_name: str
+    arguments: list
+    actor: str
+    invariant_epoch: int
+    invariants_checked: list
+    asserted_claims: list
+    retracted_claims: list
+    emitted_intents: list
+    committed_at: datetime
+
+    @classmethod
+    def from_json(cls, payload: object) -> "AuditRowNamed":
+        data = _strict("named audit row", payload, _AUDIT_ROW_KEYS)
+        return cls(
+            transition_id=data["transition_id"],
+            transformation_name=data["transformation_name"],
+            arguments=[values.decode_tagged(a) for a in data["arguments"]],
+            actor=str(values.decode_tagged(data["actor"])),
+            invariant_epoch=data["invariant_epoch"],
+            invariants_checked=[
+                AuditedInvariantCheck.from_json(c) for c in data["invariants_checked"]
+            ],
+            asserted_claims=[NamedClaim.from_json(c) for c in data["asserted_claims"]],
+            retracted_claims=[NamedClaim.from_json(c) for c in data["retracted_claims"]],
+            emitted_intents=[IntentInstance.from_json(i) for i in data["emitted_intents"]],
+            committed_at=values.parse_timestamp(data["committed_at"]),
+        )
+
+
+@dataclass(frozen=True)
 class InvariantCoverage:
-    """Coverage of one invariant: did its condition ever match? The
-    verdicts are bounded by committed history - `fired`, `never_fired`
-    (its condition never matched anything), `always_on` (a prohibition
-    whose work is invisible in committed history)."""
+    """Coverage of one invariant: did its condition ever match, and
+    did it ever refuse a real proposal? The verdicts, strongest
+    first - `constrained` (refused at least one proposal, per the
+    operational rejection log; a floor, not a census), `fired`,
+    `never_fired` (its condition never matched anything), `always_on`
+    (a prohibition with no recorded refusals yet)."""
 
     invariant: str
     verdict: str
@@ -403,6 +510,10 @@ class InvariantCoverage:
     from_clause: str | None = None
     first_fired: str | None = None
     last_fired: str | None = None
+    proposals_refused: int = 0
+    first_refused: str | None = None
+    last_refused: str | None = None
+    not_in_programme: bool = False
 
     @classmethod
     def from_json(cls, payload: object) -> "InvariantCoverage":
@@ -410,7 +521,15 @@ class InvariantCoverage:
             "invariant coverage",
             payload,
             {"invariant", "verdict", "transitions_fired"},
-            {"from", "first_fired", "last_fired"},
+            {
+                "from",
+                "first_fired",
+                "last_fired",
+                "proposals_refused",
+                "first_refused",
+                "last_refused",
+                "not_in_programme",
+            },
         )
         return cls(
             invariant=data["invariant"],
@@ -421,6 +540,10 @@ class InvariantCoverage:
             from_clause=data.get("from"),
             first_fired=data.get("first_fired"),
             last_fired=data.get("last_fired"),
+            proposals_refused=data.get("proposals_refused", 0),
+            first_refused=data.get("first_refused"),
+            last_refused=data.get("last_refused"),
+            not_in_programme=data.get("not_in_programme", False),
         )
 
 
@@ -430,6 +553,7 @@ class TransformationUsage:
     transitions: int
     first: str | None = None
     last: str | None = None
+    proposals_refused: int = 0
     not_in_programme: bool = False
 
     @classmethod
@@ -438,24 +562,27 @@ class TransformationUsage:
             "transformation usage",
             payload,
             {"transformation", "transitions"},
-            {"first", "last", "not_in_programme"},
+            {"first", "last", "proposals_refused", "not_in_programme"},
         )
         return cls(
             transformation=data["transformation"],
             transitions=data["transitions"],
             first=data.get("first"),
             last=data.get("last"),
+            proposals_refused=data.get("proposals_refused", 0),
             not_in_programme=data.get("not_in_programme", False),
         )
 
 
 @dataclass(frozen=True)
 class CoverageReport:
-    """Which rules have ever actually done work, over replayed
-    committed history."""
+    """Which rules have ever actually done work - and which have
+    demonstrably refused - over replayed committed history plus the
+    operational rejection log."""
 
     program: str
     transitions_replayed: int
+    rejections_replayed: int
     invariants: list
     transformations: list
 
@@ -464,11 +591,18 @@ class CoverageReport:
         data = _strict(
             "coverage report",
             payload,
-            {"program", "transitions_replayed", "invariants", "transformations"},
+            {
+                "program",
+                "transitions_replayed",
+                "rejections_replayed",
+                "invariants",
+                "transformations",
+            },
         )
         return cls(
             program=data["program"],
             transitions_replayed=data["transitions_replayed"],
+            rejections_replayed=data["rejections_replayed"],
             invariants=[InvariantCoverage.from_json(i) for i in data["invariants"]],
             transformations=[
                 TransformationUsage.from_json(t) for t in data["transformations"]
