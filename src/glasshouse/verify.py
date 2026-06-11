@@ -101,13 +101,16 @@ def _payload_leg(client: GlasshouseClient, store: CurveStore) -> Leg:
     mismatched: list[str] = []
     missing: list[str] = []
     for claim in claims:
+        # Org-qualified throughout: the organisation is the tenancy
+        # boundary, and a bare version is ambiguous across orgs.
+        ref = f"{claim.org}/{claim.version}"
         try:
             stored = store.load(org=claim.org, version=claim.version)
         except StoreError:
-            missing.append(claim.version)
+            missing.append(ref)
             continue
         if stored.payload_hash() != claim.payload_hash:
-            mismatched.append(claim.version)
+            mismatched.append(ref)
 
     claimed = {(claim.org, claim.version) for claim in claims}
     with store.engine.connect() as connection:
@@ -119,7 +122,7 @@ def _payload_leg(client: GlasshouseClient, store: CurveStore) -> Leg:
                 ).distinct()
             )
         }
-    orphans = sorted(version for _, version in stored_versions - claimed)
+    orphans = sorted(f"{org}/{version}" for org, version in stored_versions - claimed)
 
     if mismatched or missing:
         return Leg(

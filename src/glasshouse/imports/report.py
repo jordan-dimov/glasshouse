@@ -88,7 +88,8 @@ class ImportReport:
         return self.count(QUARANTINED)
 
     def render(self) -> str:
-        counts = ", ".join(f"{self.count(status)} {status}" for status in _STATUSES)
+        present = [status for status in _STATUSES if self.count(status)]
+        counts = ", ".join(f"{self.count(status)} {status}" for status in present) or "nothing"
         lines = [f"{len(self.outcomes)} processed: {counts}"]
         lines += [
             f"  {outcome.status:<11} {outcome.ref}: {outcome.detail}" for outcome in self.outcomes

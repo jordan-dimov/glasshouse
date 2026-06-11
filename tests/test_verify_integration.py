@@ -147,7 +147,7 @@ def test_a_tampered_payload_fails_the_payload_leg(
         report = verify(morpholog, engine, store)
         assert not report.ok
         assert not _leg(report, "payloads").ok
-        assert "crv-v1" in _leg(report, "payloads").detail
+        assert "acme-energy/crv-v1" in _leg(report, "payloads").detail
         assert _leg(report, "ledger").ok  # the legs are independent
         assert cli.main(["verify", "--database-url", DB]) == 1
     finally:
@@ -173,7 +173,7 @@ def test_missing_and_orphaned_payloads_are_told_apart(
         leg = _leg(report, "payloads")
         assert leg.ok
         assert "orphaned payloads" in leg.detail
-        assert "crv-orphan" in leg.detail
+        assert "acme-energy/crv-orphan" in leg.detail
     finally:
         with engine.begin() as connection:
             connection.execute(
@@ -195,7 +195,7 @@ def test_missing_and_orphaned_payloads_are_told_apart(
         report = verify(morpholog, engine, store)
         leg = _leg(report, "payloads")
         assert not leg.ok
-        assert "missing payload: crv-v1" in leg.detail
+        assert "missing payload: acme-energy/crv-v1" in leg.detail
     finally:
         with engine.begin() as connection:
             for row in snapshot:

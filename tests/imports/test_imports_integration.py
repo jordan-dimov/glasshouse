@@ -151,7 +151,7 @@ def test_curves_import_and_the_immutable_rerun(
     args = ["import-curves", str(csv_file), "--org", ORG, "--actor", "carol"]
 
     out = _run(args, capsys)
-    assert "3 processed: 2 committed, 0 rejected, 0 error, 1 quarantined" in out
+    assert "3 processed: 2 committed, 1 quarantined" in out
     assert "crv-gap: " in out
     assert "contiguous" in out
 
@@ -196,4 +196,4 @@ def test_a_second_version_for_an_official_curve_is_a_lawful_rejection(
     out = _run(
         ["import-curves", str(curve_csv("crv-thu-b")), "--org", ORG, "--actor", "carol"], capsys
     )
-    assert "1 processed: 0 committed, 1 rejected, 0 error, 0 quarantined" in out
+    assert "1 processed: 1 rejected" in out
