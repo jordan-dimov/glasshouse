@@ -210,10 +210,18 @@ _NEXT_TRANSITION = sa.text(
 
 def catch_up(engine: sa.Engine) -> int:
     """Apply every transition after the cursor, one app-schema
-    transaction per transition. Returns the number applied."""
+    transaction per transition. Returns the number applied. Safe to run
+    concurrently: an advisory lock serialises projectors per transition."""
     applied = 0
     while True:
         with engine.begin() as connection:
+            # One writer per transition: the transaction-scoped advisory
+            # lock serialises concurrent projectors, and re-reading the
+            # cursor after acquiring it makes double-application
+            # impossible rather than merely unlikely.
+            connection.execute(
+                sa.text("SELECT pg_advisory_xact_lock(hashtext('glasshouse.projector'))")
+            )
             cursor = connection.execute(
                 sa.select(
                     projection_progress.c.committed_at, projection_progress.c.transition_id

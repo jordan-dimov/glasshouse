@@ -22,6 +22,7 @@ dependencies = [
 [dependency-groups]
 dev = [
     "pytest>=8.3",
+    "pytest-cov>=6.0",
     "hypothesis>=6.120",
     "httpx>=0.28",
     "ruff>=0.8",
@@ -69,3 +70,16 @@ filterwarnings = [
     # is starlette/fastapi's to make, not ours.
     "ignore::starlette.exceptions.StarletteDeprecationWarning",
 ]
+
+# Coverage is opt-in locally (`uv run pytest --cov`) and enforced in
+# CI's integration job, where the full suite runs. The generated client
+# is omitted: byte-pinned, tested upstream against the binary's own
+# goldens; measuring it would count surfaces we deliberately do not use.
+[tool.coverage.run]
+branch = true
+source = ["glasshouse"]
+omit = ["*/glasshouse/commit/morpholog_client/*"]
+
+[tool.coverage.report]
+precision = 1
+show_missing = true

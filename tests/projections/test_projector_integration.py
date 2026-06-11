@@ -2,11 +2,16 @@
 catch-up, the killer query's tables, exactly-once application, and the
 read-side law proven by rebuilding from zero and comparing.
 
+The committed history is a module fixture and every test enters through
+`rebuild`/`catch_up`, which are deterministic from any prior read-side
+state - so each test passes alone, in any order, under any selection.
+
 Same gates and provisioning contract as the other integration legs; the
 app schema is migrated by Alembic in the fixture, so revision 0002 is
 part of what this test proves."""
 
 import datetime as dt
+import threading
 from decimal import Decimal
 
 import pytest
@@ -49,18 +54,12 @@ def morpholog(engine: sa.Engine) -> GlasshouseClient:
     return client
 
 
-def _rows(engine: sa.Engine) -> dict[str, list[tuple[object, ...]]]:
-    snapshot = {}
-    with engine.connect() as connection:
-        for table in TABLES:
-            rows = connection.execute(sa.select(table).order_by(*table.primary_key.columns))
-            snapshot[table.name] = [tuple(row) for row in rows]
-    return snapshot
-
-
-def test_the_projector_keeps_up_with_the_monday_morning_loop(
-    morpholog: GlasshouseClient, engine: sa.Engine, capsys: pytest.CaptureFixture[str]
-) -> None:
+@pytest.fixture(scope="module")
+def history(morpholog: GlasshouseClient, engine: sa.Engine) -> tuple[int, str]:
+    """The Monday-morning flow, committed once for the module: grants,
+    capture, registration, valuation, correction, re-valuation. Returns
+    (transition count, the capture's transition id). Deliberately does
+    not project anything: tests own their read-side entry."""
     store = CurveStore(engine)
     for grant in (
         models.GrantCaptureAuthorityRequest(principal="alice", org=ORG, book=BOOK),
@@ -107,26 +106,8 @@ def test_the_projector_keeps_up_with_the_monday_morning_loop(
         value_trade(morpholog, store, actor="risk-engine", org=ORG, book=BOOK, trade="T-001"),
         Committed,
     )
-
-    # 3 grants + capture + registration + valuation, exactly once.
-    assert catch_up(engine) == 6
-    assert catch_up(engine) == 0
-
-    rows = _rows(engine)
-    (blotter,) = rows["blotter_trade"]
-    assert blotter[:3] == (ORG, "T-001", BOOK)
-    assert str(captured.transition_id) in blotter
-
-    positions = rows["position_hour"]
-    assert [(row[3], row[4]) for row in positions] == [
-        (T0 + dt.timedelta(hours=h), Decimal("10")) for h in range(3)
-    ]
-
-    (valuation,) = rows["trade_valuation"]
-    assert (valuation[2], valuation[4]) == ("crv-v1", Decimal("55.00"))
-
-    # Correct the curve and re-mark: both valuations stand, each pinned
-    # to its curve version; positions are untouched.
+    # Correct the curve and re-mark: both valuations will stand, each
+    # pinned to its curve version.
     assert isinstance(
         correct_curve_version(
             morpholog,
@@ -145,19 +126,82 @@ def test_the_projector_keeps_up_with_the_monday_morning_loop(
         value_trade(morpholog, store, actor="risk-engine", org=ORG, book=BOOK, trade="T-001"),
         Committed,
     )
-    assert catch_up(engine) == 2
+    return 8, captured.transition_id
+
+
+def _rows(engine: sa.Engine) -> dict[str, list[tuple[object, ...]]]:
+    snapshot = {}
+    with engine.connect() as connection:
+        for table in TABLES:
+            rows = connection.execute(sa.select(table).order_by(*table.primary_key.columns))
+            snapshot[table.name] = [tuple(row) for row in rows]
+    return snapshot
+
+
+def test_the_projector_replays_the_monday_morning_loop(
+    history: tuple[int, str], engine: sa.Engine, capsys: pytest.CaptureFixture[str]
+) -> None:
+    transitions, capture_tid = history
+    # The deterministic entry from any prior read-side state: replay
+    # from zero, then prove there is nothing left (exactly once).
+    assert rebuild(engine) == transitions
+    assert catch_up(engine) == 0
 
     rows = _rows(engine)
+    (blotter,) = rows["blotter_trade"]
+    assert blotter[:3] == (ORG, "T-001", BOOK)
+    assert capture_tid in blotter
+
+    positions = rows["position_hour"]
+    assert [(row[3], row[4]) for row in positions] == [
+        (T0 + dt.timedelta(hours=h), Decimal("10")) for h in range(3)
+    ]
+
+    # Both marks stand after the correction, each pinned to its version.
     marks = {row[2]: row[4] for row in rows["trade_valuation"]}
     assert marks == {"crv-v1": Decimal("55.00"), "crv-v2": Decimal("85.00")}
-    assert len(rows["position_hour"]) == 3
 
     # The read-side law: wipe and replay from zero lands byte-for-byte
     # on the same read state (the seed of `glasshouse verify`).
-    before = _rows(engine)
-    assert rebuild(engine) == 8
-    assert _rows(engine) == before
+    assert rebuild(engine) == transitions
+    assert _rows(engine) == rows
 
     # The worker's one-shot through the CLI seam.
     assert cli.main(["project", "--database-url", DB]) == 0
     assert "applied 0 transition(s)" in capsys.readouterr().out
+
+
+def test_concurrent_projectors_serialise_and_apply_exactly_once(
+    history: tuple[int, str], engine: sa.Engine
+) -> None:
+    # Two workers racing over the same log: the advisory lock plus the
+    # cursor-in-transaction make application exactly-once, not merely
+    # PK-protected. Bring the read side current, wipe, and let them
+    # race over the full history; both must return cleanly.
+    transitions, _ = history
+    catch_up(engine)
+    before = _rows(engine)
+    with engine.begin() as connection:
+        for table in TABLES:
+            connection.execute(sa.delete(table))
+
+    applied: list[int] = []
+    errors: list[BaseException] = []
+
+    def worker() -> None:
+        try:
+            applied.append(catch_up(engine))
+        except BaseException as failure:
+            errors.append(failure)
+
+    workers = [threading.Thread(target=worker) for _ in range(2)]
+    for thread in workers:
+        thread.start()
+    for thread in workers:
+        thread.join(timeout=30)
+
+    assert not [thread for thread in workers if thread.is_alive()]
+    assert errors == []
+    assert len(applied) == 2
+    assert sum(applied) == transitions
+    assert _rows(engine) == before

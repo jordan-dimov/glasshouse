@@ -29,10 +29,15 @@ def create_app() -> FastAPI:
         if binary is None:
             checks["morpholog"] = "missing"
         else:
-            result = subprocess.run(
-                [binary, "--version"], capture_output=True, text=True, timeout=10
-            )
-            checks["morpholog"] = "ok" if result.returncode == 0 else "error"
+            try:
+                result = subprocess.run(
+                    [binary, "--version"], capture_output=True, text=True, timeout=10
+                )
+                checks["morpholog"] = "ok" if result.returncode == 0 else "error"
+            except (OSError, subprocess.TimeoutExpired):
+                # A binary that hangs or cannot execute is a readiness
+                # verdict, not a 500.
+                checks["morpholog"] = "error"
 
         # Database connectivity and a commit-layer round-trip join this
         # check when the API boundary wires a GlasshouseClient (the API

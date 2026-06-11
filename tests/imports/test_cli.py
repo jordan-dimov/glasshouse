@@ -55,3 +55,13 @@ def test_a_missing_file_exits_one(tmp_path: Path, capsys: pytest.CaptureFixture[
     code = cli.main(["import-trades", str(tmp_path / "nope.csv"), "--org", "o", "--actor", "a"])
     assert code == 1
     assert "error:" in capsys.readouterr().err
+
+
+def test_project_follow_enters_the_worker_loop(monkeypatch: pytest.MonkeyPatch) -> None:
+    entered: list[float] = []
+    monkeypatch.setattr(
+        cli, "follow", lambda engine, *, interval_seconds: entered.append(interval_seconds)
+    )
+    code = cli.main(["project", "--follow", "--interval", "0.5", "--database-url", "postgres:///x"])
+    assert code == 0
+    assert entered == [0.5]

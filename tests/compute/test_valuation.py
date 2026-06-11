@@ -130,3 +130,29 @@ def test_valuation_is_additive_over_a_delivery_split(
         )
 
     assert value(T0, end) == value(T0, middle) + value(middle, end)
+
+
+def test_each_dishonest_input_is_refused_by_name() -> None:
+    curve = curve_of([Decimal("90"), Decimal("88"), Decimal("86.25")])
+
+    def mark(start: dt.datetime, end: dt.datetime) -> Decimal:
+        return mark_to_market(
+            direction="buy",
+            quantity_mw=Decimal("10"),
+            price=Decimal("86.25"),
+            delivery_start=start,
+            delivery_end=end,
+            curve=curve,
+        )
+
+    end = T0 + dt.timedelta(hours=3)
+    with pytest.raises(ValuationError, match="timezone-aware"):
+        mark(T0.replace(tzinfo=None), end)
+    with pytest.raises(ValuationError, match="start is not hour-aligned"):
+        mark(T0 + dt.timedelta(minutes=30), end)
+    with pytest.raises(ValuationError, match="end is not hour-aligned"):
+        mark(T0, T0 + dt.timedelta(hours=2, minutes=30))
+    with pytest.raises(ValuationError, match="end must follow"):
+        mark(T0, T0)
+    with pytest.raises(ValuationError, match="end must follow"):
+        mark(T0, T0 - dt.timedelta(hours=1))
