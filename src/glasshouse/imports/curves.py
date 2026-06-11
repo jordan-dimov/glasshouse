@@ -21,17 +21,20 @@ import io
 from collections.abc import Sequence
 from decimal import Decimal, InvalidOperation
 
-from glasshouse.commit import GlasshouseClient, envelopes
+from glasshouse.commit import GlasshouseClient, envelopes, models
 from glasshouse.compute.curves import CurveError, HourlyCurve
 from glasshouse.compute.marking import register_curve_version
 from glasshouse.compute.store import CurveStore, StoreError
 from glasshouse.imports.report import (
+    ADMISSIBLE,
     COMMITTED,
     ERROR,
     QUARANTINED,
+    REFUSED,
     REJECTED,
     ImportReport,
     RowOutcome,
+    why,
 )
 from glasshouse.imports.trades import ImportFormatError
 
@@ -125,4 +128,23 @@ def import_curves(
                 outcomes.append(RowOutcome(ref, COMMITTED, transition_id))
             case envelopes.Rejected(reason=reason):
                 outcomes.append(RowOutcome(ref, REJECTED, reason))
+    return ImportReport(tuple(outcomes))
+
+
+def preview_curves(client: GlasshouseClient, text: str, *, org: str, actor: str) -> ImportReport:
+    """The validate step for curves: group and quarantine exactly as an
+    import would, then dry-run each surviving curve's registration
+    through `explain`. No payload is stored and nothing is committed -
+    the hash is computed only to shape the proposal."""
+    curves, quarantined = parse_curves(text)
+    outcomes = list(quarantined)
+    for ref, market, as_of, version, curve in curves:
+        request = models.RegisterCurveRequest(
+            org=org, market=market, as_of=as_of, version=version, payload_hash=curve.payload_hash()
+        )
+        explanation = client.explain(request.TRANSFORMATION, actor, request.to_args_named())
+        if explanation.admissible:
+            outcomes.append(RowOutcome(ref, ADMISSIBLE, "would register"))
+        else:
+            outcomes.append(RowOutcome(ref, REFUSED, why(explanation)))
     return ImportReport(tuple(outcomes))

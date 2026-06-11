@@ -13,7 +13,13 @@ inline after each write (`catch_up`), background thread
 outbox.
 """
 
-from glasshouse.projections.projector import ProjectionError, catch_up, fold_transition, rebuild
+from glasshouse.projections.projector import (
+    ProjectionError,
+    accumulate,
+    catch_up,
+    fold_transition,
+    rebuild,
+)
 from glasshouse.projections.runner import follow, start_projector_thread
 from glasshouse.projections.tables import (
     blotter_trade,
@@ -24,6 +30,7 @@ from glasshouse.projections.tables import (
 
 __all__ = [
     "ProjectionError",
+    "accumulate",
     "blotter_trade",
     "catch_up",
     "fold_transition",

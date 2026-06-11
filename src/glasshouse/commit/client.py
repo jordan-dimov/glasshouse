@@ -1,27 +1,32 @@
 """Glasshouse's thin extension of the generated client.
 
-Three things live here (the as-of gap this module used to bridge was
-filed as morpholog#135 and delivered upstream in #138):
+What lives here is either genuinely ours (binary discovery under
+`GLASSHOUSE_MORPHOLOG_BIN`; `read`, the typed per-predicate as-of read
+composing generated surfaces) or a documented bridge over a generated
+client gap, filed upstream and deleted when delivered - the pattern
+that retired the as-of gap (morpholog#135, delivered in #138):
 
-* binary discovery under Glasshouse's own environment name
-  (`GLASSHOUSE_MORPHOLOG_BIN`, falling back to the generated client's
-  `MORPHOLOG_BIN`-then-PATH resolution), so one name works across the
-  app, the docs and the generated layer;
-* `read`, the typed per-predicate read: the generated `claims_named`
-  surface composed with the generated read models, so consumers get
-  frozen typed rows (optionally as of a past transition) in one call;
-* an optional operation timeout the generated `_invoke` lacks
-  (filed upstream as morpholog#140, contract doc section 13): unset by default -
-  imports legitimately run long - and set at the API boundary, where a
-  hung binary must become a fast verdict, never a stuck request.
+* the optional operation timeout (morpholog#140, contract section 13):
+  unset by default - imports legitimately run long - and set at the
+  API boundary, where a hung binary must become a fast verdict;
+* `run_batch(..., explain_on_reject=)`: the CLI composes the flag with
+  `--batch` and the envelope already parses per-row explanations, but
+  the generated method exposes neither the flag nor a timeout
+  (morpholog#141, contract section 14);
+* `verify_ledger`: `morpholog verify` exists and is pinned, but the
+  generated client has no surface for it (morpholog#141, contract
+  section 14).
 """
 
 from __future__ import annotations
 
+import json
 import os
 import subprocess
+from collections.abc import Mapping, Sequence
 from typing import ClassVar, Protocol, Self
 
+from glasshouse.commit.morpholog_client import envelopes
 from glasshouse.commit.morpholog_client.adapter import Morpholog, MorphologError
 
 
@@ -70,6 +75,58 @@ class GlasshouseClient(Morpholog):
         if not proc.stdout.strip():
             raise MorphologError(f"`{' '.join(args)}`:\n{proc.stderr.strip()}")
         return proc.stdout
+
+    def run_batch(
+        self, rows: Sequence[Mapping[str, object]], explain_on_reject: bool = False
+    ) -> list[envelopes.BatchReceipt]:
+        """The generated `run_batch`, plus the per-row explanations and
+        the timeout it lacks (contract section 14). Mirrors the
+        generated semantics: one receipt per processed row in input
+        order, exit 0 = every row processed, non-zero = operational
+        abort with the receipts that did arrive named in the error."""
+        ndjson = "".join(json.dumps(row) + "\n" for row in rows)
+        command = [
+            self.binary,
+            "run",
+            self.file,
+            "--batch",
+            "-",
+            "--database-url",
+            self.database_url,
+        ]
+        if explain_on_reject:
+            command.append("--explain-on-reject")
+        try:
+            proc = subprocess.run(
+                command,
+                capture_output=True,
+                text=True,
+                input=ndjson,
+                timeout=self.timeout_seconds,
+                check=False,
+            )
+        except subprocess.TimeoutExpired:
+            raise MorphologError(f"batch timed out after {self.timeout_seconds}s") from None
+        receipts = [
+            envelopes.BatchReceipt.from_json(json.loads(line))
+            for line in proc.stdout.splitlines()
+            if line.strip()
+        ]
+        if proc.returncode != 0:
+            raise MorphologError(
+                f"batch aborted after {len(receipts)} receipt(s):\n{proc.stderr.strip()}"
+            )
+        return receipts
+
+    def verify_ledger(self) -> dict:  # type: ignore[type-arg]
+        """`morpholog verify`: replay the audit log and diff against the
+        claims table. The divergent verdict arrives on stdout at exit 1,
+        which is exactly `_invoke`'s discrimination rule; the JSON is
+        `{"status": "consistent"|"divergent", ...divergence lists}`."""
+        verdict = json.loads(self._invoke("verify", "--database-url", self.database_url))
+        if not isinstance(verdict, dict):
+            raise MorphologError(f"verify returned a non-object verdict: {verdict!r}")
+        return verdict
 
     def read[C: NamedClaimModel](self, model: type[C], as_of: str | None = None) -> list[C]:
         """Read one predicate back through the named surface, decoded by

@@ -37,6 +37,7 @@ blotter_trade = sa.Table(
     sa.Column("delivery_end", sa.DateTime(timezone=True), nullable=False),
     sa.Column("captured_at", sa.DateTime(timezone=True), nullable=False),
     sa.Column("transition_id", sa.Text, nullable=False),
+    sa.Column("actor", sa.Text, nullable=False),  # who captured it - the evidence trail
 )
 
 # Net position per UTC delivery hour: the killer query GROUPs over this
@@ -65,6 +66,7 @@ trade_valuation = sa.Table(
     sa.Column("mtm", sa.Numeric, nullable=False),  # EUR; exact
     sa.Column("valued_at", sa.DateTime(timezone=True), nullable=False),
     sa.Column("transition_id", sa.Text, nullable=False),
+    sa.Column("actor", sa.Text, nullable=False),  # who admitted it - the evidence trail
 )
 
 # The projector's position in the log: (committed_at, transition_id) of

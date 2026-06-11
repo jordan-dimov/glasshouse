@@ -12,12 +12,43 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from glasshouse.commit import envelopes
+
 COMMITTED = "committed"
 REJECTED = "rejected"
 ERROR = "error"
 QUARANTINED = "quarantined"
+# Preview statuses: the ledger's dry-run verdicts, nothing committed.
+ADMISSIBLE = "admissible"
+REFUSED = "refused"
 
-_STATUSES = (COMMITTED, REJECTED, ERROR, QUARANTINED)
+_STATUSES = (COMMITTED, REJECTED, ERROR, QUARANTINED, ADMISSIBLE, REFUSED)
+
+
+def why(explanation: envelopes.Explanation | None) -> str:
+    """One line of business-terms why, from the same-snapshot
+    explanation: what is missing and which transformations could supply
+    it, or which invariant the proposal would break."""
+    if explanation is None:
+        return ""
+    match explanation.rejection:
+        case None:
+            return "admissible"
+        case envelopes.GateRejection(directly_missing_claims=missing, gate=gate):
+            parts = [
+                f"missing {claim.rendered}"
+                + (
+                    f" (supplied by {', '.join(claim.candidate_supplier_transformations)})"
+                    if claim.candidate_supplier_transformations
+                    else ""
+                )
+                for claim in missing
+            ]
+            return "; ".join(parts) or f"gate {gate} refused"
+        case envelopes.InvariantRejection(name=name):
+            return f"would break invariant {name}"
+        case envelopes.ErrorRejection(message=message):
+            return message
 
 
 @dataclass(frozen=True)

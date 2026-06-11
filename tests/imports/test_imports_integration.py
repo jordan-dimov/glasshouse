@@ -78,9 +78,15 @@ def test_trades_import_partial_admission(
         ["import-trades", str(csv_file), "--org", ORG, "--actor", "alice", "--project"], capsys
     )
 
-    # 2 committed, the in-file duplicate lawfully rejected, the bad
-    # direction quarantined - and the exit code was 0 throughout.
-    assert "4 processed: 2 committed, 1 rejected, 0 error, 1 quarantined" in out
+    # 2 committed, the in-file duplicate lawfully rejected with the
+    # gate's why attached, the bad direction quarantined - and the
+    # exit code was 0 throughout.
+    assert "2 committed" in out
+    assert "1 rejected" in out
+    assert "1 quarantined" in out
+    # The duplicate trips a negative gate (nothing is "missing");
+    # the why names the gate that refused.
+    assert "gate not TradeCaptured" in out
     # The inline projector mode rode the same invocation. The count is
     # whatever was unprojected (this module makes no ordering promises),
     # so the claim is that the catch-up happened, not its size.
@@ -89,6 +95,52 @@ def test_trades_import_partial_admission(
     client = GlasshouseClient(str(MODEL_FILE), DB)
     captured = {row.trade for row in client.read(models.TradeCapturedClaim)}
     assert captured == {"T-1", "T-2"}
+
+
+def test_preview_as_an_ungranted_actor_refuses_everything_and_commits_nothing(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # The workbench's validate step, ledger-true: mallory holds no
+    # capability claims, so every honest row is refused with the
+    # missing grant named and its supplier suggested - and the ledger
+    # is untouched.
+    csv_file = tmp_path / "preview.csv"
+    csv_file.write_text(TRADES)
+    out = _run(
+        ["import-trades", str(csv_file), "--org", ORG, "--actor", "mallory", "--preview"], capsys
+    )
+    assert "3 refused" in out
+    assert "1 quarantined" in out
+    assert "missing MayCaptureTrade(mallory" in out
+    assert "supplied by grant_capture_authority" in out
+
+    client = GlasshouseClient(str(MODEL_FILE), DB)
+    assert all(row.trade != "T-3" for row in client.read(models.TradeCapturedClaim))
+
+
+def test_curves_preview_dry_runs_registration(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # No payload is stored by a preview; an ungranted actor is refused
+    # with the missing grant named.
+    csv_file = tmp_path / "curves-preview.csv"
+    csv_file.write_text(
+        "\n".join(
+            [
+                "market,as_of,version,period_start,price",
+                f"{MARKET},2026-06-12,crv-preview,2026-07-01T00:00:00Z,92",
+                f"{MARKET},2026-06-12,crv-preview,2026-07-01T01:00:00Z,90",
+            ]
+        )
+    )
+    out = _run(
+        ["import-curves", str(csv_file), "--org", ORG, "--actor", "mallory", "--preview"], capsys
+    )
+    assert "1 refused" in out
+    assert "missing MayRegisterCurve(mallory" in out
+
+    client = GlasshouseClient(str(MODEL_FILE), DB)
+    assert all(row.version != "crv-preview" for row in client.read(models.CurveRegisteredClaim))
 
 
 def test_curves_import_and_the_immutable_rerun(
