@@ -7,14 +7,13 @@ immutability stops re-registration before the ledger is asked).
 Same gates and provisioning contract as the other integration legs."""
 
 import re
-from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
 
 from glasshouse import cli
 from glasshouse.commit import MODEL_FILE, Committed, GlasshouseClient, models
-from tests.support import BINARY, DB, needs_live_stack, provision
+from tests.support import DB, needs_live_stack, provision
 
 ORG, BOOK, MARKET = "acme-energy", "spec-de", "de-power"
 
@@ -45,9 +44,8 @@ pytestmark = needs_live_stack
 
 
 @pytest.fixture(scope="module", autouse=True)
-def provisioned(monkeypatch_module: pytest.MonkeyPatch) -> None:
+def provisioned(cli_binary: None) -> None:
     provision()
-    monkeypatch_module.setenv("GLASSHOUSE_MORPHOLOG_BIN", str(BINARY))
     client = GlasshouseClient(str(MODEL_FILE), DB)
     assert client.init().status == "initialised"
     for grant, actor in (
@@ -55,13 +53,6 @@ def provisioned(monkeypatch_module: pytest.MonkeyPatch) -> None:
         (models.GrantCurveAuthorityRequest(principal="carol", org=ORG, market=MARKET), "bootstrap"),
     ):
         assert isinstance(client.submit(grant, actor=actor), Committed)
-
-
-@pytest.fixture(scope="module")
-def monkeypatch_module() -> Iterator[pytest.MonkeyPatch]:
-    patcher = pytest.MonkeyPatch()
-    yield patcher
-    patcher.undo()
 
 
 def _run(args: list[str], capsys: pytest.CaptureFixture[str]) -> str:

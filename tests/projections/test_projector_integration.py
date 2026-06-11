@@ -40,7 +40,7 @@ T0 = dt.datetime(2026, 7, 1, tzinfo=dt.UTC)
 TABLES = (blotter_trade, position_hour, trade_valuation, projection_progress)
 
 
-pytestmark = needs_live_stack
+pytestmark = [needs_live_stack, pytest.mark.usefixtures("cli_binary")]
 
 
 @pytest.fixture(scope="module")
