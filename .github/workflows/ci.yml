@@ -5,7 +5,13 @@ on:
     branches: [main]
   pull_request:
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
+  # The pure leg: format, lint, types, and the tests that need no
+  # binary or database (integration modules skip cleanly).
   checks:
     runs-on: ubuntu-latest
     strategy:
@@ -21,13 +27,51 @@ jobs:
       - run: uv run ruff check .
       - run: uv run mypy
       - run: uv run pytest
-      # The client drift contract needs the morpholog binary, so both
-      # legs run in the env-gated integration tests: regenerate the
-      # committed morpholog_client package and diff, and assert the
-      # committed MODEL_HASH against `morpholog hash`.
 
-  # The database-backed integration legs exist (needle lifecycle, the
-  # Monday-morning loop, the client drift check) but are env-gated: they
-  # need the morpholog binary, which CI does not build. A job that
-  # builds a pinned morpholog ref against a Postgres {17, 18} x
-  # TimescaleDB service matrix is the planned CI upgrade.
+  # The live leg: a pinned morpholog build against the same TimescaleDB
+  # image compose uses, running the FULL suite - the needle lifecycle,
+  # the client drift check (regenerate-and-diff + the model hash
+  # assertion), imports through the real batch surface, the projector's
+  # rebuild-from-zero equality - with the coverage gate on top.
+  #
+  # MORPHOLOG_REF pins the substrate; re-pin it in the same PR that
+  # adopts a new upstream surface, never silently.
+  integration:
+    runs-on: ubuntu-latest
+    env:
+      MORPHOLOG_REF: 68f9f9b705feb6679c48962f9f69d1e92827c8f9
+    services:
+      postgres:
+        image: timescale/timescaledb:latest-pg17
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: morpholog_scratch
+        ports:
+          - "5432:5432"
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+        with:
+          repository: jordan-dimov/morpholog
+          ref: ${{ env.MORPHOLOG_REF }}
+          path: morpholog
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: morpholog
+      - run: cargo build --release --manifest-path morpholog/Cargo.toml
+      - uses: astral-sh/setup-uv@v5
+        with:
+          python-version: "3.13"
+      - run: uv sync --dev
+      - name: Full suite, integration legs live, coverage gated
+        env:
+          GLASSHOUSE_MORPHOLOG_REPO: ${{ github.workspace }}/morpholog
+          GLASSHOUSE_TEST_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/morpholog_scratch
+        run: uv run pytest --cov --cov-fail-under=95
