@@ -35,7 +35,8 @@ def create_app() -> FastAPI:
             checks["morpholog"] = "ok" if result.returncode == 0 else "error"
 
         # Database connectivity and a commit-layer round-trip join this
-        # check as soon as the commit adapter exists (v0 needle).
+        # check when the API boundary wires a GlasshouseClient (the API
+        # milestone; the commit zone itself is built).
         if any(v != "ok" for v in checks.values()):
             response.status_code = 503
         return checks

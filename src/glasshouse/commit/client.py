@@ -11,6 +11,7 @@ subclass deletes the day the generated surface grows the parameter.
 
 from __future__ import annotations
 
+import os
 from typing import ClassVar, Protocol, Self
 
 from glasshouse.commit.morpholog_client.adapter import Morpholog, MorphologError
@@ -28,7 +29,14 @@ class NamedClaimModel(Protocol):
 
 
 class GlasshouseClient(Morpholog):
-    """The generated client, extended with the as-of typed read."""
+    """The generated client, extended with the as-of typed read and
+    Glasshouse's own binary discovery (`GLASSHOUSE_MORPHOLOG_BIN`,
+    falling back to the generated client's `MORPHOLOG_BIN`-then-PATH
+    resolution), so one env var name works across the app, the docs
+    and the generated layer."""
+
+    def __init__(self, file: str, database_url: str, binary: str | None = None) -> None:
+        super().__init__(file, database_url, binary or os.environ.get("GLASSHOUSE_MORPHOLOG_BIN"))
 
     def read[C: NamedClaimModel](self, model: type[C], as_of: str | None = None) -> list[C]:
         """Read one predicate back through the named surface, decoded by

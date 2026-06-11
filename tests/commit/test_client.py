@@ -6,6 +6,8 @@ import datetime as dt
 import json
 from pathlib import Path
 
+import pytest
+
 from glasshouse.commit import GlasshouseClient, models
 
 NAMED_OFFICIAL_CURVE = json.dumps(
@@ -56,3 +58,17 @@ def test_read_as_of_reaches_the_cli(tmp_path: Path) -> None:
     client(tmp_path).read(models.OfficialCurveClaim, as_of="0197-transition-id")
     argv = (tmp_path / "argv.txt").read_text().splitlines()
     assert argv[argv.index("--as-of") + 1] == "0197-transition-id"
+
+
+def test_binary_discovery_honours_the_glasshouse_env_var(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # One name across app, docs and commit zone: GLASSHOUSE_MORPHOLOG_BIN
+    # wins when no binary is passed; an explicit argument still wins over
+    # the environment.
+    monkeypatch.setenv("GLASSHOUSE_MORPHOLOG_BIN", "/opt/glasshouse/morpholog")
+    assert GlasshouseClient("m.morph", "postgres:///x").binary == "/opt/glasshouse/morpholog"
+    assert GlasshouseClient("m.morph", "postgres:///x", binary="explicit").binary == "explicit"
+    monkeypatch.delenv("GLASSHOUSE_MORPHOLOG_BIN")
+    monkeypatch.setenv("MORPHOLOG_BIN", "/usr/local/bin/morpholog")
+    assert GlasshouseClient("m.morph", "postgres:///x").binary == "/usr/local/bin/morpholog"

@@ -26,5 +26,8 @@ jobs:
       # committed morpholog_client package and diff, and assert the
       # committed MODEL_HASH against `morpholog hash`.
 
-  # A Postgres {17, 18} x TimescaleDB service matrix joins this workflow
-  # when the first database-backed tests land (v0 needle).
+  # The database-backed integration legs exist (needle lifecycle, the
+  # Monday-morning loop, the client drift check) but are env-gated: they
+  # need the morpholog binary, which CI does not build. A job that
+  # builds a pinned morpholog ref against a Postgres {17, 18} x
+  # TimescaleDB service matrix is the planned CI upgrade.

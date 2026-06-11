@@ -63,3 +63,9 @@ ignore_errors = true
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-q"
+filterwarnings = [
+    # Upstream noise: starlette's testclient warns about its own httpx
+    # dependency when fastapi imports it; the migration (httpx -> httpx2)
+    # is starlette/fastapi's to make, not ours.
+    "ignore::starlette.exceptions.StarletteDeprecationWarning",
+]
