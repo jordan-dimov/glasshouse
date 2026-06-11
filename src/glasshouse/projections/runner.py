@@ -14,11 +14,16 @@ import threading
 
 import sqlalchemy as sa
 
+from glasshouse.commit import GlasshouseClient
 from glasshouse.projections.projector import catch_up
 
 
 def start_projector_thread(
-    engine: sa.Engine, *, interval_seconds: float = 1.0, stop: threading.Event | None = None
+    client: GlasshouseClient,
+    engine: sa.Engine,
+    *,
+    interval_seconds: float = 1.0,
+    stop: threading.Event | None = None,
 ) -> tuple[threading.Thread, threading.Event]:
     """The background-thread mode: a daemon looping `catch_up` until the
     returned event is set."""
@@ -26,7 +31,7 @@ def start_projector_thread(
 
     def _loop() -> None:
         while not stop_event.is_set():
-            catch_up(engine)
+            catch_up(client, engine)
             stop_event.wait(interval_seconds)
 
     thread = threading.Thread(target=_loop, name="glasshouse-projector", daemon=True)
@@ -34,12 +39,12 @@ def start_projector_thread(
     return thread, stop_event
 
 
-def follow(engine: sa.Engine, *, interval_seconds: float = 1.0) -> None:
+def follow(client: GlasshouseClient, engine: sa.Engine, *, interval_seconds: float = 1.0) -> None:
     """The worker mode: poll `catch_up` until interrupted."""
     pace = threading.Event()
     try:
         while True:
-            catch_up(engine)
+            catch_up(client, engine)
             pace.wait(interval_seconds)
     except KeyboardInterrupt:
         return

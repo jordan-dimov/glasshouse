@@ -105,7 +105,7 @@ def monday(morpholog: GlasshouseClient, engine: sa.Engine, store: CurveStore) ->
         value_trade(morpholog, store, actor="risk-engine", org=ORG, book=BOOK, trade="T-001"),
         Committed,
     )
-    catch_up(engine)
+    catch_up(morpholog, engine)
 
 
 def _leg(report: Any, name: str) -> Any:
@@ -120,7 +120,7 @@ def test_a_consistent_stack_verifies_with_four_ok_legs(
     store: CurveStore,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    catch_up(engine)  # current from any prior state
+    catch_up(morpholog, engine)  # current from any prior state
     report = verify(morpholog, engine, store)
     assert report.ok, report.render()
     assert [leg.name for leg in report.legs] == ["model", "ledger", "projections", "payloads"]
@@ -134,7 +134,7 @@ def test_a_consistent_stack_verifies_with_four_ok_legs(
 def test_a_tampered_payload_fails_the_payload_leg(
     monday: None, morpholog: GlasshouseClient, engine: sa.Engine, store: CurveStore
 ) -> None:
-    catch_up(engine)
+    catch_up(morpholog, engine)
     tamper = sa.text(
         "UPDATE curve_payload_period SET price = price + :delta "
         "WHERE curve_version = 'crv-v1' AND org = :org "
@@ -158,7 +158,7 @@ def test_a_tampered_payload_fails_the_payload_leg(
 def test_missing_and_orphaned_payloads_are_told_apart(
     monday: None, morpholog: GlasshouseClient, engine: sa.Engine, store: CurveStore
 ) -> None:
-    catch_up(engine)
+    catch_up(morpholog, engine)
     # An orphan (content no claim anchors) is a warning, not divergence.
     with engine.begin() as connection:
         connection.execute(
@@ -217,7 +217,7 @@ def test_missing_and_orphaned_payloads_are_told_apart(
 def test_a_tampered_projection_fails_the_projection_leg(
     monday: None, morpholog: GlasshouseClient, engine: sa.Engine, store: CurveStore
 ) -> None:
-    catch_up(engine)
+    catch_up(morpholog, engine)
     tamper = sa.text("UPDATE blotter_trade SET quantity = quantity + :delta WHERE trade = 'T-001'")
     with engine.begin() as connection:
         connection.execute(tamper, {"delta": 1})

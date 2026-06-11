@@ -61,7 +61,7 @@ def test_a_missing_file_exits_one(tmp_path: Path, capsys: pytest.CaptureFixture[
 def test_project_follow_enters_the_worker_loop(monkeypatch: pytest.MonkeyPatch) -> None:
     entered: list[float] = []
     monkeypatch.setattr(
-        cli, "follow", lambda engine, *, interval_seconds: entered.append(interval_seconds)
+        cli, "follow", lambda client, engine, *, interval_seconds: entered.append(interval_seconds)
     )
     code = cli.main(["project", "--follow", "--interval", "0.5", "--database-url", "postgres:///x"])
     assert code == 0

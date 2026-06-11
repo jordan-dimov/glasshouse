@@ -98,11 +98,12 @@ def main(argv: list[str] | None = None) -> int:
             return 0 if verdict.ok else 1
 
         if args.command == "project":
+            client = GlasshouseClient(str(MODEL_FILE), args.database_url)
             engine = sa.create_engine(engine_url(args.database_url))
             if args.follow:
-                follow(engine, interval_seconds=args.interval)
+                follow(client, engine, interval_seconds=args.interval)
                 return 0
-            print(f"applied {catch_up(engine)} transition(s)")
+            print(f"applied {catch_up(client, engine)} transition(s)")
             return 0
 
         text = args.file.read_text()
@@ -120,7 +121,7 @@ def main(argv: list[str] | None = None) -> int:
         print(report.render())
         if args.project:
             engine = sa.create_engine(engine_url(args.database_url))
-            print(f"projected: applied {catch_up(engine)} transition(s)")
+            print(f"projected: applied {catch_up(client, engine)} transition(s)")
     except (ImportFormatError, MorphologError, OSError) as failure:
         print(f"error: {failure}", file=sys.stderr)
         return 1

@@ -140,13 +140,16 @@ def _rows(engine: sa.Engine) -> dict[str, list[tuple[object, ...]]]:
 
 
 def test_the_projector_replays_the_monday_morning_loop(
-    history: tuple[int, str], engine: sa.Engine, capsys: pytest.CaptureFixture[str]
+    history: tuple[int, str],
+    morpholog: GlasshouseClient,
+    engine: sa.Engine,
+    capsys: pytest.CaptureFixture[str],
 ) -> None:
     transitions, capture_tid = history
     # The deterministic entry from any prior read-side state: replay
     # from zero, then prove there is nothing left (exactly once).
-    assert rebuild(engine) == transitions
-    assert catch_up(engine) == 0
+    assert rebuild(morpholog, engine) == transitions
+    assert catch_up(morpholog, engine) == 0
 
     rows = _rows(engine)
     (blotter,) = rows["blotter_trade"]
@@ -166,11 +169,11 @@ def test_the_projector_replays_the_monday_morning_loop(
 
     # The in-memory replay (verify's projection leg) lands on exactly
     # the rows the SQL applier produced - memory and SQL agree.
-    assert accumulate(engine) == {name: set(table_rows) for name, table_rows in rows.items()}
+    assert accumulate(morpholog) == {name: set(table_rows) for name, table_rows in rows.items()}
 
     # The read-side law: wipe and replay from zero lands byte-for-byte
     # on the same read state (the seed of `glasshouse verify`).
-    assert rebuild(engine) == transitions
+    assert rebuild(morpholog, engine) == transitions
     assert _rows(engine) == rows
 
     # The worker's one-shot through the CLI seam.
@@ -179,14 +182,14 @@ def test_the_projector_replays_the_monday_morning_loop(
 
 
 def test_concurrent_projectors_serialise_and_apply_exactly_once(
-    history: tuple[int, str], engine: sa.Engine
+    history: tuple[int, str], morpholog: GlasshouseClient, engine: sa.Engine
 ) -> None:
     # Two workers racing over the same log: the advisory lock plus the
     # cursor-in-transaction make application exactly-once, not merely
     # PK-protected. Bring the read side current, wipe, and let them
     # race over the full history; both must return cleanly.
     transitions, _ = history
-    catch_up(engine)
+    catch_up(morpholog, engine)
     before = _rows(engine)
     with engine.begin() as connection:
         for table in TABLES:
@@ -197,7 +200,7 @@ def test_concurrent_projectors_serialise_and_apply_exactly_once(
 
     def worker() -> None:
         try:
-            applied.append(catch_up(engine))
+            applied.append(catch_up(morpholog, engine))
         except BaseException as failure:
             errors.append(failure)
 

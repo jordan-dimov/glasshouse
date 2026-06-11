@@ -79,8 +79,8 @@ def _ledger_leg(client: GlasshouseClient) -> Leg:
     )
 
 
-def _projection_leg(engine: sa.Engine) -> Leg:
-    expected = accumulate(engine)
+def _projection_leg(client: GlasshouseClient, engine: sa.Engine) -> Leg:
+    expected = accumulate(client)
     problems = []
     with engine.connect() as connection:
         for name, expected_rows in expected.items():
@@ -144,7 +144,7 @@ def verify(client: GlasshouseClient, engine: sa.Engine, store: CurveStore) -> Ve
         (
             _model_leg(client),
             _ledger_leg(client),
-            _projection_leg(engine),
+            _projection_leg(client, engine),
             _payload_leg(client, store),
         )
     )

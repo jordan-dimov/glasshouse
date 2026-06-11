@@ -40,7 +40,7 @@ jobs:
   integration:
     runs-on: ubuntu-latest
     env:
-      MORPHOLOG_REF: 68f9f9b705feb6679c48962f9f69d1e92827c8f9
+      MORPHOLOG_REF: 5c67dea4878606ee0bfae7b439b5d9a5af17925d
     services:
       postgres:
         image: timescale/timescaledb:latest-pg17
