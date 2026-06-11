@@ -16,7 +16,7 @@ predicates it deliberately ignores are named, and anything outside that
 stop the projector, never quietly corrupt the read side.
 
 Note: the audit table's shape is not yet a pinned upstream surface; this
-projector is the worked example forcing that contract (the ask is
+projector is the worked example forcing that contract (morpholog#136,
 recorded in docs/morpholog-integration-contract.md section 12).
 """
 
