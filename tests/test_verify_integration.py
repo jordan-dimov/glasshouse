@@ -4,6 +4,7 @@ restored. The committed history is a module fixture; tests are
 state-based and order-independent (tampers restore in finally)."""
 
 import datetime as dt
+from collections.abc import Iterator
 from decimal import Decimal
 from typing import Any
 
@@ -23,6 +24,20 @@ ORG, BOOK, MARKET = "acme-energy", "spec-de", "de-power"
 T0 = dt.datetime(2026, 7, 1, tzinfo=dt.UTC)
 
 pytestmark = needs_live_stack
+
+
+@pytest.fixture(scope="module")
+def monkeypatch_module() -> Iterator[pytest.MonkeyPatch]:
+    patcher = pytest.MonkeyPatch()
+    yield patcher
+    patcher.undo()
+
+
+@pytest.fixture(scope="module", autouse=True)
+def cli_environment(monkeypatch_module: pytest.MonkeyPatch) -> None:
+    # The CLI builds its own client; point its binary discovery at the
+    # test stack's binary (CI has no morpholog on PATH).
+    monkeypatch_module.setenv("GLASSHOUSE_MORPHOLOG_BIN", str(BINARY))
 
 
 @pytest.fixture(scope="module")
