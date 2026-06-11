@@ -248,16 +248,30 @@ def catch_up(client: GlasshouseClient, engine: sa.Engine) -> int:
             applied += len(page)
 
 
-def accumulate(client: GlasshouseClient) -> dict[str, set[tuple[object, ...]]]:
-    """Replay the whole tail through the pure folds into in-memory row
-    sets matching the projection tables' column order - the
-    non-destructive half of `glasshouse verify`'s projection leg.
-    Reads the blessed tail and writes nothing."""
+def accumulate(
+    client: GlasshouseClient, up_to: str | None = None
+) -> dict[str, set[tuple[object, ...]]]:
+    """Replay the tail through the pure folds into in-memory row sets
+    matching the projection tables' column order - the non-destructive
+    half of `glasshouse verify`'s projection leg. Reads the blessed
+    tail and writes nothing.
+
+    With `up_to` (a transition id), folding stops after that
+    transition: the caller is verifying tables that claim to reflect
+    the log exactly up to their cursor, and anything beyond it is the
+    projector's lag, not divergence. A `up_to` the tail does not
+    contain raises `ProjectionError` - a cursor naming an unknown
+    transition is corruption, never lag (committed-row visibility is
+    monotonic, so a previously applied transition cannot vanish from a
+    later snapshot)."""
     blotter: dict[tuple[str, str], tuple[object, ...]] = {}
     positions: dict[tuple[str, str, str, dt.datetime], tuple[Decimal, str]] = {}
     valuations: dict[tuple[str, str, str], tuple[object, ...]] = {}
     cursor: tuple[object, ...] | None = None
+    reached_up_to = up_to is None
     for row in client.audit():
+        if up_to is not None and reached_up_to:
+            break
         fold = fold_transition(row.asserted_claims, row.retracted_claims)
         for trade in fold.blotter:
             term = fold.terms[trade.trade]
@@ -292,6 +306,13 @@ def accumulate(client: GlasshouseClient) -> dict[str, set[tuple[object, ...]]]:
                 row.actor,
             )
         cursor = (CURSOR, row.committed_at, row.transition_id)
+        if row.transition_id == up_to:
+            reached_up_to = True
+    if not reached_up_to:
+        raise ProjectionError(
+            f"the projection cursor names transition {up_to!r}, which the audit tail "
+            "does not contain - the cursor does not describe this ledger"
+        )
     return {
         "blotter_trade": set(blotter.values()),
         "position_hour": {(*key, net, tid) for key, (net, tid) in positions.items()},

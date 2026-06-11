@@ -154,3 +154,14 @@ def test_verify_ledger_refuses_a_non_object_verdict(tmp_path: Path) -> None:
     bridged = GlasshouseClient("model.morph", "postgres:///x", binary=str(binary))
     with pytest.raises(MorphologError, match="non-object verdict"):
         bridged.verify_ledger()
+
+
+def test_the_audit_tail_is_bounded_when_a_timeout_is_set(tmp_path: Path) -> None:
+    sleeper = tmp_path / "fake-morpholog"
+    sleeper.write_text("#!/bin/sh\nsleep 5\n")
+    sleeper.chmod(0o755)
+    bounded = GlasshouseClient(
+        "model.morph", "postgres:///x", binary=str(sleeper), timeout_seconds=0.1
+    )
+    with pytest.raises(MorphologError, match=r"inspect audit timed out after 0\.1"):
+        bounded.audit()

@@ -23,6 +23,7 @@ from glasshouse.compute.curves import HourlyCurve
 from glasshouse.compute.marking import correct_curve_version, register_curve_version, value_trade
 from glasshouse.compute.store import CurveStore
 from glasshouse.projections import (
+    ProjectionError,
     accumulate,
     blotter_trade,
     catch_up,
@@ -215,3 +216,23 @@ def test_concurrent_projectors_serialise_and_apply_exactly_once(
     assert len(applied) == 2
     assert sum(applied) == transitions
     assert _rows(engine) == before
+
+
+def test_accumulate_stops_at_the_cursor_and_refuses_an_unknown_one(
+    history: tuple[int, str], morpholog: GlasshouseClient, engine: sa.Engine
+) -> None:
+    # Up to the first transition (a grant), the expected read side is
+    # empty tables with the cursor at that transition - the projector's
+    # invariant at that point in history.
+    first = morpholog.audit()[0]
+    partial = accumulate(morpholog, up_to=first.transition_id)
+    assert partial["blotter_trade"] == set()
+    assert partial["position_hour"] == set()
+    assert partial["trade_valuation"] == set()
+    ((name, _, tid),) = partial["projection_progress"]
+    assert (name, tid) == ("needle", first.transition_id)
+
+    # A cursor naming a transition the tail does not contain is
+    # corruption, never lag.
+    with pytest.raises(ProjectionError, match="does not describe this ledger"):
+        accumulate(morpholog, up_to="0197-no-such-transition")

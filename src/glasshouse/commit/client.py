@@ -8,7 +8,9 @@ that retired the as-of gap (morpholog#135, delivered in #138):
 
 * the optional operation timeout (morpholog#140, contract section 13):
   unset by default - imports legitimately run long - and set at the
-  API boundary, where a hung binary must become a fast verdict;
+  API boundary, where a hung binary must become a fast verdict; the
+  override of `_audit_lines` extends the same bound to the audit tail,
+  which the generated client runs outside `_invoke`;
 * `run_batch(..., explain_on_reject=)`: the CLI composes the flag with
   `--batch` and the envelope already parses per-row explanations, but
   the generated method exposes neither the flag nor a timeout
@@ -127,6 +129,33 @@ class GlasshouseClient(Morpholog):
         if not isinstance(verdict, dict):
             raise MorphologError(f"verify returned a non-object verdict: {verdict!r}")
         return verdict
+
+    def _audit_lines(self, after: str | None, named: bool) -> list:  # type: ignore[type-arg]
+        """The generated `_audit_lines`, plus the timeout (the #140
+        family: the tail deliberately bypasses `_invoke`, so the
+        `_invoke` override cannot bound it). An empty tail stays a
+        lawful empty list; discrimination stays on the exit code."""
+        argv = [self.binary, "inspect", "audit"]
+        if after is not None:
+            argv.extend(["--after", after])
+        if named:
+            argv.extend(["--named", self.file])
+        argv.extend(["--database-url", self.database_url])
+        try:
+            proc = subprocess.run(
+                argv,
+                capture_output=True,
+                text=True,
+                timeout=self.timeout_seconds,
+                check=False,
+            )
+        except subprocess.TimeoutExpired:
+            raise MorphologError(f"inspect audit timed out after {self.timeout_seconds}s") from None
+        if proc.returncode != 0:
+            raise MorphologError(
+                f"inspect audit failed (exit {proc.returncode}):\n{proc.stderr.strip()}"
+            )
+        return [json.loads(line) for line in proc.stdout.splitlines() if line.strip()]
 
     def read[C: NamedClaimModel](self, model: type[C], as_of: str | None = None) -> list[C]:
         """Read one predicate back through the named surface, decoded by
