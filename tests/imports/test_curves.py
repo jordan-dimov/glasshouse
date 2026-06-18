@@ -77,7 +77,12 @@ def test_header_mismatch_refuses_the_whole_file() -> None:
         parse_curves(HEADER.replace("as_of", "when") + "\n")
 
 
-cells = st.text(alphabet=st.characters(min_codepoint=32, max_codepoint=126), max_size=8)
+# Slash-free cells so the "market/as_of/version" ref splits back into the
+# group identity unambiguously.
+cells = st.text(
+    alphabet=st.characters(min_codepoint=32, max_codepoint=126, exclude_characters="/"),
+    max_size=8,
+)
 curve_rows = st.lists(st.fixed_dictionaries(dict.fromkeys(COLUMNS, cells)), max_size=12)
 
 
@@ -85,12 +90,19 @@ curve_rows = st.lists(st.fixed_dictionaries(dict.fromkeys(COLUMNS, cells)), max_
 def test_every_curve_group_is_accounted_for_exactly_once(rows: list[dict[str, str]]) -> None:
     # A curve is the unit, not a row: every distinct (market, as_of,
     # version) group becomes exactly one outcome (a built curve or a
-    # quarantine), and no group is dropped on the way.
+    # quarantine), by identity - nothing dropped, nothing duplicated, not
+    # merely the right count.
     buffer = io.StringIO()
     writer = csv.DictWriter(buffer, fieldnames=sorted(COLUMNS))
     writer.writeheader()
     writer.writerows(rows)
 
     curves, quarantined = parse_curves(buffer.getvalue())
-    groups = {(row["market"], row["as_of"], row["version"]) for row in rows}
-    assert len(curves) + len(quarantined) == len(groups)
+    expected = {(row["market"], row["as_of"], row["version"]) for row in rows}
+    built = {ref for ref, *_ in curves}
+    quarantined_refs = {outcome.ref for outcome in quarantined}
+    actual = {tuple(ref.split("/", 2)) for ref in built | quarantined_refs}
+    assert actual == expected
+    # Disjoint by construction (one outcome per group); the count proves
+    # no group landed in both.
+    assert len(built) + len(quarantined_refs) == len(expected)

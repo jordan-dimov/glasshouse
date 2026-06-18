@@ -1,6 +1,7 @@
 """Shared gating and provisioning for the live integration tests: a
-morpholog binary and a disposable database, or a clean skip (CI has
-neither).
+morpholog binary and a disposable database, or a clean skip in local and
+pure-test runs (CI's integration leg builds both and sets
+GLASSHOUSE_REQUIRE_LIVE, so there the skip becomes a failure).
 
     GLASSHOUSE_MORPHOLOG_REPO    default ~/dev/morpholog (for the binary)
     GLASSHOUSE_TEST_DATABASE_URL default postgres:///morpholog_scratch

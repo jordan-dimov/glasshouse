@@ -2,6 +2,7 @@
 folds do not honestly cover. No database anywhere in this module."""
 
 import datetime as dt
+from collections import defaultdict
 from decimal import Decimal
 
 import pytest
@@ -140,15 +141,22 @@ def test_the_fold_conserves_trades_and_signed_hours(
     specs: list[tuple[str, str, Decimal, int]],
 ) -> None:
     # The read-side law as algebra: one blotter row per capture, one
-    # position-hour per delivered hour, and the net MW is exactly the sum
-    # of each trade's signed quantity over its hours - whatever the book.
+    # position-hour per delivered hour, and the net MW correct FOR EACH
+    # hour - not merely in total, which a fold that filed the right MW
+    # under the wrong hour would also satisfy.
     fold = fold_transition(_claims(specs), [])
     assert len(fold.blotter) == len(specs)
     assert {trade.trade for trade in fold.blotter} == {spec[0] for spec in specs}
     assert len(fold.positions) == sum(hours for *_, hours in specs)
-    assert sum(delta.delta_mw for delta in fold.positions) == sum(
-        SIGN[direction] * quantity * hours for _, direction, quantity, hours in specs
-    )
+
+    actual: dict[dt.datetime, Decimal] = defaultdict(lambda: Decimal(0))
+    for delta in fold.positions:
+        actual[delta.period_start] += delta.delta_mw
+    expected: dict[dt.datetime, Decimal] = defaultdict(lambda: Decimal(0))
+    for _trade, direction, quantity, hours in specs:
+        for hour in range(hours):
+            expected[T0 + dt.timedelta(hours=hour)] += SIGN[direction] * quantity
+    assert actual == expected
 
 
 def test_the_wire_shape_decodes_into_the_fold() -> None:
