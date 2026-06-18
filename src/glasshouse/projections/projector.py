@@ -35,12 +35,15 @@ import sqlalchemy as sa
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 
 from glasshouse.commit import GlasshouseClient, envelopes, models
+from glasshouse.logging import get_logger
 from glasshouse.projections.tables import (
     blotter_trade,
     position_hour,
     projection_progress,
     trade_valuation,
 )
+
+log = get_logger("glasshouse.projector")
 
 HOUR = dt.timedelta(hours=1)
 CURSOR = "needle"
@@ -233,6 +236,14 @@ def catch_up(client: GlasshouseClient, engine: sa.Engine) -> int:
                 fold = fold_transition(row.asserted_claims, row.retracted_claims)
                 _apply(connection, fold, row.committed_at, row.transition_id, row.actor)
             last = page[-1]
+            # The exactly-once application made observable: one event per
+            # locked page, carrying the cursor it advanced to.
+            log.info(
+                "projector.page_applied",
+                transitions=len(page),
+                resumed_from=cursor,
+                cursor=last.transition_id,
+            )
             advance = pg_insert(projection_progress).values(
                 name=CURSOR, committed_at=last.committed_at, transition_id=last.transition_id
             )
@@ -324,7 +335,10 @@ def accumulate(
 def rebuild(client: GlasshouseClient, engine: sa.Engine) -> int:
     """The read-side law as a callable: delete every projection row and
     replay the tail from zero. Returns the number of transitions applied."""
+    log.warning("projector.rebuild_started")
     with engine.begin() as connection:
         for table in (blotter_trade, position_hour, trade_valuation, projection_progress):
             connection.execute(sa.delete(table))
-    return catch_up(client, engine)
+    applied = catch_up(client, engine)
+    log.warning("projector.rebuild_complete", transitions=applied)
+    return applied

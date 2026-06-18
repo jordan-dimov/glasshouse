@@ -15,7 +15,10 @@ import threading
 import sqlalchemy as sa
 
 from glasshouse.commit import GlasshouseClient
+from glasshouse.logging import get_logger
 from glasshouse.projections.projector import catch_up
+
+log = get_logger("glasshouse.projector")
 
 
 def start_projector_thread(
@@ -36,15 +39,18 @@ def start_projector_thread(
 
     thread = threading.Thread(target=_loop, name="glasshouse-projector", daemon=True)
     thread.start()
+    log.info("projector.thread_started", interval_seconds=interval_seconds)
     return thread, stop_event
 
 
 def follow(client: GlasshouseClient, engine: sa.Engine, *, interval_seconds: float = 1.0) -> None:
     """The worker mode: poll `catch_up` until interrupted."""
     pace = threading.Event()
+    log.info("projector.follow_started", interval_seconds=interval_seconds)
     try:
         while True:
             catch_up(client, engine)
             pace.wait(interval_seconds)
     except KeyboardInterrupt:
+        log.info("projector.follow_stopped")
         return

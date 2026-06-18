@@ -6,28 +6,32 @@ readme = "README.md"
 license = "Apache-2.0"
 authors = [{ name = "Jordan Dimov", email = "jdimov@a115.co.uk" }]
 requires-python = ">=3.13"
+# Floors state the majors the code is actually written against, not the
+# oldest that once resolved: the lock has long carried these lines
+# (structlog 26, mypy 2, pytest 9), and a lowest-resolution install must
+# not silently pull a pre-major release the config no longer fits.
 dependencies = [
-    "fastapi>=0.115",
+    "fastapi>=0.136",
     "uvicorn[standard]>=0.49.0",
-    "pydantic>=2.10",
-    "pydantic-settings>=2.7",
-    "sqlalchemy>=2.0.36",
+    "pydantic>=2.13",
+    "pydantic-settings>=2.14",
+    "sqlalchemy>=2.0.50",
     "psycopg[binary,pool]>=3.3.4",
-    "alembic>=1.14",
-    "structlog>=24.4",
+    "alembic>=1.18",
+    "structlog>=26.1",
     "jinja2>=3.1",
     "python-multipart>=0.0.20",
 ]
 
 [dependency-groups]
 dev = [
-    "pytest>=8.3",
-    "pytest-cov>=6.0",
-    "pytest-randomly>=3.16",
-    "hypothesis>=6.120",
+    "pytest>=9.0",
+    "pytest-cov>=7.0",
+    "pytest-randomly>=4.0",
+    "hypothesis>=6.155",
     "httpx>=0.28",
-    "ruff>=0.15.17",
-    "mypy>=1.14",
+    "ruff>=0.15.18",
+    "mypy>=2.1",
 ]
 
 [build-system]

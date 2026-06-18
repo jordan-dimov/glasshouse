@@ -34,6 +34,9 @@ from glasshouse.imports.report import (
     RowOutcome,
     why,
 )
+from glasshouse.logging import get_logger
+
+log = get_logger("glasshouse.imports")
 
 COLUMNS = frozenset(
     {
@@ -162,7 +165,17 @@ def import_trades(
             # CSV rows; map it back to the file's own line number.
             line, _ = accepted[receipt.row - 1]
             outcomes.append((line, _receipt_outcome(f"line {line}", receipt.outcome)))
-    return ImportReport(tuple(outcome for _, outcome in sorted(outcomes, key=lambda o: o[0])))
+    report = ImportReport(tuple(outcome for _, outcome in sorted(outcomes, key=lambda o: o[0])))
+    log.info(
+        "imports.trades_imported",
+        org=org,
+        actor=actor,
+        committed=report.committed,
+        rejected=report.rejected,
+        errored=report.errored,
+        quarantined=report.quarantined,
+    )
+    return report
 
 
 def preview_trades(client: GlasshouseClient, text: str, *, org: str, actor: str) -> ImportReport:

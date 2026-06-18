@@ -37,6 +37,9 @@ from glasshouse.imports.report import (
     why,
 )
 from glasshouse.imports.trades import ImportFormatError
+from glasshouse.logging import get_logger
+
+log = get_logger("glasshouse.imports")
 
 COLUMNS = frozenset({"market", "as_of", "version", "period_start", "price"})
 
@@ -128,7 +131,17 @@ def import_curves(
                 outcomes.append(RowOutcome(ref, COMMITTED, transition_id))
             case envelopes.Rejected(reason=reason):
                 outcomes.append(RowOutcome(ref, REJECTED, reason))
-    return ImportReport(tuple(outcomes))
+    report = ImportReport(tuple(outcomes))
+    log.info(
+        "imports.curves_imported",
+        org=org,
+        actor=actor,
+        committed=report.committed,
+        rejected=report.rejected,
+        errored=report.errored,
+        quarantined=report.quarantined,
+    )
+    return report
 
 
 def preview_curves(client: GlasshouseClient, text: str, *, org: str, actor: str) -> ImportReport:

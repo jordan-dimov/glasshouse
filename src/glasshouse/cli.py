@@ -31,6 +31,7 @@ from glasshouse.imports import (
     preview_curves,
     preview_trades,
 )
+from glasshouse.logging import configure_logging
 from glasshouse.projections import catch_up, follow
 from glasshouse.verify import verify
 
@@ -89,6 +90,7 @@ def _parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> int:
     args = _parser().parse_args(argv)
+    configure_logging(get_settings())
     try:
         if args.command == "verify":
             client = GlasshouseClient(str(MODEL_FILE), args.database_url)

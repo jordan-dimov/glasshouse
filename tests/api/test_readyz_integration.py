@@ -19,6 +19,7 @@ def test_readyz_is_200_when_everything_agrees(monkeypatch: pytest.MonkeyPatch) -
 
     monkeypatch.setenv("GLASSHOUSE_DATABASE_URL", DB)
     monkeypatch.setenv("GLASSHOUSE_MORPHOLOG_BIN", str(BINARY))
-    response = TestClient(create_app()).get("/readyz")
+    with TestClient(create_app()) as client:
+        response = client.get("/readyz")
     assert response.status_code == 200
     assert response.json() == {"morpholog": "ok", "database": "ok", "commit": "ok"}
