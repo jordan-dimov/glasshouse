@@ -4,6 +4,10 @@ neither).
 
     GLASSHOUSE_MORPHOLOG_REPO    default ~/dev/morpholog (for the binary)
     GLASSHOUSE_TEST_DATABASE_URL default postgres:///morpholog_scratch
+    GLASSHOUSE_REQUIRE_LIVE      when set, an absent stack is a failure,
+                                 not a skip (CI sets this; it turns a
+                                 green run that proved nothing into a
+                                 loud one)
 
 The database is disposable by contract: `provision` drops the morpholog
 schema and every app-schema table, then migrates the app schema to head,
@@ -76,7 +80,20 @@ def _database_reachable() -> bool:
     return ok.returncode == 0
 
 
+_binary_present = BINARY.exists()
+_database_ok = _database_reachable()
+_live = _binary_present and _database_ok
+
+if os.environ.get("GLASSHOUSE_REQUIRE_LIVE") and not _live:
+    # The opt-in for anyone who means to exercise the live legs (CI, a
+    # release check): refuse to let them skip unnoticed.
+    raise RuntimeError(
+        "GLASSHOUSE_REQUIRE_LIVE is set but the live stack is incomplete - "
+        f"binary at {BINARY} {'present' if _binary_present else 'MISSING'}, "
+        f"database at {DB} {'reachable' if _database_ok else 'UNREACHABLE'}."
+    )
+
 needs_live_stack = pytest.mark.skipif(
-    not (BINARY.exists() and _database_reachable()),
+    not _live,
     reason=f"needs a morpholog binary at {BINARY} and a database at {DB}",
 )

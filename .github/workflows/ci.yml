@@ -87,4 +87,7 @@ jobs:
         env:
           GLASSHOUSE_MORPHOLOG_REPO: ${{ github.workspace }}/morpholog
           GLASSHOUSE_TEST_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/morpholog_scratch
+          # Refuse to skip the live legs from inside pytest too, not only
+          # the shell preflight above: a green run here must have run them.
+          GLASSHOUSE_REQUIRE_LIVE: "1"
         run: uv run pytest --cov --cov-fail-under=95
