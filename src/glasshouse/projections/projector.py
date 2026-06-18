@@ -236,14 +236,6 @@ def catch_up(client: GlasshouseClient, engine: sa.Engine) -> int:
                 fold = fold_transition(row.asserted_claims, row.retracted_claims)
                 _apply(connection, fold, row.committed_at, row.transition_id, row.actor)
             last = page[-1]
-            # The exactly-once application made observable: one event per
-            # locked page, carrying the cursor it advanced to.
-            log.info(
-                "projector.page_applied",
-                transitions=len(page),
-                resumed_from=cursor,
-                cursor=last.transition_id,
-            )
             advance = pg_insert(projection_progress).values(
                 name=CURSOR, committed_at=last.committed_at, transition_id=last.transition_id
             )
@@ -256,7 +248,16 @@ def catch_up(client: GlasshouseClient, engine: sa.Engine) -> int:
                     },
                 )
             )
-            applied += len(page)
+        # Logged only after the transaction has committed: the exactly-once
+        # application made observable, one event per locked page. An event
+        # logged inside the transaction would lie if the commit rolled back.
+        log.info(
+            "projector.page_applied",
+            transitions=len(page),
+            resumed_from=cursor,
+            cursor=last.transition_id,
+        )
+        applied += len(page)
 
 
 def accumulate(

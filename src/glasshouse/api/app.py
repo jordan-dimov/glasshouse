@@ -31,13 +31,17 @@ def create_app() -> FastAPI:
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         configure_logging(settings)
         log = get_logger("glasshouse.api")
-        app.state.engine = build_engine(settings)
-        app.state.client = build_client(settings)
-        log.info("api.startup", environment=settings.environment)
+        engine = build_engine(settings)
+        # The engine is built before the try, then disposed in the finally
+        # whatever happens after: a client build that failed would
+        # otherwise leak the pool on a half-completed startup.
         try:
+            app.state.engine = engine
+            app.state.client = build_client(settings)
+            log.info("api.startup", environment=settings.environment, version=__version__)
             yield
         finally:
-            app.state.engine.dispose()
+            engine.dispose()
             log.info("api.shutdown")
 
     app = FastAPI(

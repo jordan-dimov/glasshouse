@@ -7,7 +7,14 @@ honours the same name); in the Docker image the binary is baked in at a
 known path.
 """
 
+from typing import Literal
+
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+# dev is local; demo and production are hosted (Render), where logs are
+# operational records and render as JSON lines. An unknown value is
+# refused at settings construction rather than silently treated as dev.
+Environment = Literal["dev", "demo", "production"]
 
 
 class Settings(BaseSettings):
@@ -16,7 +23,7 @@ class Settings(BaseSettings):
     database_url: str = "postgresql://glasshouse:glasshouse@localhost:5432/glasshouse"
     morpholog_bin: str = "morpholog"
     morpholog_timeout_seconds: float = 10.0  # API-boundary operations; imports run unbounded
-    environment: str = "dev"  # dev | demo | production
+    environment: Environment = "dev"
 
 
 def get_settings() -> Settings:

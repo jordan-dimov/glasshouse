@@ -33,9 +33,16 @@ def start_projector_thread(
     stop_event = stop or threading.Event()
 
     def _loop() -> None:
-        while not stop_event.is_set():
-            catch_up(client, engine)
-            stop_event.wait(interval_seconds)
+        try:
+            while not stop_event.is_set():
+                catch_up(client, engine)
+                stop_event.wait(interval_seconds)
+        except Exception:
+            # A daemon thread dying silently is invisible in a hosted
+            # deployment; record the failure before it propagates to the
+            # thread excepthook.
+            log.exception("projector.thread_failed")
+            raise
 
     thread = threading.Thread(target=_loop, name="glasshouse-projector", daemon=True)
     thread.start()
@@ -54,3 +61,6 @@ def follow(client: GlasshouseClient, engine: sa.Engine, *, interval_seconds: flo
     except KeyboardInterrupt:
         log.info("projector.follow_stopped")
         return
+    except Exception:
+        log.exception("projector.follow_failed")
+        raise

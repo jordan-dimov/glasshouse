@@ -46,6 +46,10 @@ uv run python -m glasshouse.cli import-curves curves.csv --org acme --actor caro
 uv run python -m glasshouse.cli project --follow   # the projector as a worker
 ```
 
+### Configuration and logs
+
+Configuration is environment-only (twelve-factor), prefixed `GLASSHOUSE_`: `GLASSHOUSE_DATABASE_URL`, `GLASSHOUSE_MORPHOLOG_BIN`, and `GLASSHOUSE_ENVIRONMENT` (`dev`, `demo` or `production`). Operational logs go to **stderr**, leaving stdout as the CLI's data channel (the import report, the projector count); `dev` renders a readable console line, `demo` and `production` render JSON lines for a log aggregator. The operational log is separate from the governed audit log in the ledger, which stays the product.
+
 ## Licence
 
 Apache 2.0. See [LICENSE](LICENSE).

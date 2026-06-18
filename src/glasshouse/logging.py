@@ -7,10 +7,10 @@ applied, the API starting and stopping, a binary that timed out. The two
 never substitute for each other, and nothing here is a write path to
 governed state.
 
-structlog renders to a readable console in development and to JSON lines
-in production (one event per line, aggregator-ready), keyed off
-`settings.environment` so a deployment changes how logs look without a
-code change. Configuration is process-global and idempotent (structlog's
+structlog renders to a readable console in local development and to JSON
+lines in hosted deployments (one event per line, aggregator-ready),
+keyed off `settings.environment` so a deployment changes how logs look
+without a code change. Configuration is process-global and idempotent (structlog's
 own model): the CLI's `main` and the API's lifespan each call
 `configure_logging` once at startup; everything else takes a bound logger
 through `get_logger` and logs key-value events, never formatted strings.
@@ -40,10 +40,11 @@ def configure_logging(settings: Settings) -> None:
     """Wire structlog once for the running process. Idempotent: a second
     call (a second `create_app` in tests, say) simply re-applies the same
     configuration."""
+    # Hosted environments (demo and production on Render) render JSON lines
+    # for the log aggregator; local development gets the readable console.
+    hosted = settings.environment in ("demo", "production")
     renderer: structlog.types.Processor = (
-        structlog.processors.JSONRenderer()
-        if settings.environment == "production"
-        else structlog.dev.ConsoleRenderer()
+        structlog.processors.JSONRenderer() if hosted else structlog.dev.ConsoleRenderer()
     )
     structlog.configure(
         processors=[
