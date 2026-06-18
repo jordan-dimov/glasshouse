@@ -82,10 +82,14 @@ def _database_reachable() -> bool:
 
 
 _binary_present = BINARY.exists()
-_database_ok = _database_reachable()
+_require_live = bool(os.environ.get("GLASSHOUSE_REQUIRE_LIVE"))
+# Probe the database only when the live stack is plausibly in use (the
+# binary is present) or explicitly demanded: a pure local run with no
+# binary must not spawn psql, let alone wait out its timeout.
+_database_ok = _database_reachable() if (_binary_present or _require_live) else False
 _live = _binary_present and _database_ok
 
-if os.environ.get("GLASSHOUSE_REQUIRE_LIVE") and not _live:
+if _require_live and not _live:
     # The opt-in for anyone who means to exercise the live legs (CI, a
     # release check): refuse to let them skip unnoticed.
     raise RuntimeError(
