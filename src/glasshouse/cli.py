@@ -31,8 +31,11 @@ from glasshouse.imports import (
     preview_curves,
     preview_trades,
 )
+from glasshouse.logging import configure_logging, get_logger
 from glasshouse.projections import catch_up, follow
 from glasshouse.verify import verify
+
+log = get_logger("glasshouse.cli")
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -89,6 +92,7 @@ def _parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> int:
     args = _parser().parse_args(argv)
+    configure_logging(get_settings())
     try:
         if args.command == "verify":
             client = GlasshouseClient(str(MODEL_FILE), args.database_url)
@@ -123,6 +127,15 @@ def main(argv: list[str] | None = None) -> int:
             engine = sa.create_engine(engine_url(args.database_url))
             print(f"projected: applied {catch_up(client, engine)} transition(s)")
     except (ImportFormatError, MorphologError, OSError) as failure:
+        # The whole-command refusal paths (a rejected header, an
+        # unreadable file, a batch abort) get a structured event too, not
+        # only the per-row import summaries that a successful run logs.
+        log.warning(
+            "cli.command_failed",
+            command=args.command,
+            error=type(failure).__name__,
+            detail=str(failure),
+        )
         print(f"error: {failure}", file=sys.stderr)
         return 1
     return 0

@@ -30,6 +30,20 @@ from typing import ClassVar, Protocol, Self
 
 from glasshouse.commit.morpholog_client import envelopes
 from glasshouse.commit.morpholog_client.adapter import Morpholog, MorphologError
+from glasshouse.logging import get_logger
+
+log = get_logger("glasshouse.commit")
+
+
+def _redacted(args: Sequence[str]) -> str:
+    """The invoked command as one string for a log event, with the
+    database URL masked: it carries credentials, and a timeout event must
+    name the operation without leaking the secret into the logs."""
+    parts = list(args)
+    for index, part in enumerate(parts):
+        if part == "--database-url" and index + 1 < len(parts):
+            parts[index + 1] = "***"
+    return " ".join(parts)
 
 
 class NamedClaimModel(Protocol):
@@ -71,6 +85,12 @@ class GlasshouseClient(Morpholog):
                 check=False,
             )
         except subprocess.TimeoutExpired:
+            # A bounded operation that hangs is the API boundary's reason
+            # to exist; record the full operation (URL redacted) before it
+            # becomes a fast 503.
+            log.warning(
+                "commit.timeout", command=_redacted(args), timeout_seconds=self.timeout_seconds
+            )
             raise MorphologError(
                 f"`{' '.join(args)}` timed out after {self.timeout_seconds}s"
             ) from None
@@ -108,6 +128,12 @@ class GlasshouseClient(Morpholog):
                 check=False,
             )
         except subprocess.TimeoutExpired:
+            log.warning(
+                "commit.timeout",
+                command="propose --batch",
+                rows=len(rows),
+                timeout_seconds=self.timeout_seconds,
+            )
             raise MorphologError(f"batch timed out after {self.timeout_seconds}s") from None
         receipts = [
             envelopes.BatchReceipt.from_json(json.loads(line))
@@ -150,6 +176,9 @@ class GlasshouseClient(Morpholog):
                 check=False,
             )
         except subprocess.TimeoutExpired:
+            log.warning(
+                "commit.timeout", command="inspect audit", timeout_seconds=self.timeout_seconds
+            )
             raise MorphologError(f"inspect audit timed out after {self.timeout_seconds}s") from None
         if proc.returncode != 0:
             raise MorphologError(

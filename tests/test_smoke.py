@@ -33,20 +33,21 @@ def fake_binary(tmp_path: Path, exit_code: int) -> Path:
 
 
 def test_healthz() -> None:
-    client = TestClient(create_app())
-    response = client.get("/healthz")
+    with TestClient(create_app()) as client:
+        response = client.get("/healthz")
     assert response.status_code == 200
     assert response.json() == {"status": "ok", "version": __version__}
 
 
 def test_openapi_serves() -> None:
-    client = TestClient(create_app())
-    assert client.get("/openapi.json").status_code == 200
+    with TestClient(create_app()) as client:
+        assert client.get("/openapi.json").status_code == 200
 
 
 def test_readyz_is_503_when_the_binary_is_missing(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("GLASSHOUSE_MORPHOLOG_BIN", "/nonexistent/morpholog")
-    response = TestClient(create_app()).get("/readyz")
+    with TestClient(create_app()) as client:
+        response = client.get("/readyz")
     assert response.status_code == 503
     assert response.json() == {"morpholog": "missing", "database": "error", "commit": "error"}
 
@@ -55,7 +56,8 @@ def test_readyz_reports_a_binary_that_cannot_speak(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setenv("GLASSHOUSE_MORPHOLOG_BIN", str(fake_binary(tmp_path, exit_code=1)))
-    response = TestClient(create_app()).get("/readyz")
+    with TestClient(create_app()) as client:
+        response = client.get("/readyz")
     assert response.status_code == 503
     assert response.json()["morpholog"] == "error"
 
@@ -64,7 +66,8 @@ def test_readyz_verdicts_are_independent(tmp_path: Path, monkeypatch: pytest.Mon
     # The binary speaks, but the database is dead - so the commit
     # check, which needs both, is honest about it too.
     monkeypatch.setenv("GLASSHOUSE_MORPHOLOG_BIN", str(fake_binary(tmp_path, exit_code=0)))
-    response = TestClient(create_app()).get("/readyz")
+    with TestClient(create_app()) as client:
+        response = client.get("/readyz")
     assert response.status_code == 503
     assert response.json() == {"morpholog": "ok", "database": "error", "commit": "error"}
 
@@ -78,7 +81,8 @@ def test_readyz_reports_a_hanging_binary_as_error_not_500(
         raise subprocess.TimeoutExpired(cmd="morpholog --version", timeout=10)
 
     monkeypatch.setattr("glasshouse.api.app.subprocess.run", hang)
-    response = TestClient(create_app()).get("/readyz")
+    with TestClient(create_app()) as client:
+        response = client.get("/readyz")
     assert response.status_code == 503
     assert response.json()["morpholog"] == "error"
 
@@ -95,7 +99,8 @@ def test_readyz_bounds_a_commit_probe_that_hangs(
     monkeypatch.setenv("GLASSHOUSE_MORPHOLOG_TIMEOUT_SECONDS", "0.2")
 
     started = time.monotonic()
-    response = TestClient(create_app()).get("/readyz")
+    with TestClient(create_app()) as client:
+        response = client.get("/readyz")
     elapsed = time.monotonic() - started
 
     assert response.status_code == 503

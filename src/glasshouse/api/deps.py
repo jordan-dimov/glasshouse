@@ -1,11 +1,13 @@
 """Construction and dependencies for the API boundary.
 
-The app factory builds one engine (pooled, lazy - no connection until
-first use) and one client (a stateless subprocess wrapper) from
-settings at construction time and parks them on `app.state`; routers
-take them through the `Depends`-compatible accessors below. Tests get
-fresh objects per `create_app()` call, honouring whatever environment
-they have just monkeypatched - no module-level singletons to reset.
+The app factory wires one engine (pooled, lazy - no connection until
+first use) and one client (a stateless subprocess wrapper) from settings
+over the app's lifespan: built on startup, the engine pool disposed on
+shutdown (see `app.py`). They are parked on `app.state`; routers take
+them through the `Depends`-compatible accessors below. Tests get fresh
+objects per `create_app()` call - entered through `TestClient` as a
+context manager so the lifespan runs - honouring whatever environment
+they have just monkeypatched, no module-level singletons to reset.
 """
 
 from __future__ import annotations
