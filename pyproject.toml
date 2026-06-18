@@ -138,3 +138,11 @@ omit = ["*/glasshouse/commit/morpholog_client/*"]
 [tool.coverage.report]
 precision = 1
 show_missing = true
+
+# Mutation testing for the pure compute core - the quality measure
+# behind the line-coverage number. Not in CI (it copies the tree and
+# runs the suite per mutant); run on demand:
+#   uv run --with mutmut mutmut run && uv run --with mutmut mutmut results
+[tool.mutmut]
+source_paths = ["src/glasshouse/compute/curves.py", "src/glasshouse/compute/valuation.py"]
+also_copy = ["src/glasshouse", "alembic", "alembic.ini", "tests"]

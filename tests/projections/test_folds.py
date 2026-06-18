@@ -2,14 +2,19 @@
 folds do not honestly cover. No database anywhere in this module."""
 
 import datetime as dt
+from collections import defaultdict
 from decimal import Decimal
 
 import pytest
+from hypothesis import given
+from hypothesis import strategies as st
 
 from glasshouse.commit import envelopes
 from glasshouse.projections import ProjectionError, fold_transition
 
 T0 = dt.datetime(2026, 7, 1, tzinfo=dt.UTC)
+
+SIGN = {"buy": Decimal(1), "sell": Decimal(-1)}
 
 
 def captured(trade: str = "T-1", direction: str = "buy") -> envelopes.ClaimInstance:
@@ -90,6 +95,68 @@ def test_refusals_are_loud() -> None:
         fold_transition([terms()], [])
     with pytest.raises(ProjectionError, match="no position sign"):
         fold_transition([captured(direction="long"), terms()], [])
+
+
+trade_ids = st.text(alphabet="ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-", min_size=1, max_size=8)
+trade_quantities = st.decimals(
+    min_value=Decimal("0.1"), max_value=Decimal("1000"), allow_nan=False, places=1
+)
+
+
+@st.composite
+def trade_books(draw: st.DrawFn) -> list[tuple[str, str, Decimal, int]]:
+    """A book of trades with distinct ids: (trade, direction, quantity,
+    delivery hours), zero or more."""
+    ids = draw(st.lists(trade_ids, max_size=6, unique=True))
+    return [
+        (
+            tid,
+            draw(st.sampled_from(["buy", "sell"])),
+            draw(trade_quantities),
+            draw(st.integers(min_value=1, max_value=48)),
+        )
+        for tid in ids
+    ]
+
+
+def _claims(specs: list[tuple[str, str, Decimal, int]]) -> list[envelopes.ClaimInstance]:
+    asserted: list[envelopes.ClaimInstance] = []
+    for trade, direction, quantity, hours in specs:
+        asserted.append(
+            envelopes.ClaimInstance(
+                "TradeCaptured", ["acme", "spec-de", trade, "cp", "de-power", direction]
+            )
+        )
+        asserted.append(
+            envelopes.ClaimInstance(
+                "TradeTerms",
+                ["acme", trade, quantity, Decimal("50"), T0, T0 + dt.timedelta(hours=hours)],
+            )
+        )
+    return asserted
+
+
+@given(trade_books())
+def test_the_fold_conserves_trades_and_signed_hours(
+    specs: list[tuple[str, str, Decimal, int]],
+) -> None:
+    # The read-side law as algebra: one blotter row per capture, one
+    # position-hour per delivered hour, and the net MW correct FOR EACH
+    # hour - not merely in total, which a fold that filed the right MW
+    # under the wrong hour would also satisfy.
+    fold = fold_transition(_claims(specs), [])
+    assert len(fold.blotter) == len(specs)
+    assert {trade.trade for trade in fold.blotter} == {spec[0] for spec in specs}
+    assert len(fold.positions) == sum(hours for *_, hours in specs)
+
+    actual: dict[dt.datetime, Decimal] = defaultdict(lambda: Decimal(0))
+    for delta in fold.positions:
+        actual[delta.period_start] += delta.delta_mw
+    expected: dict[dt.datetime, Decimal] = defaultdict(lambda: Decimal(0))
+    for _trade, direction, quantity, hours in specs:
+        for hour in range(hours):
+            expected[T0 + dt.timedelta(hours=hour)] += SIGN[direction] * quantity
+    assert actual == expected
 
 
 def test_the_wire_shape_decodes_into_the_fold() -> None:

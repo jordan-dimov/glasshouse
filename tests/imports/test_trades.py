@@ -2,13 +2,18 @@
 against golden CSV strings and a fake binary playing back canned batch
 receipts."""
 
+import csv
+import io
 import json
 from pathlib import Path
 
 import pytest
+from hypothesis import given
+from hypothesis import strategies as st
 
 from glasshouse.commit import GlasshouseClient
 from glasshouse.imports import ImportFormatError, import_trades, parse_trades
+from glasshouse.imports.trades import COLUMNS
 from tests.support import fake_binary
 
 HEADER = "book,trade,counterparty,market,direction,quantity,price,delivery_start,delivery_end"
@@ -128,6 +133,29 @@ def test_an_all_quarantined_file_never_reaches_the_binary(tmp_path: Path) -> Non
     assert report.quarantined == 2
     assert len(report.outcomes) == 2
     assert not (tmp_path / "argv.txt").exists()  # no batch was run
+
+
+# Printable single-line cells: csv quotes commas and quotes faithfully,
+# and with no embedded newline the reader's line number stays one per row,
+# so the conservation law can be stated over physical lines.
+cells = st.text(alphabet=st.characters(min_codepoint=32, max_codepoint=126), max_size=10)
+trade_rows = st.lists(st.fixed_dictionaries(dict.fromkeys(COLUMNS, cells)), max_size=12)
+
+
+@given(trade_rows)
+def test_every_input_row_is_accounted_for_exactly_once(rows: list[dict[str, str]]) -> None:
+    # The import law: nothing is silently dropped. Whatever the cells, a
+    # well-headed file's every data row lands in exactly one of accepted
+    # or quarantined, and the line numbers are the contiguous run 2..n+1.
+    buffer = io.StringIO()
+    writer = csv.DictWriter(buffer, fieldnames=sorted(COLUMNS))
+    writer.writeheader()
+    writer.writerows(rows)
+
+    accepted, quarantined = parse_trades(buffer.getvalue(), org="acme")
+    assert len(accepted) + len(quarantined) == len(rows)
+    lines = sorted([line for line, _ in accepted] + [line for line, _ in quarantined])
+    assert lines == list(range(2, 2 + len(rows)))
 
 
 def test_an_unparseable_instant_quarantines_with_the_format_named() -> None:
