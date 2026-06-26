@@ -2,15 +2,19 @@
 # Python runtime copies it in. Web and worker run this same image with
 # different commands.
 #
-# NOTE (scaffold): the morpholog build stage pins a released ref once
-# Morpholog publishes one; until then it builds from main.
+# MORPHOLOG_REF must match the pin CI validates (.github/workflows/ci.yml:
+# the same MORPHOLOG_REF) so the deployed binary is the one the committed
+# client and view surface were generated and drift-checked against; a
+# moving `main` could ship a binary whose wire has diverged. Re-pin both
+# in the same PR. A full SHA is needed because `--branch` also accepts
+# tags and `git clone --depth 1` needs an exact ref.
 
 FROM rust:1.85-slim AS morpholog-builder
 RUN apt-get update && apt-get install -y --no-install-recommends git pkg-config libssl-dev \
     && rm -rf /var/lib/apt/lists/*
-ARG MORPHOLOG_REF=main
-RUN git clone --depth 1 --branch "${MORPHOLOG_REF}" \
-    https://github.com/jordan-dimov/morpholog /src/morpholog
+ARG MORPHOLOG_REF=1c9fc931fe680f62ba11bdde3ccc4901c45ad245
+RUN git clone https://github.com/jordan-dimov/morpholog /src/morpholog \
+    && git -C /src/morpholog checkout "${MORPHOLOG_REF}"
 WORKDIR /src/morpholog
 RUN cargo build --release
 

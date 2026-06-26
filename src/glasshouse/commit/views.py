@@ -35,28 +35,19 @@ VIEWS_SCHEMA = "morpholog_views"
 def apply_views(engine: sa.Engine) -> None:
     """Apply the committed view script in one shot.
 
-    The script is a single transactional unit (`BEGIN; ... COMMIT;`), so
-    a failure rolls back rather than leaving a half-built surface - the
-    programmatic equivalent of `psql -v ON_ERROR_STOP=1`. We run it on a
-    raw autocommit connection and let the script's own `BEGIN/COMMIT`
-    bound the transaction; `CREATE OR REPLACE VIEW` makes re-application
-    idempotent. Views live in the `morpholog_views` schema, namespaced
-    away from the governed `morpholog` schema, so this never touches
-    governed state.
+    AUTOCOMMIT is requested as a SQLAlchemy execution option, so the
+    driver runs the whole multi-statement script as sent and SQLAlchemy
+    restores the connection's mode when it returns to the pool (setting
+    raw `autocommit` by hand leaks the flag to the next checkout). The
+    script carries its own `BEGIN; ... COMMIT;`, so it stays a single
+    atomic unit - the programmatic equivalent of `psql -v ON_ERROR_STOP=1`
+    - and `CREATE OR REPLACE VIEW` makes re-application idempotent. Views
+    live in the `morpholog_views` schema, namespaced away from the
+    governed `morpholog` schema, so this never touches governed state.
     """
     script = VIEWS_FILE.read_text()
-    raw = engine.raw_connection()
-    try:
-        # The real psycopg3 connection: in autocommit it runs the whole
-        # multi-statement script in one call, and the script's own
-        # BEGIN/COMMIT makes it atomic.
-        driver = raw.driver_connection
-        if driver is None:  # pragma: no cover - a live engine always has one
-            raise RuntimeError("no driver connection to apply the view surface")
-        driver.autocommit = True
-        driver.execute(script)
-    finally:
-        raw.close()
+    with engine.connect().execution_options(isolation_level="AUTOCOMMIT") as connection:
+        connection.exec_driver_sql(script)
 
 
 def views_model_hash(engine: sa.Engine) -> str | None:

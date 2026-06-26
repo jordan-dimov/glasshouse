@@ -88,6 +88,25 @@ def test_applying_twice_is_idempotent(applied: sa.Engine) -> None:
     assert views_model_hash(applied) == MODEL_HASH
 
 
+def test_applying_does_not_leak_autocommit() -> None:
+    # apply_views runs on a pooled connection; setting autocommit by hand
+    # would leak the flag to the next checkout and silently break
+    # transactions. Force reuse with a single-connection pool and prove a
+    # later rollback still takes effect (it undoes the CREATE, so the
+    # table is gone - to_regclass returns NULL rather than raising).
+    engine = sa.create_engine(engine_url(DB), pool_size=1, max_overflow=0)
+    try:
+        apply_views(engine)
+        with engine.connect() as connection:
+            connection.execute(sa.text("CREATE TEMP TABLE _leak_probe (x int)"))
+            connection.execute(sa.text("INSERT INTO _leak_probe VALUES (1)"))
+            connection.rollback()
+            survived = connection.execute(sa.text("SELECT to_regclass('_leak_probe')")).scalar_one()
+        assert survived is None
+    finally:
+        engine.dispose()
+
+
 def test_the_cli_applies_the_inspection_model(
     applied: sa.Engine, capsys: pytest.CaptureFixture[str]
 ) -> None:
