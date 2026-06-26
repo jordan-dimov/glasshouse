@@ -9,7 +9,10 @@
 # in the same PR. A full SHA is needed because `--branch` also accepts
 # tags and `git clone --depth 1` needs an exact ref.
 
-FROM rust:1.85-slim AS morpholog-builder
+# Rust >= the pinned morpholog's rust-version (1.95, edition 2024); too
+# old a toolchain fails the build with an MSRV error. Bump alongside
+# MORPHOLOG_REF if a future pin raises it.
+FROM rust:1.95-slim AS morpholog-builder
 RUN apt-get update && apt-get install -y --no-install-recommends git pkg-config libssl-dev \
     && rm -rf /var/lib/apt/lists/*
 ARG MORPHOLOG_REF=1c9fc931fe680f62ba11bdde3ccc4901c45ad245

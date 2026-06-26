@@ -11,7 +11,14 @@ import pytest
 import sqlalchemy as sa
 
 from glasshouse import cli
-from glasshouse.commit import MODEL_FILE, Committed, GlasshouseClient, apply_views, models
+from glasshouse.commit import (
+    MODEL_FILE,
+    VIEWS_SCHEMA,
+    Committed,
+    GlasshouseClient,
+    apply_views,
+    models,
+)
 from glasshouse.compute.curves import HourlyCurve
 from glasshouse.compute.marking import register_curve_version, value_trade
 from glasshouse.compute.store import CurveStore
@@ -140,6 +147,24 @@ def test_a_dropped_inspection_model_fails_the_views_leg(
         assert _leg(report, "ledger").ok  # the legs are independent
     finally:
         apply_views(engine)  # CREATE OR REPLACE: re-application restores it
+
+
+def test_a_dropped_single_view_fails_the_views_leg(
+    monday: None, morpholog: GlasshouseClient, engine: sa.Engine, store: CurveStore
+) -> None:
+    # The catalogue survives but one view is gone: the hash check alone
+    # would still pass, so the inventory check is what catches it.
+    catch_up(morpholog, engine)
+    with engine.begin() as connection:
+        connection.execute(sa.text(f'DROP VIEW "{VIEWS_SCHEMA}".trade_terms'))
+    try:
+        report = verify(morpholog, engine, store)
+        leg = _leg(report, "views")
+        assert not leg.ok
+        assert "trade_terms" in leg.detail
+        assert _leg(report, "ledger").ok  # the legs are independent
+    finally:
+        apply_views(engine)  # CREATE OR REPLACE restores the dropped view
 
 
 def test_a_tampered_payload_fails_the_payload_leg(

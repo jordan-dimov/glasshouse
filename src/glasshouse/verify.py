@@ -25,7 +25,14 @@ from dataclasses import dataclass
 
 import sqlalchemy as sa
 
-from glasshouse.commit import MODEL_HASH, VIEWS_SCHEMA, GlasshouseClient, models, views_model_hash
+from glasshouse.commit import (
+    MODEL_HASH,
+    VIEWS_SCHEMA,
+    GlasshouseClient,
+    missing_catalogued_views,
+    models,
+    views_model_hash,
+)
 from glasshouse.compute.store import CurveStore, StoreError, curve_payload_period
 from glasshouse.projections import ProjectionError, accumulate
 from glasshouse.projections.projector import CURSOR as PROJECTION_CURSOR
@@ -86,14 +93,21 @@ def _ledger_leg(client: GlasshouseClient) -> Leg:
 
 def _views_leg(engine: sa.Engine) -> Leg:
     # The official inspection model (law 4): the generated per-predicate
-    # views still name the committed programme. The catalogue stamps the
-    # same hash the binary and client name, so this proves the SQL read
-    # surface has not drifted from the rules under it.
+    # views still name the committed programme AND the whole inventory is
+    # present. The catalogue stamps the same hash the binary and client
+    # name; the inventory check guards against a dropped or renamed view
+    # the hash alone would miss (the catalogue is itself a view, so a hash
+    # read can succeed while a sibling is gone). A redefined view of the
+    # same name still slips through both - a per-view definition hash is
+    # the upstream extension that would close it.
     deployed = views_model_hash(engine)
     if deployed is None:
         return Leg("views", False, f"the {VIEWS_SCHEMA} inspection model is not applied")
+    missing = missing_catalogued_views(engine)
+    if missing:
+        return Leg("views", False, f"catalogued view(s) missing: {', '.join(missing)}")
     if deployed == MODEL_HASH:
-        return Leg("views", True, f"inspection model names {deployed}")
+        return Leg("views", True, f"inspection model names {deployed}, full inventory present")
     return Leg("views", False, f"inspection model names {deployed}, committed client {MODEL_HASH}")
 
 

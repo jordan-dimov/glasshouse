@@ -41,10 +41,14 @@ uv run uvicorn glasshouse.api.app:app --reload
 The operator CLI exists ahead of the API:
 
 ```bash
+uv run python -m glasshouse.cli apply-views          # the SQL inspection model, after `morpholog init`
 uv run python -m glasshouse.cli import-trades trades.csv --org acme --actor alice --project
 uv run python -m glasshouse.cli import-curves curves.csv --org acme --actor carol
-uv run python -m glasshouse.cli project --follow   # the projector as a worker
+uv run python -m glasshouse.cli project --follow     # the projector as a worker
+uv run python -m glasshouse.cli verify               # all five legs agree, or the exit code says not
 ```
+
+Provisioning a fresh database is `morpholog init` (the governed schema), the Alembic migration (the app schema), then `glasshouse apply-views` (the official inspection model). `glasshouse verify`'s `views` leg fails until that last step has run, by design: the inspection model is part of the operational surface it checks.
 
 ### Configuration and logs
 

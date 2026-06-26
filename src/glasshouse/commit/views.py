@@ -63,3 +63,23 @@ def views_model_hash(engine: sa.Engine) -> str | None:
         # The schema or catalogue view is absent: the surface has never
         # been applied. That is a verdict for the caller, not an error.
         return None
+
+
+def missing_catalogued_views(engine: sa.Engine) -> tuple[str, ...]:
+    """Views the catalogue lists but that no longer exist - a dropped or
+    renamed view the model-hash check alone would miss (the catalogue is
+    a view too, so a hash read can succeed while a sibling is gone). An
+    empty tuple means the inventory is whole; an absent surface also
+    reads as empty (it is `views_model_hash`'s not-applied verdict)."""
+    query = sa.text(
+        f'SELECT c.view_name FROM "{VIEWS_SCHEMA}"."_morpholog_catalog" c '
+        "WHERE NOT EXISTS ("
+        "  SELECT 1 FROM information_schema.views v"
+        "  WHERE v.table_schema = :schema AND v.table_name = c.view_name"
+        ") ORDER BY c.view_name"
+    )
+    try:
+        with engine.connect() as connection:
+            return tuple(connection.execute(query, {"schema": VIEWS_SCHEMA}).scalars())
+    except sa.exc.SQLAlchemyError:
+        return ()

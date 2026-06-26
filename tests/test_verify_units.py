@@ -9,7 +9,12 @@ import pytest
 import sqlalchemy as sa
 
 from glasshouse import verify as verify_module
-from glasshouse.commit import MODEL_HASH, GlasshouseClient, views_model_hash
+from glasshouse.commit import (
+    MODEL_HASH,
+    GlasshouseClient,
+    missing_catalogued_views,
+    views_model_hash,
+)
 from glasshouse.verify import Leg, VerifyReport, _ledger_leg, _model_leg, _views_leg
 from tests.support import fake_binary
 
@@ -63,11 +68,13 @@ def _dead_engine() -> sa.Engine:
 
 def test_the_views_leg_passes_when_the_catalogue_agrees(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(verify_module, "views_model_hash", lambda _engine: MODEL_HASH)
+    monkeypatch.setattr(verify_module, "missing_catalogued_views", lambda _engine: ())
     assert _views_leg(_dead_engine()).ok
 
 
 def test_the_views_leg_names_both_hashes_on_drift(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(verify_module, "views_model_hash", lambda _engine: "sha256:0000")
+    monkeypatch.setattr(verify_module, "missing_catalogued_views", lambda _engine: ())
     leg = _views_leg(_dead_engine())
     assert not leg.ok
     assert "sha256:0000" in leg.detail
@@ -81,10 +88,28 @@ def test_the_views_leg_reports_an_unapplied_surface(monkeypatch: pytest.MonkeyPa
     assert "not applied" in leg.detail
 
 
+def test_the_views_leg_catches_a_dropped_view_the_hash_would_miss(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Hash still names the committed programme, but a catalogued view is
+    # gone: the inventory check fails where the hash alone would pass.
+    monkeypatch.setattr(verify_module, "views_model_hash", lambda _engine: MODEL_HASH)
+    monkeypatch.setattr(verify_module, "missing_catalogued_views", lambda _engine: ("trade_terms",))
+    leg = _views_leg(_dead_engine())
+    assert not leg.ok
+    assert "trade_terms" in leg.detail
+
+
 def test_views_model_hash_is_none_on_an_unreachable_database() -> None:
     # The real read against a dead database: a SQLAlchemy error is a
     # "not applied" verdict (None), never a raise.
     assert views_model_hash(_dead_engine()) is None
+
+
+def test_missing_catalogued_views_is_empty_on_an_unreachable_database() -> None:
+    # An absent surface reads as a whole inventory (the empty tuple); the
+    # not-applied verdict belongs to views_model_hash, not this check.
+    assert missing_catalogued_views(_dead_engine()) == ()
 
 
 def test_the_report_renders_verdict_first() -> None:
