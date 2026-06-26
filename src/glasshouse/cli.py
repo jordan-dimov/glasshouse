@@ -21,7 +21,13 @@ from pathlib import Path
 
 import sqlalchemy as sa
 
-from glasshouse.commit import MODEL_FILE, GlasshouseClient, MorphologError
+from glasshouse.commit import (
+    MODEL_FILE,
+    VIEWS_SCHEMA,
+    GlasshouseClient,
+    MorphologError,
+    apply_views,
+)
 from glasshouse.compute.store import CurveStore, engine_url
 from glasshouse.config import get_settings
 from glasshouse.imports import (
@@ -80,6 +86,13 @@ def _parser() -> argparse.ArgumentParser:
     )
     database_url(check)
 
+    views = commands.add_parser(
+        "apply-views",
+        help="Apply the official inspection model: the generated per-predicate SQL views "
+        "over governed state (run after `morpholog init`).",
+    )
+    database_url(views)
+
     project = commands.add_parser("project", help="Catch the projections up with the ledger.")
     project.add_argument(
         "--follow", action="store_true", help="keep polling (the separate-worker mode)"
@@ -100,6 +113,12 @@ def main(argv: list[str] | None = None) -> int:
             verdict = verify(client, engine, CurveStore(engine))
             print(verdict.render())
             return 0 if verdict.ok else 1
+
+        if args.command == "apply-views":
+            engine = sa.create_engine(engine_url(args.database_url))
+            apply_views(engine)
+            print(f"applied the {VIEWS_SCHEMA} inspection model")
+            return 0
 
         if args.command == "project":
             client = GlasshouseClient(str(MODEL_FILE), args.database_url)

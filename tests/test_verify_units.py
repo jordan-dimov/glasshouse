@@ -5,8 +5,12 @@ tests/test_verify_integration.py."""
 import json
 from pathlib import Path
 
-from glasshouse.commit import MODEL_HASH, GlasshouseClient
-from glasshouse.verify import Leg, VerifyReport, _ledger_leg, _model_leg
+import pytest
+import sqlalchemy as sa
+
+from glasshouse import verify as verify_module
+from glasshouse.commit import MODEL_HASH, GlasshouseClient, views_model_hash
+from glasshouse.verify import Leg, VerifyReport, _ledger_leg, _model_leg, _views_leg
 from tests.support import fake_binary
 
 
@@ -29,17 +33,58 @@ def test_the_model_leg_passes_on_agreement(tmp_path: Path) -> None:
     assert _model_leg(client_with(tmp_path, agreed)).ok
 
 
-def test_the_ledger_leg_counts_both_divergence_buckets(tmp_path: Path) -> None:
+def test_the_ledger_leg_reads_the_replay_verdict(tmp_path: Path) -> None:
+    consistent = json.dumps(
+        {
+            "replay": {"status": "consistent", "claims": 12, "transitions": 8},
+            "tree": {"status": "intact", "checkpoints": 0, "tree_size": 0},
+        }
+    )
+    leg = _ledger_leg(client_with(tmp_path, consistent))
+    assert leg.ok
+    assert "8 transition(s) replay to 12 claim(s)" in leg.detail
+
+
+def test_the_ledger_leg_fails_on_a_divergent_replay(tmp_path: Path) -> None:
     divergent = json.dumps(
         {
-            "status": "divergent",
-            "only_in_claims_table": [{"predicate": "TradeCaptured", "args": []}],
-            "only_in_replay": [],
+            "replay": {"status": "divergent", "claims": 0, "transitions": 0},
+            "tree": {"status": "intact", "checkpoints": 0, "tree_size": 0},
         }
     )
     leg = _ledger_leg(client_with(tmp_path, divergent))
     assert not leg.ok
-    assert "1 claim(s) only in the claims table, 0 only in the replay" in leg.detail
+    assert "replay divergent" in leg.detail
+
+
+def _dead_engine() -> sa.Engine:
+    return sa.create_engine("postgresql+psycopg://127.0.0.1:1/nowhere")
+
+
+def test_the_views_leg_passes_when_the_catalogue_agrees(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(verify_module, "views_model_hash", lambda _engine: MODEL_HASH)
+    assert _views_leg(_dead_engine()).ok
+
+
+def test_the_views_leg_names_both_hashes_on_drift(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(verify_module, "views_model_hash", lambda _engine: "sha256:0000")
+    leg = _views_leg(_dead_engine())
+    assert not leg.ok
+    assert "sha256:0000" in leg.detail
+    assert MODEL_HASH in leg.detail
+
+
+def test_the_views_leg_reports_an_unapplied_surface(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(verify_module, "views_model_hash", lambda _engine: None)
+    leg = _views_leg(_dead_engine())
+    assert not leg.ok
+    assert "not applied" in leg.detail
+
+
+def test_views_model_hash_is_none_on_an_unreachable_database() -> None:
+    # The real read against a dead database: a SQLAlchemy error is a
+    # "not applied" verdict (None), never a raise.
+    assert views_model_hash(_dead_engine()) is None
 
 
 def test_the_report_renders_verdict_first() -> None:
