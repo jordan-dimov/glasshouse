@@ -73,6 +73,20 @@ def test_operations_are_bounded_when_a_timeout_is_set(tmp_path: Path) -> None:
         bounded.hash()
 
 
+def test_a_failure_message_redacts_the_database_url(tmp_path: Path) -> None:
+    # An operational failure echoes the invoked command; the command
+    # carries --database-url, so the credential must never enter the
+    # exception string (which is logged, propagated, and at the API
+    # boundary at risk of reaching a client).
+    binary = fake_binary(tmp_path, "", stderr="connection refused", exit_code=1)
+    secret = "postgresql://user:s3cr3t@db/x"
+    client = GlasshouseClient("model.morph", secret, binary=str(binary))
+    with pytest.raises(MorphologError) as caught:
+        client.verify_ledger()
+    assert "s3cr3t" not in str(caught.value)
+    assert "***" in str(caught.value)
+
+
 CONSISTENT = json.dumps({"status": "consistent", "transitions": 8, "claims": 12})
 
 

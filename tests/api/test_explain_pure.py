@@ -78,7 +78,8 @@ def _post(
     with TestClient(create_app()) as client:
         response: httpx.Response = client.post(
             "/explain",
-            json={"transformation": "capture_trade", "actor": "bob", "args": {}},
+            json={"transformation": "capture_trade", "args": {}},
+            headers={"X-Actor": "bob"},
         )
     return response
 
@@ -119,8 +120,21 @@ def test_error_rejection_is_flattened(tmp_path: Path, monkeypatch: pytest.Monkey
     assert response.json()["rejection"] == {"kind": "error", "message": "unknown transformation"}
 
 
-def test_operational_failure_is_502(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_actor_header_is_required() -> None:
+    # X-Actor is the L0 identity the gate evaluates against; absent, the
+    # request is malformed and refused at the boundary, no binary reached.
+    with TestClient(create_app()) as client:
+        response = client.post("/explain", json={"transformation": "capture_trade", "args": {}})
+    assert response.status_code == 422
+
+
+def test_operational_failure_is_502_without_leaking(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     # Empty stdout with a non-zero exit is the commit layer's "raise"
     # discriminator: an upstream dependency failure, surfaced as a 502.
+    # The detail is generic - the underlying message can carry the
+    # database URL, so it is logged server-side, never reflected.
     response = _post(tmp_path, monkeypatch, "", stderr="boom", exit_code=1)
     assert response.status_code == 502
+    assert response.json() == {"detail": "explain could not be evaluated"}

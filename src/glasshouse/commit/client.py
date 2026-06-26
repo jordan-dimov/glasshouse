@@ -92,10 +92,13 @@ class GlasshouseClient(Morpholog):
                 "commit.timeout", command=_redacted(args), timeout_seconds=self.timeout_seconds
             )
             raise MorphologError(
-                f"`{' '.join(args)}` timed out after {self.timeout_seconds}s"
+                f"`{_redacted(args)}` timed out after {self.timeout_seconds}s"
             ) from None
         if not proc.stdout.strip():
-            raise MorphologError(f"`{' '.join(args)}`:\n{proc.stderr.strip()}")
+            # Redact the command: the args carry --database-url, and this
+            # message is logged, propagated, and (at the API boundary) at
+            # risk of being reflected to a client.
+            raise MorphologError(f"`{_redacted(args)}`:\n{proc.stderr.strip()}")
         return proc.stdout
 
     def propose_batch(

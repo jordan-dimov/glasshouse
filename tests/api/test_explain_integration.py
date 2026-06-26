@@ -64,11 +64,8 @@ def test_authorised_capture_is_admissible(api: TestClient) -> None:
     with api as client:
         response = client.post(
             "/explain",
-            json={
-                "transformation": "capture_trade",
-                "actor": "alice",
-                "args": _capture_args("T-A"),
-            },
+            json={"transformation": "capture_trade", "args": _capture_args("T-A")},
+            headers={"X-Actor": "alice"},
         )
     assert response.status_code == 200
     assert response.json() == {"admissible": True, "rejection": None}
@@ -78,7 +75,8 @@ def test_unauthorised_capture_names_the_missing_claim(api: TestClient) -> None:
     with api as client:
         response = client.post(
             "/explain",
-            json={"transformation": "capture_trade", "actor": "bob", "args": _capture_args("T-B")},
+            json={"transformation": "capture_trade", "args": _capture_args("T-B")},
+            headers={"X-Actor": "bob"},
         )
     assert response.status_code == 200
     body = response.json()

@@ -69,13 +69,15 @@ class TradeValuation(BaseModel):
 
 
 class ExplainRequest(BaseModel):
-    """A dry-run question: would this transformation be admissible, and
-    if not, what is missing? Args are wire-named (the shape a generated
-    request model's `to_args_named()` produces)."""
+    """A dry-run question: would this transformation be admissible for
+    the calling actor (the `X-Actor` header), and if not, what is
+    missing? Args are wire-named (the shape a generated request model's
+    `to_args_named()` produces); where a transformation takes an org, it
+    rides in `args` and the binary validates it. `default_factory` keeps
+    the empty default a fresh dict per request."""
 
     transformation: str
-    actor: str
-    args: dict[str, object] = {}
+    args: dict[str, object] = Field(default_factory=dict)
 
 
 class MissingClaim(BaseModel):
