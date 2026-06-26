@@ -4,8 +4,16 @@
 # worker (outbox + projector) is the production-like profile and joins a
 # deployment only when external effects or projection lag force it.
 #
-# Open item before first deploy: verify CREATE EXTENSION timescaledb on
-# Render Postgres 18 before anything depends on it.
+# Database: Render managed Postgres 18. TimescaleDB is supported on
+# Render managed Postgres (PG13+, for databases created after 12/01/2023),
+# but only its Apache-2 subset - "Community features are not available"
+# (https://render.com/docs/postgresql-extensions). That is enough here:
+# the app uses core hypertables (chunk exclusion) only; continuous
+# aggregates and compression (TSL) are not used, which also keeps the
+# stack Apache-2. The Alembic migration runs CREATE EXTENSION timescaledb
+# (the preDeployCommand below), so the extension is provisioned at deploy.
+# Worth one live confirmation that create_hypertable succeeds on the plan
+# before the demo leans on it.
 
 services:
   - type: web

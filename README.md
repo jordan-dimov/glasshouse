@@ -29,10 +29,10 @@ What you get instead of building it in-house:
 
 ## Development
 
-Requires Python 3.13+, [uv](https://docs.astral.sh/uv/), Docker (for Postgres), and a [morpholog](https://github.com/jordan-dimov/morpholog) binary (`cargo build --release`, then point `GLASSHOUSE_MORPHOLOG_BIN` at it).
+Requires Python 3.13+, [uv](https://docs.astral.sh/uv/), Docker (for the TimescaleDB Postgres 18 the migrations need), and a [morpholog](https://github.com/jordan-dimov/morpholog) binary (`cargo build --release`, then point `GLASSHOUSE_MORPHOLOG_BIN` at it).
 
 ```bash
-docker compose up -d          # TimescaleDB-enabled Postgres
+docker compose up -d          # TimescaleDB-enabled Postgres 18 (the floor)
 uv sync --dev
 uv run pytest                 # live integration legs run when the binary and a database are reachable
 uv run uvicorn glasshouse.api.app:app --reload

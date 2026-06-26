@@ -27,7 +27,7 @@ jobs:
     runs-on: ubuntu-latest
     services:
       postgres:
-        image: timescale/timescaledb:latest-pg17
+        image: timescale/timescaledb:latest-pg18
         env:
           POSTGRES_USER: postgres
           POSTGRES_PASSWORD: postgres

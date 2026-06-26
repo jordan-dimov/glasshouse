@@ -2,11 +2,11 @@
 # The app itself runs on the host during development (uv run uvicorn ...),
 # with GLASSHOUSE_MORPHOLOG_BIN pointing at a locally built morpholog binary.
 #
-# Postgres floor is 17 (matching Morpholog); CI exercises this same
-# PG17 Timescale image, the demo leads on 18.
+# Postgres floor is 18 (CI and the demo run this same image); TimescaleDB
+# is a dependency, not an option - the position_hour hypertable needs it.
 services:
   db:
-    image: timescale/timescaledb:latest-pg17
+    image: timescale/timescaledb:latest-pg18
     environment:
       POSTGRES_USER: glasshouse
       POSTGRES_PASSWORD: glasshouse
