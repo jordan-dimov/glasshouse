@@ -138,6 +138,8 @@ The first re-pin since the generated client landed, forced by adopting the views
 
 The one forced change: the tamper-evident audit work (upstream #159) **restructured the `morpholog verify` envelope**, `{"status", "only_in_*"}` → `{"replay": {status, claims, transitions}, "tree": {status, checkpoints, tree_size}}`. Because `verify` is bridged, not generated, the regenerate-and-diff gate could not catch this — it surfaced only when the new binary's verdict stopped parsing (a concrete argument for section 14: a generated, typed `verify` would have made the break loud at re-pin). `verify_ledger` + `verify.py`'s ledger leg now read `replay.status`. The `tree` verdict is the tamper-evidence seam: deliberately not surfaced yet (with zero checkpoints the tree is trivially intact), it seeds the next substrate PR — `checkpoint` creation + a `glasshouse verify` tree leg + the offline evidence pack (#159/#161), the regulator-grade legitimacy slice.
 
+**Drift now has an early-warning sensor** (added in the same PR): `.github/workflows/substrate-canary.yml` runs the full live suite against morpholog HEAD on a weekly schedule (and on demand), non-blocking and off the PR gate. The CI integration job stays on the pin for reproducibility; the canary surfaces a reshaped envelope, a renamed verb, a regenerated client or view surface, or a model-hash change as a red run *before* the next re-pin, instead of at it. A red canary is the signal to adopt the new surface deliberately (or report the friction upstream), not an emergency.
+
 ## Coordination agreements
 
 - **Evidence-pack extension contract pinned now** (no waiting for full WP5): a content-addressed JSON manifest, entries `{role, hash, media_type, locator?}`, chained to the ledger by transition ids.
