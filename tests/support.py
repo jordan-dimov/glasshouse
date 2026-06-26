@@ -42,6 +42,10 @@ def provision(database_url: str = DB) -> sa.Engine:
     engine = sa.create_engine(engine_url(database_url))
     with engine.begin() as connection:
         connection.execute(sa.text("DROP SCHEMA IF EXISTS morpholog CASCADE"))
+        # The official inspection model (law 4) is the binary's schema
+        # too: drop it alongside the governed one so a stale view surface
+        # never leaks between integration modules.
+        connection.execute(sa.text("DROP SCHEMA IF EXISTS morpholog_views CASCADE"))
         payload_metadata.drop_all(connection)
         projection_metadata.drop_all(connection)
         connection.execute(sa.text("DROP TABLE IF EXISTS alembic_version"))

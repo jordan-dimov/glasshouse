@@ -1,7 +1,7 @@
 """`glasshouse verify`: prove, on demand, that the operational database
 still agrees with the governed ledger. Read-only throughout.
 
-Four independent legs, each its own verdict:
+Five independent legs, each its own verdict:
 
 * **model** - the deployed binary names the same rules as the committed
   client (`morpholog hash` vs the generated `MODEL_HASH`);
@@ -13,7 +13,10 @@ Four independent legs, each its own verdict:
 * **payloads** - every registered curve's stored content re-hashed
   against the hash its governed claim admitted; missing payloads are
   divergence, orphaned payloads (content no claim anchors) are
-  reported as a warning - detectable garbage, not a lie.
+  reported as a warning - detectable garbage, not a lie;
+* **views** - the official inspection model (law 4): the generated
+  per-predicate SQL views still name the committed programme (the
+  `morpholog_views` catalogue's model hash vs `MODEL_HASH`).
 """
 
 from __future__ import annotations
@@ -22,7 +25,14 @@ from dataclasses import dataclass
 
 import sqlalchemy as sa
 
-from glasshouse.commit import MODEL_HASH, GlasshouseClient, models
+from glasshouse.commit import (
+    MODEL_HASH,
+    VIEWS_SCHEMA,
+    GlasshouseClient,
+    missing_catalogued_views,
+    models,
+    views_model_hash,
+)
 from glasshouse.compute.store import CurveStore, StoreError, curve_payload_period
 from glasshouse.projections import ProjectionError, accumulate
 from glasshouse.projections.projector import CURSOR as PROJECTION_CURSOR
@@ -65,20 +75,40 @@ def _model_leg(client: GlasshouseClient) -> Leg:
 
 def _ledger_leg(client: GlasshouseClient) -> Leg:
     verdict = client.verify_ledger()
-    if verdict.get("status") == "consistent":
+    # The replay verdict: the audit log still replays to the claims
+    # table. (The same envelope also carries a `tree` Merkle verdict; the
+    # tamper-evidence leg that surfaces it lands with the legitimacy work,
+    # which adds the checkpoints that make the tree non-trivial.)
+    replay = verdict.get("replay")
+    replay = replay if isinstance(replay, dict) else {}
+    if replay.get("status") == "consistent":
         return Leg(
             "ledger",
             True,
-            f"{verdict.get('transitions', '?')} transition(s) replay to "
-            f"{verdict.get('claims', '?')} claim(s)",
+            f"{replay.get('transitions', '?')} transition(s) replay to "
+            f"{replay.get('claims', '?')} claim(s)",
         )
-    only_claims = len(verdict.get("only_in_claims_table", []) or [])
-    only_replay = len(verdict.get("only_in_replay", []) or [])
-    return Leg(
-        "ledger",
-        False,
-        f"{only_claims} claim(s) only in the claims table, {only_replay} only in the replay",
-    )
+    return Leg("ledger", False, f"replay {replay.get('status', 'unavailable')}")
+
+
+def _views_leg(engine: sa.Engine) -> Leg:
+    # The official inspection model (law 4): the generated per-predicate
+    # views still name the committed programme AND the whole inventory is
+    # present. The catalogue stamps the same hash the binary and client
+    # name; the inventory check guards against a dropped or renamed view
+    # the hash alone would miss (the catalogue is itself a view, so a hash
+    # read can succeed while a sibling is gone). A redefined view of the
+    # same name still slips through both - a per-view definition hash is
+    # the upstream extension that would close it.
+    deployed = views_model_hash(engine)
+    if deployed is None:
+        return Leg("views", False, f"the {VIEWS_SCHEMA} inspection model is not applied")
+    missing = missing_catalogued_views(engine)
+    if missing:
+        return Leg("views", False, f"catalogued view(s) missing: {', '.join(missing)}")
+    if deployed == MODEL_HASH:
+        return Leg("views", True, f"inspection model names {deployed}, full inventory present")
+    return Leg("views", False, f"inspection model names {deployed}, committed client {MODEL_HASH}")
 
 
 def _projection_leg(client: GlasshouseClient, engine: sa.Engine) -> Leg:
@@ -161,7 +191,7 @@ def _payload_leg(client: GlasshouseClient, store: CurveStore) -> Leg:
 
 
 def verify(client: GlasshouseClient, engine: sa.Engine, store: CurveStore) -> VerifyReport:
-    """All four legs, in dependency order. Each leg is independent: a
+    """All five legs, in dependency order. Each leg is independent: a
     divergent ledger does not stop the projections being checked."""
     return VerifyReport(
         (
@@ -169,5 +199,6 @@ def verify(client: GlasshouseClient, engine: sa.Engine, store: CurveStore) -> Ve
             _ledger_leg(client),
             _projection_leg(client, engine),
             _payload_leg(client, store),
+            _views_leg(engine),
         )
     )

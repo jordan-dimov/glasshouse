@@ -25,6 +25,13 @@ from glasshouse.commit.morpholog_client import (
 )
 from glasshouse.commit.morpholog_client.adapter import MorphologError
 from glasshouse.commit.morpholog_client.envelopes import Committed, Rejected
+from glasshouse.commit.views import (
+    VIEWS_FILE,
+    VIEWS_SCHEMA,
+    apply_views,
+    missing_catalogued_views,
+    views_model_hash,
+)
 
 # The rule model ships inside the package; the client, the generator and
 # the deployment all point at this one file.
@@ -37,13 +44,18 @@ __all__ = [
     "MODEL_FILE",
     "MODEL_HASH",
     "PROGRAM",
+    "VIEWS_FILE",
+    "VIEWS_SCHEMA",
     "Committed",
     "GlasshouseClient",
     "MorphologError",
     "NamedClaimModel",
     "Outcome",
     "Rejected",
+    "apply_views",
     "envelopes",
+    "missing_catalogued_views",
     "models",
     "values",
+    "views_model_hash",
 ]

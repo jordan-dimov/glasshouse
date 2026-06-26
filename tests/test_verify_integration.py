@@ -1,4 +1,4 @@
-"""`glasshouse verify` against the real stack: all four legs consistent
+"""`glasshouse verify` against the real stack: all five legs consistent
 after the Monday-morning flow, then each tamperable leg caught and
 restored. The committed history is a module fixture; tests are
 state-based and order-independent (tampers restore in finally)."""
@@ -11,7 +11,14 @@ import pytest
 import sqlalchemy as sa
 
 from glasshouse import cli
-from glasshouse.commit import MODEL_FILE, Committed, GlasshouseClient, models
+from glasshouse.commit import (
+    MODEL_FILE,
+    VIEWS_SCHEMA,
+    Committed,
+    GlasshouseClient,
+    apply_views,
+    models,
+)
 from glasshouse.compute.curves import HourlyCurve
 from glasshouse.compute.marking import register_curve_version, value_trade
 from glasshouse.compute.store import CurveStore
@@ -91,6 +98,9 @@ def monday(morpholog: GlasshouseClient, engine: sa.Engine, store: CurveStore) ->
         Committed,
     )
     catch_up(morpholog, engine)
+    # The official inspection model is part of the provisioned substrate
+    # the views leg checks (init created the governed schema it reads).
+    apply_views(engine)
 
 
 def _leg(report: Any, name: str) -> Any:
@@ -98,7 +108,7 @@ def _leg(report: Any, name: str) -> Any:
     return leg
 
 
-def test_a_consistent_stack_verifies_with_four_ok_legs(
+def test_a_consistent_stack_verifies_with_five_ok_legs(
     monday: None,
     morpholog: GlasshouseClient,
     engine: sa.Engine,
@@ -108,12 +118,53 @@ def test_a_consistent_stack_verifies_with_four_ok_legs(
     catch_up(morpholog, engine)  # current from any prior state
     report = verify(morpholog, engine, store)
     assert report.ok, report.render()
-    assert [leg.name for leg in report.legs] == ["model", "ledger", "projections", "payloads"]
+    assert [leg.name for leg in report.legs] == [
+        "model",
+        "ledger",
+        "projections",
+        "payloads",
+        "views",
+    ]
 
     # And through the CLI seam, with the verdict as the exit code.
     assert cli.main(["verify", "--database-url", DB]) == 0
     out = capsys.readouterr().out
     assert "glasshouse verify: consistent" in out
+
+
+def test_a_dropped_inspection_model_fails_the_views_leg(
+    monday: None, morpholog: GlasshouseClient, engine: sa.Engine, store: CurveStore
+) -> None:
+    catch_up(morpholog, engine)
+    with engine.begin() as connection:
+        connection.execute(sa.text("DROP SCHEMA IF EXISTS morpholog_views CASCADE"))
+    try:
+        report = verify(morpholog, engine, store)
+        assert not report.ok
+        leg = _leg(report, "views")
+        assert not leg.ok
+        assert "not applied" in leg.detail
+        assert _leg(report, "ledger").ok  # the legs are independent
+    finally:
+        apply_views(engine)  # CREATE OR REPLACE: re-application restores it
+
+
+def test_a_dropped_single_view_fails_the_views_leg(
+    monday: None, morpholog: GlasshouseClient, engine: sa.Engine, store: CurveStore
+) -> None:
+    # The catalogue survives but one view is gone: the hash check alone
+    # would still pass, so the inventory check is what catches it.
+    catch_up(morpholog, engine)
+    with engine.begin() as connection:
+        connection.execute(sa.text(f'DROP VIEW "{VIEWS_SCHEMA}".trade_terms'))
+    try:
+        report = verify(morpholog, engine, store)
+        leg = _leg(report, "views")
+        assert not leg.ok
+        assert "trade_terms" in leg.detail
+        assert _leg(report, "ledger").ok  # the legs are independent
+    finally:
+        apply_views(engine)  # CREATE OR REPLACE restores the dropped view
 
 
 def test_a_tampered_payload_fails_the_payload_leg(

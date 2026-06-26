@@ -149,11 +149,15 @@ class GlasshouseClient(Morpholog):
             )
         return receipts
 
-    def verify_ledger(self) -> dict:  # type: ignore[type-arg]
+    def verify_ledger(self) -> dict[str, object]:
         """`morpholog verify`: replay the audit log and diff against the
-        claims table. The divergent verdict arrives on stdout at exit 1,
-        which is exactly `_invoke`'s discrimination rule; the JSON is
-        `{"status": "consistent"|"divergent", ...divergence lists}`."""
+        claims table, and check the Merkle history tree. The divergent
+        verdict arrives on stdout at exit 1, which is exactly `_invoke`'s
+        discrimination rule; the JSON is
+        `{"replay": {"status", "claims", "transitions"},
+          "tree": {"status", "checkpoints", "tree_size"}}`. The tree
+        verdict is the tamper-evidence seam the legitimacy work will
+        surface; today the read side consumes `replay`."""
         verdict = json.loads(self._invoke("verify", "--database-url", self.database_url))
         if not isinstance(verdict, dict):
             raise MorphologError(f"verify returned a non-object verdict: {verdict!r}")
