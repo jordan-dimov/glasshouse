@@ -43,7 +43,7 @@ jobs:
       MORPHOLOG_REF: 1c9fc931fe680f62ba11bdde3ccc4901c45ad245
     services:
       postgres:
-        image: timescale/timescaledb:latest-pg17
+        image: timescale/timescaledb:latest-pg18
         env:
           POSTGRES_USER: postgres
           POSTGRES_PASSWORD: postgres
