@@ -85,6 +85,12 @@ ignore = [
     "FURB157",
 ]
 
+[tool.ruff.lint.flake8-bugbear]
+# FastAPI's dependency idiom puts these calls in argument defaults by
+# design (the call IS the declaration); they are immutable markers, not
+# the mutable-default footgun B008 guards against.
+extend-immutable-calls = ["fastapi.Depends", "fastapi.Query"]
+
 [tool.ruff.lint.per-file-ignores]
 # Fixture-dependency parameters and stub signatures are idiomatic in
 # tests; "unused argument" is usually the point.

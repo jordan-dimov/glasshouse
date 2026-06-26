@@ -19,6 +19,7 @@ from fastapi import FastAPI, Response
 
 from glasshouse import __version__
 from glasshouse.api.deps import build_client, build_engine
+from glasshouse.api.routers import explain, reads
 from glasshouse.commit import MorphologError
 from glasshouse.config import get_settings
 from glasshouse.logging import configure_logging, get_logger
@@ -50,6 +51,9 @@ def create_app() -> FastAPI:
         version=__version__,
         lifespan=lifespan,
     )
+
+    app.include_router(reads.router)
+    app.include_router(explain.router)
 
     @app.get("/healthz")
     def healthz() -> dict[str, str]:
