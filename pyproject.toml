@@ -21,6 +21,7 @@ dependencies = [
     "structlog>=26.1",
     "jinja2>=3.1",
     "python-multipart>=0.0.20",
+    "typer>=0.26.8",
 ]
 
 [dependency-groups]
