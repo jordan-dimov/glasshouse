@@ -1,6 +1,9 @@
-"""The hand-written sliver of the commit zone: `GlasshouseClient.read`,
-the typed per-predicate read with `--as-of` that bridges the generated
-client's gap (see client.py), exercised against a fake binary."""
+"""The hand-written sliver of the commit zone, exercised against a fake
+binary: `GlasshouseClient.read` (the typed per-predicate as-of read),
+binary discovery under `GLASSHOUSE_MORPHOLOG_BIN`, and that our
+constructor wires the operation timeout and credential redaction through
+to the now-generated client (the bridges that used to live here are gone
+- the generated client carries them, byte-pinned and drift-checked)."""
 
 import datetime as dt
 import json
@@ -8,7 +11,7 @@ from pathlib import Path
 
 import pytest
 
-from glasshouse.commit import GlasshouseClient, MorphologError, envelopes, models
+from glasshouse.commit import GlasshouseClient, MorphologError, models
 from tests.support import fake_binary
 
 NAMED_OFFICIAL_CURVE = json.dumps(
@@ -62,7 +65,9 @@ def test_binary_discovery_honours_the_glasshouse_env_var(
     assert GlasshouseClient("m.morph", "postgres:///x").binary == "/usr/local/bin/morpholog"
 
 
-def test_operations_are_bounded_when_a_timeout_is_set(tmp_path: Path) -> None:
+def test_our_constructor_wires_the_operation_timeout(tmp_path: Path) -> None:
+    # timeout_seconds flows through __init__ to the generated client,
+    # which bounds the call - a hung binary becomes a fast verdict.
     sleeper = tmp_path / "fake-morpholog"
     sleeper.write_text("#!/bin/sh\nsleep 5\n")
     sleeper.chmod(0o755)
@@ -73,109 +78,13 @@ def test_operations_are_bounded_when_a_timeout_is_set(tmp_path: Path) -> None:
         bounded.hash()
 
 
-def test_a_failure_message_redacts_the_database_url(tmp_path: Path) -> None:
-    # An operational failure echoes the invoked command; the command
-    # carries --database-url, so the credential must never enter the
-    # exception string (which is logged, propagated, and at the API
-    # boundary at risk of reaching a client).
+def test_our_client_redacts_the_database_url_in_errors(tmp_path: Path) -> None:
+    # The generated client masks --database-url in raised messages; this
+    # proves an operational failure on a client we constructed (with our
+    # real conninfo) never leaks the credential.
     binary = fake_binary(tmp_path, "", stderr="connection refused", exit_code=1)
     secret = "postgresql://user:s3cr3t@db/x"
     client = GlasshouseClient("model.morph", secret, binary=str(binary))
     with pytest.raises(MorphologError) as caught:
-        client.verify_ledger()
+        client.verify()
     assert "s3cr3t" not in str(caught.value)
-    assert "***" in str(caught.value)
-
-
-CONSISTENT = json.dumps({"status": "consistent", "transitions": 8, "claims": 12})
-
-
-def test_verify_ledger_parses_the_upstream_verdict(tmp_path: Path) -> None:
-    binary = fake_binary(tmp_path, CONSISTENT)
-    bridged = GlasshouseClient("model.morph", "postgres:///x", binary=str(binary))
-    assert bridged.verify_ledger() == {"status": "consistent", "transitions": 8, "claims": 12}
-    argv = (tmp_path / "argv.txt").read_text().splitlines()
-    assert argv[0] == "verify"
-
-
-BATCH_EXPLAINED = json.dumps(
-    {
-        "status": "rejected",
-        "reason": "gate refused",
-        "row": 1,
-        "explanation": {
-            "transition": {"transformation": "capture_trade", "args": [], "actor": "mallory"},
-            "verdict": {
-                "rejected": {
-                    "kind": "gate",
-                    "gate": "require MayCaptureTrade(actor, org, book)",
-                    "statement_kind": "require",
-                    "directly_missing_claims": [
-                        {
-                            "predicate": "MayCaptureTrade",
-                            "rendered": "MayCaptureTrade(mallory, acme-energy, spec-de)",
-                            "candidate_supplier_transformations": ["grant_capture_authority"],
-                        }
-                    ],
-                }
-            },
-        },
-    }
-)
-
-
-def test_propose_batch_composes_explain_on_reject(tmp_path: Path) -> None:
-    binary = fake_binary(tmp_path, BATCH_EXPLAINED)
-    bridged = GlasshouseClient("model.morph", "postgres:///x", binary=str(binary))
-    (receipt,) = bridged.propose_batch(
-        [{"transformation": "capture_trade", "actor": "mallory", "args_named": {}}],
-        explain_on_reject=True,
-    )
-    argv = (tmp_path / "argv.txt").read_text().splitlines()
-    assert "--explain-on-reject" in argv
-    assert isinstance(receipt.outcome, envelopes.Rejected)
-    assert receipt.outcome.explanation is not None
-    assert not receipt.outcome.explanation.admissible
-
-
-def test_propose_batch_omits_the_flag_by_default(tmp_path: Path) -> None:
-    binary = fake_binary(tmp_path, BATCH_EXPLAINED)
-    bridged = GlasshouseClient("model.morph", "postgres:///x", binary=str(binary))
-    bridged.propose_batch([{"transformation": "t", "actor": "a", "args_named": {}}])
-    assert "--explain-on-reject" not in (tmp_path / "argv.txt").read_text().splitlines()
-
-
-def test_propose_batch_raises_on_operational_abort(tmp_path: Path) -> None:
-    binary = fake_binary(tmp_path, BATCH_EXPLAINED, stderr="connection lost", exit_code=1)
-    bridged = GlasshouseClient("model.morph", "postgres:///x", binary=str(binary))
-    with pytest.raises(MorphologError, match="batch aborted after 1 receipt"):
-        bridged.propose_batch([{"transformation": "t", "actor": "a", "args_named": {}}])
-
-
-def test_propose_batch_is_bounded_when_a_timeout_is_set(tmp_path: Path) -> None:
-    sleeper = tmp_path / "fake-morpholog"
-    sleeper.write_text("#!/bin/sh\nsleep 5\n")
-    sleeper.chmod(0o755)
-    bounded = GlasshouseClient(
-        "model.morph", "postgres:///x", binary=str(sleeper), timeout_seconds=0.1
-    )
-    with pytest.raises(MorphologError, match="batch timed out"):
-        bounded.propose_batch([{"transformation": "t", "actor": "a", "args_named": {}}])
-
-
-def test_verify_ledger_refuses_a_non_object_verdict(tmp_path: Path) -> None:
-    binary = fake_binary(tmp_path, "[1, 2]")
-    bridged = GlasshouseClient("model.morph", "postgres:///x", binary=str(binary))
-    with pytest.raises(MorphologError, match="non-object verdict"):
-        bridged.verify_ledger()
-
-
-def test_the_audit_tail_is_bounded_when_a_timeout_is_set(tmp_path: Path) -> None:
-    sleeper = tmp_path / "fake-morpholog"
-    sleeper.write_text("#!/bin/sh\nsleep 5\n")
-    sleeper.chmod(0o755)
-    bounded = GlasshouseClient(
-        "model.morph", "postgres:///x", binary=str(sleeper), timeout_seconds=0.1
-    )
-    with pytest.raises(MorphologError, match=r"inspect audit timed out after 0\.1"):
-        bounded.audit()

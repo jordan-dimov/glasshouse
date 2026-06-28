@@ -15,14 +15,22 @@ from glasshouse.commit import (
     missing_catalogued_views,
     views_model_hash,
 )
-from glasshouse.verify import Leg, VerifyReport, _ledger_leg, _model_leg, _views_leg
+from glasshouse.verify import Leg, VerifyReport, _ledger_leg, _model_leg, _tree_leg, _views_leg
 from tests.support import fake_binary
+
+INTACT_TREE = {"status": "intact", "checkpoints": 0, "tree_size": 0}
+CONSISTENT_REPLAY = {"status": "consistent", "transitions": 8, "claims": 12}
 
 
 def client_with(tmp_path: Path, stdout: str) -> GlasshouseClient:
     return GlasshouseClient(
         "model.morph", "postgres:///x", binary=str(fake_binary(tmp_path, stdout))
     )
+
+
+def _verify_report(tmp_path: Path, replay: dict, tree: dict):  # type: ignore[type-arg, no-untyped-def]
+    """The typed `verify` envelope, via a fake binary playing it back."""
+    return client_with(tmp_path, json.dumps({"replay": replay, "tree": tree})).verify()
 
 
 def test_the_model_leg_names_both_hashes_on_divergence(tmp_path: Path) -> None:
@@ -39,27 +47,38 @@ def test_the_model_leg_passes_on_agreement(tmp_path: Path) -> None:
 
 
 def test_the_ledger_leg_reads_the_replay_verdict(tmp_path: Path) -> None:
-    consistent = json.dumps(
-        {
-            "replay": {"status": "consistent", "claims": 12, "transitions": 8},
-            "tree": {"status": "intact", "checkpoints": 0, "tree_size": 0},
-        }
-    )
-    leg = _ledger_leg(client_with(tmp_path, consistent))
+    leg = _ledger_leg(_verify_report(tmp_path, CONSISTENT_REPLAY, INTACT_TREE))
     assert leg.ok
     assert "8 transition(s) replay to 12 claim(s)" in leg.detail
 
 
-def test_the_ledger_leg_fails_on_a_divergent_replay(tmp_path: Path) -> None:
-    divergent = json.dumps(
-        {
-            "replay": {"status": "divergent", "claims": 0, "transitions": 0},
-            "tree": {"status": "intact", "checkpoints": 0, "tree_size": 0},
-        }
-    )
-    leg = _ledger_leg(client_with(tmp_path, divergent))
+def test_the_ledger_leg_counts_both_divergence_buckets(tmp_path: Path) -> None:
+    divergent = {
+        "status": "divergent",
+        "only_in_claims_table": [{"predicate": "TradeCaptured", "args": []}],
+        "only_in_replay": [],
+    }
+    leg = _ledger_leg(_verify_report(tmp_path, divergent, INTACT_TREE))
     assert not leg.ok
-    assert "replay divergent" in leg.detail
+    assert "1 claim(s) only in the claims table, 0 only in the replay" in leg.detail
+
+
+def test_the_tree_leg_passes_when_the_history_tree_is_intact(tmp_path: Path) -> None:
+    leg = _tree_leg(_verify_report(tmp_path, CONSISTENT_REPLAY, INTACT_TREE))
+    assert leg.ok
+    assert "intact" in leg.detail
+
+
+def test_the_tree_leg_names_a_tampered_verdict(tmp_path: Path) -> None:
+    tampered = {
+        "status": "tampered",
+        "tree_size": 5,
+        "recorded_root": "sha256:aaaa",
+        "recomputed_root": "sha256:bbbb",
+    }
+    leg = _tree_leg(_verify_report(tmp_path, CONSISTENT_REPLAY, tampered))
+    assert not leg.ok
+    assert "Tampered" in leg.detail
 
 
 def _dead_engine() -> sa.Engine:

@@ -101,6 +101,9 @@ def monday(morpholog: GlasshouseClient, engine: sa.Engine, store: CurveStore) ->
     # The official inspection model is part of the provisioned substrate
     # the views leg checks (init created the governed schema it reads).
     apply_views(engine)
+    # Anchor a tamper-evidence checkpoint so the tree leg verifies a real
+    # history tree, not a trivially-empty one.
+    morpholog.checkpoint()
 
 
 def _leg(report: Any, name: str) -> Any:
@@ -108,7 +111,7 @@ def _leg(report: Any, name: str) -> Any:
     return leg
 
 
-def test_a_consistent_stack_verifies_with_five_ok_legs(
+def test_a_consistent_stack_verifies_with_six_ok_legs(
     monday: None,
     morpholog: GlasshouseClient,
     engine: sa.Engine,
@@ -121,10 +124,13 @@ def test_a_consistent_stack_verifies_with_five_ok_legs(
     assert [leg.name for leg in report.legs] == [
         "model",
         "ledger",
+        "tree",
         "projections",
         "payloads",
         "views",
     ]
+    # The tree leg verified a real checkpoint (anchored in the fixture).
+    assert "checkpoint" in _leg(report, "tree").detail
 
     # And through the CLI seam, with the verdict as the exit code.
     assert cli.main(["verify", "--database-url", DB]) == 0

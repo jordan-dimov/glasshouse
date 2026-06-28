@@ -1,12 +1,17 @@
 """`glasshouse verify`: prove, on demand, that the operational database
 still agrees with the governed ledger. Read-only throughout.
 
-Five independent legs, each its own verdict:
+Six independent legs, each its own verdict:
 
 * **model** - the deployed binary names the same rules as the committed
   client (`morpholog hash` vs the generated `MODEL_HASH`);
-* **ledger** - `morpholog verify` upstream: the audit log replays to
-  the claims table (two independent records of the same history);
+* **ledger** - `morpholog verify`'s replay verdict: the audit log
+  replays to the claims table (two independent records of the same
+  history), read from the typed `VerifyReport.replay`;
+* **tree** - the same `verify` call's Merkle history-tree verdict
+  (`VerifyReport.tree`): the checkpointed prefix is internally
+  consistent and unrewritten. Trivially intact until `glasshouse
+  checkpoint` has anchored something; meaningful once it has;
 * **projections** - the read-side law, checked without writing: the
   whole log replayed through the pure folds in memory and diffed
   against the live projection tables (`projections.accumulate`);
@@ -17,6 +22,10 @@ Five independent legs, each its own verdict:
 * **views** - the official inspection model (law 4): the generated
   per-predicate SQL views still name the committed programme (the
   `morpholog_views` catalogue's model hash vs `MODEL_HASH`).
+
+The model, ledger and tree legs are now generated, typed surfaces under
+the regenerate-and-diff drift gate - the silent-drift hole that the
+hand-bridged `verify` once had is closed.
 """
 
 from __future__ import annotations
@@ -32,6 +41,13 @@ from glasshouse.commit import (
     missing_catalogued_views,
     models,
     views_model_hash,
+)
+from glasshouse.commit.morpholog_client.envelopes import (
+    ReplayConsistent,
+    TreeIntact,
+)
+from glasshouse.commit.morpholog_client.envelopes import (
+    VerifyReport as LedgerVerifyReport,
 )
 from glasshouse.compute.store import CurveStore, StoreError, curve_payload_period
 from glasshouse.projections import ProjectionError, accumulate
@@ -73,22 +89,39 @@ def _model_leg(client: GlasshouseClient) -> Leg:
     return Leg("model", False, f"binary names {deployed}, committed client {MODEL_HASH}")
 
 
-def _ledger_leg(client: GlasshouseClient) -> Leg:
-    verdict = client.verify_ledger()
-    # The replay verdict: the audit log still replays to the claims
-    # table. (The same envelope also carries a `tree` Merkle verdict; the
-    # tamper-evidence leg that surfaces it lands with the legitimacy work,
-    # which adds the checkpoints that make the tree non-trivial.)
-    replay = verdict.get("replay")
-    replay = replay if isinstance(replay, dict) else {}
-    if replay.get("status") == "consistent":
+def _ledger_leg(report: LedgerVerifyReport) -> Leg:
+    # The replay verdict from the typed `verify` envelope: the audit log
+    # still replays to the claims table.
+    replay = report.replay
+    if isinstance(replay, ReplayConsistent):
         return Leg(
             "ledger",
             True,
-            f"{replay.get('transitions', '?')} transition(s) replay to "
-            f"{replay.get('claims', '?')} claim(s)",
+            f"{replay.transitions} transition(s) replay to {replay.claims} claim(s)",
         )
-    return Leg("ledger", False, f"replay {replay.get('status', 'unavailable')}")
+    return Leg(
+        "ledger",
+        False,
+        f"{len(replay.only_in_claims_table)} claim(s) only in the claims table, "
+        f"{len(replay.only_in_replay)} only in the replay",
+    )
+
+
+def _tree_leg(report: LedgerVerifyReport) -> Leg:
+    # The Merkle history-tree verdict from the same `verify` call. Intact
+    # with zero checkpoints is honest (nothing anchored, nothing
+    # rewritten); once `glasshouse checkpoint` has run, this proves the
+    # checkpointed prefix is consistent and unrewritten. Any non-intact
+    # verdict names itself (tampered, chain_broken, ...).
+    tree = report.tree
+    if isinstance(tree, TreeIntact):
+        return Leg(
+            "tree",
+            True,
+            f"history tree intact ({tree.checkpoints} checkpoint(s) over {tree.tree_size} row(s))",
+        )
+    verdict = type(tree).__name__.removeprefix("Tree")
+    return Leg("tree", False, f"history tree verdict: {verdict}")
 
 
 def _views_leg(engine: sa.Engine) -> Leg:
@@ -191,12 +224,16 @@ def _payload_leg(client: GlasshouseClient, store: CurveStore) -> Leg:
 
 
 def verify(client: GlasshouseClient, engine: sa.Engine, store: CurveStore) -> VerifyReport:
-    """All five legs, in dependency order. Each leg is independent: a
-    divergent ledger does not stop the projections being checked."""
+    """All six legs, in dependency order. Each leg is independent: a
+    divergent ledger does not stop the projections being checked. The
+    ledger and tree legs share one `verify` call (replay and tree are two
+    halves of the same envelope)."""
+    ledger_report = client.verify()
     return VerifyReport(
         (
             _model_leg(client),
-            _ledger_leg(client),
+            _ledger_leg(ledger_report),
+            _tree_leg(ledger_report),
             _projection_leg(client, engine),
             _payload_leg(client, store),
             _views_leg(engine),

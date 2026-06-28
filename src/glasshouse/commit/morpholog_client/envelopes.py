@@ -671,3 +671,647 @@ class InitReport:
     def from_json(cls, payload: object) -> "InitReport":
         data = _strict("init report", payload, {"status", "schema"})
         return cls(status=data["status"], schema=data["schema"])
+
+
+# ------------------------------------------------------------
+# Tamper-evidence: verify / checkpoint / evidence pack.
+# ------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class ReplayConsistent:
+    """Replaying the audit log reproduces the claims table exactly."""
+
+    transitions: int
+    claims: int
+
+    @classmethod
+    def from_json(cls, payload: object) -> "ReplayConsistent":
+        data = _strict("consistent replay", payload, {"status", "transitions", "claims"})
+        return cls(transitions=data["transitions"], claims=data["claims"])
+
+
+@dataclass(frozen=True)
+class ReplayDivergent:
+    """The claims table and the audit log disagree - evidence one was
+    edited out of band."""
+
+    only_in_claims_table: list
+    only_in_replay: list
+
+    @classmethod
+    def from_json(cls, payload: object) -> "ReplayDivergent":
+        data = _strict(
+            "divergent replay", payload, {"status", "only_in_claims_table", "only_in_replay"}
+        )
+        return cls(
+            only_in_claims_table=[ClaimInstance.from_json(c) for c in data["only_in_claims_table"]],
+            only_in_replay=[ClaimInstance.from_json(c) for c in data["only_in_replay"]],
+        )
+
+
+def parse_verify_outcome(payload: object) -> "ReplayConsistent | ReplayDivergent":
+    status = payload.get("status") if isinstance(payload, dict) else None
+    match status:
+        case "consistent":
+            return ReplayConsistent.from_json(payload)
+        case "divergent":
+            return ReplayDivergent.from_json(payload)
+        case _:
+            raise EnvelopeError(f"not a replay verdict: {payload!r}")
+
+
+@dataclass(frozen=True)
+class TreeIntact:
+    checkpoints: int
+    tree_size: int
+
+    @classmethod
+    def from_json(cls, payload: object) -> "TreeIntact":
+        data = _strict("intact tree", payload, {"status", "checkpoints", "tree_size"})
+        return cls(checkpoints=data["checkpoints"], tree_size=data["tree_size"])
+
+
+@dataclass(frozen=True)
+class TreeTampered:
+    tree_size: int
+    recorded_root: str
+    recomputed_root: str
+
+    @classmethod
+    def from_json(cls, payload: object) -> "TreeTampered":
+        data = _strict(
+            "tampered tree", payload, {"status", "tree_size", "recorded_root", "recomputed_root"}
+        )
+        return cls(
+            tree_size=data["tree_size"],
+            recorded_root=data["recorded_root"],
+            recomputed_root=data["recomputed_root"],
+        )
+
+
+@dataclass(frozen=True)
+class TreeChainBroken:
+    detail: str
+
+    @classmethod
+    def from_json(cls, payload: object) -> "TreeChainBroken":
+        data = _strict("chain-broken tree", payload, {"status", "detail"})
+        return cls(detail=data["detail"])
+
+
+@dataclass(frozen=True)
+class TreeAnchorMismatch:
+    tree_size: int
+    anchor_checkpoint_hash: str
+    stored_checkpoint_hash: str | None
+
+    @classmethod
+    def from_json(cls, payload: object) -> "TreeAnchorMismatch":
+        data = _strict(
+            "anchor-mismatch tree",
+            payload,
+            {"status", "tree_size", "anchor_checkpoint_hash", "stored_checkpoint_hash"},
+        )
+        return cls(
+            tree_size=data["tree_size"],
+            anchor_checkpoint_hash=data["anchor_checkpoint_hash"],
+            stored_checkpoint_hash=data["stored_checkpoint_hash"],
+        )
+
+
+@dataclass(frozen=True)
+class TreeMalformedPack:
+    """An evidence pack could not be parsed into a checkable tree
+    (offline `evidence verify` only)."""
+
+    detail: str
+
+    @classmethod
+    def from_json(cls, payload: object) -> "TreeMalformedPack":
+        data = _strict("malformed pack", payload, {"status", "detail"})
+        return cls(detail=data["detail"])
+
+
+@dataclass(frozen=True)
+class TreeSignatureInvalid:
+    """A checkpoint carries a signature that does not verify over its tree
+    head - corruption, or a signed checkpoint altered without re-signing."""
+
+    tree_size: int
+    key_id: str
+    purpose: str
+    public_key: str
+
+    @classmethod
+    def from_json(cls, payload: object) -> "TreeSignatureInvalid":
+        data = _strict(
+            "signature-invalid tree",
+            payload,
+            {"status", "tree_size", "key_id", "purpose", "public_key"},
+        )
+        return cls(
+            tree_size=data["tree_size"],
+            key_id=data["key_id"],
+            purpose=data["purpose"],
+            public_key=data["public_key"],
+        )
+
+
+@dataclass(frozen=True)
+class TreeUnauthorizedKey:
+    """A checkpoint carries a genuine signature, but the signing key was
+    not authorised (no admitted `AuditSigningKey` for that exact triple)
+    as of the checkpoint's prefix."""
+
+    tree_size: int
+    key_id: str
+    purpose: str
+    public_key: str
+
+    @classmethod
+    def from_json(cls, payload: object) -> "TreeUnauthorizedKey":
+        data = _strict(
+            "unauthorized-key tree",
+            payload,
+            {"status", "tree_size", "key_id", "purpose", "public_key"},
+        )
+        return cls(
+            tree_size=data["tree_size"],
+            key_id=data["key_id"],
+            purpose=data["purpose"],
+            public_key=data["public_key"],
+        )
+
+
+@dataclass(frozen=True)
+class TreeSignatureRequired:
+    """`--require-signatures` was asked for and this checkpoint is
+    unsigned. A compliance-policy verdict, not an intrinsic tamper."""
+
+    tree_size: int
+
+    @classmethod
+    def from_json(cls, payload: object) -> "TreeSignatureRequired":
+        data = _strict("signature-required tree", payload, {"status", "tree_size"})
+        return cls(tree_size=data["tree_size"])
+
+
+TreeVerification = (
+    TreeIntact
+    | TreeTampered
+    | TreeChainBroken
+    | TreeAnchorMismatch
+    | TreeMalformedPack
+    | TreeSignatureInvalid
+    | TreeUnauthorizedKey
+    | TreeSignatureRequired
+)
+
+
+def parse_tree_verification(payload: object) -> TreeVerification:
+    """The tamper-evidence verdict, the output of `evidence verify` and
+    the `tree` half of `verify`."""
+    status = payload.get("status") if isinstance(payload, dict) else None
+    match status:
+        case "intact":
+            return TreeIntact.from_json(payload)
+        case "tampered":
+            return TreeTampered.from_json(payload)
+        case "chain_broken":
+            return TreeChainBroken.from_json(payload)
+        case "anchor_mismatch":
+            return TreeAnchorMismatch.from_json(payload)
+        case "malformed_pack":
+            return TreeMalformedPack.from_json(payload)
+        case "signature_invalid":
+            return TreeSignatureInvalid.from_json(payload)
+        case "unauthorized_key":
+            return TreeUnauthorizedKey.from_json(payload)
+        case "signature_required":
+            return TreeSignatureRequired.from_json(payload)
+        case _:
+            raise EnvelopeError(f"not a tree verdict: {payload!r}")
+
+
+@dataclass(frozen=True)
+class VerifyReport:
+    """The `verify` envelope: the replay verdict beside the
+    tamper-evidence verdict."""
+
+    replay: ReplayConsistent | ReplayDivergent
+    tree: TreeVerification
+
+    @classmethod
+    def from_json(cls, payload: object) -> "VerifyReport":
+        data = _strict("verify report", payload, {"replay", "tree"})
+        return cls(
+            replay=parse_verify_outcome(data["replay"]),
+            tree=parse_tree_verification(data["tree"]),
+        )
+
+
+@dataclass(frozen=True)
+class TreeHeadSignature:
+    """One Ed25519 attestation over a tree head: who signed it (`key_id`
+    + `public_key`), what the key is authorised for (`purpose`), and the
+    signature - the latter two rendered `ed25519-pub:`/`ed25519-sig:`."""
+
+    key_id: str
+    purpose: str
+    public_key: str
+    signature: str
+
+    @classmethod
+    def from_json(cls, payload: object) -> "TreeHeadSignature":
+        data = _strict(
+            "tree-head signature", payload, {"key_id", "purpose", "public_key", "signature"}
+        )
+        return cls(
+            key_id=data["key_id"],
+            purpose=data["purpose"],
+            public_key=data["public_key"],
+            signature=data["signature"],
+        )
+
+
+def _parse_signatures(data: dict) -> list:
+    raw = data.get("signatures", [])
+    if not isinstance(raw, list):
+        raise EnvelopeError(f"`signatures` must be a list, got {raw!r}")
+    return [TreeHeadSignature.from_json(s) for s in raw]
+
+
+@dataclass(frozen=True)
+class Checkpoint:
+    """A signed-tree-head commitment to a prefix of the audit log; held
+    externally, it is the anchor `verify`/`evidence verify` check
+    against. `signatures` is empty (and omitted from JSON) when the
+    checkpoint is unsigned."""
+
+    tree_size: int
+    root_hash: str
+    prev_checkpoint_hash: str | None
+    checkpoint_hash: str
+    signatures: list = field(default_factory=list)
+
+    @classmethod
+    def from_json(cls, payload: object) -> "Checkpoint":
+        data = _strict(
+            "checkpoint",
+            payload,
+            {"tree_size", "root_hash", "prev_checkpoint_hash", "checkpoint_hash"},
+            {"signatures"},
+        )
+        return cls(
+            tree_size=data["tree_size"],
+            root_hash=data["root_hash"],
+            prev_checkpoint_hash=data["prev_checkpoint_hash"],
+            checkpoint_hash=data["checkpoint_hash"],
+            signatures=_parse_signatures(data),
+        )
+
+
+def _checkpoint_from_flattened(name: str, payload: object) -> Checkpoint:
+    # The `checkpoint` command flattens the checkpoint fields beside a
+    # `status` tag, so the bare-checkpoint parser (which forbids
+    # `status`) cannot read it directly.
+    data = _strict(
+        name,
+        payload,
+        {"status", "tree_size", "root_hash", "prev_checkpoint_hash", "checkpoint_hash"},
+        {"signatures"},
+    )
+    return Checkpoint(
+        tree_size=data["tree_size"],
+        root_hash=data["root_hash"],
+        prev_checkpoint_hash=data["prev_checkpoint_hash"],
+        checkpoint_hash=data["checkpoint_hash"],
+        signatures=_parse_signatures(data),
+    )
+
+
+@dataclass(frozen=True)
+class CheckpointCreated:
+    checkpoint: Checkpoint
+
+    @classmethod
+    def from_json(cls, payload: object) -> "CheckpointCreated":
+        return cls(checkpoint=_checkpoint_from_flattened("created checkpoint", payload))
+
+
+@dataclass(frozen=True)
+class CheckpointNoNewRows:
+    """The stable prefix had not grown; the current head, returned
+    unchanged - still a usable anchor."""
+
+    checkpoint: Checkpoint
+
+    @classmethod
+    def from_json(cls, payload: object) -> "CheckpointNoNewRows":
+        return cls(checkpoint=_checkpoint_from_flattened("no-new-rows checkpoint", payload))
+
+
+def parse_checkpoint_outcome(payload: object) -> "CheckpointCreated | CheckpointNoNewRows":
+    status = payload.get("status") if isinstance(payload, dict) else None
+    match status:
+        case "created":
+            return CheckpointCreated.from_json(payload)
+        case "no_new_rows":
+            return CheckpointNoNewRows.from_json(payload)
+        case _:
+            raise EnvelopeError(f"not a checkpoint outcome: {payload!r}")
+
+
+@dataclass(frozen=True)
+class PackManifest:
+    pack_format_version: int
+    tree_size: int
+    root_hash: str
+    checkpoint_hash: str
+
+    @classmethod
+    def from_json(cls, payload: object) -> "PackManifest":
+        data = _strict(
+            "pack manifest",
+            payload,
+            {"pack_format_version", "tree_size", "root_hash", "checkpoint_hash"},
+        )
+        return cls(
+            pack_format_version=data["pack_format_version"],
+            tree_size=data["tree_size"],
+            root_hash=data["root_hash"],
+            checkpoint_hash=data["checkpoint_hash"],
+        )
+
+
+@dataclass(frozen=True)
+class EvidencePack:
+    """A portable, offline-verifiable export of a checkpointed prefix of
+    the audit log: the covering checkpoint chain and the covered rows."""
+
+    manifest: PackManifest
+    checkpoints: list
+    rows: list
+
+    @classmethod
+    def from_json(cls, payload: object) -> "EvidencePack":
+        data = _strict("evidence pack", payload, {"manifest", "checkpoints", "rows"})
+        return cls(
+            manifest=PackManifest.from_json(data["manifest"]),
+            checkpoints=[Checkpoint.from_json(c) for c in data["checkpoints"]],
+            rows=[AuditRow.from_json(r) for r in data["rows"]],
+        )
+
+
+@dataclass(frozen=True)
+class WindowPackManifest:
+    pack_format_version: int
+    pack_kind: str
+    from_tree_size: int
+    to_tree_size: int
+    from_checkpoint_hash: str
+    to_checkpoint_hash: str
+    from_root_hash: str
+    to_root_hash: str
+
+    @classmethod
+    def from_json(cls, payload: object) -> "WindowPackManifest":
+        data = _strict(
+            "window pack manifest",
+            payload,
+            {
+                "pack_format_version",
+                "pack_kind",
+                "from_tree_size",
+                "to_tree_size",
+                "from_checkpoint_hash",
+                "to_checkpoint_hash",
+                "from_root_hash",
+                "to_root_hash",
+            },
+        )
+        return cls(
+            pack_format_version=data["pack_format_version"],
+            pack_kind=data["pack_kind"],
+            from_tree_size=data["from_tree_size"],
+            to_tree_size=data["to_tree_size"],
+            from_checkpoint_hash=data["from_checkpoint_hash"],
+            to_checkpoint_hash=data["to_checkpoint_hash"],
+            from_root_hash=data["from_root_hash"],
+            to_root_hash=data["to_root_hash"],
+        )
+
+
+def _str_list(label: str, value: object) -> list:
+    """A list of strings, or an `EnvelopeError`. The schema pins proof and
+    consistency-proof hashes as string arrays; a bare string would otherwise
+    pass `list(...)` as a list of characters."""
+    if not isinstance(value, list) or not all(isinstance(x, str) for x in value):
+        raise EnvelopeError(f"`{label}` must be a list of strings, got {value!r}")
+    return list(value)
+
+
+@dataclass(frozen=True)
+class RowInclusionProof:
+    """One window row's inclusion proof: the row sits at ``leaf_index`` in
+    the to-checkpoint's tree, proven by ``proof`` (sibling hashes)."""
+
+    leaf_index: int
+    proof: list
+
+    @classmethod
+    def from_json(cls, payload: object) -> "RowInclusionProof":
+        data = _strict("row inclusion proof", payload, {"leaf_index", "proof"})
+        return cls(leaf_index=data["leaf_index"], proof=_str_list("proof", data["proof"]))
+
+
+@dataclass(frozen=True)
+class WindowEvidencePack:
+    """A windowed evidence pack: the interval [from, to) of the audit log,
+    proven a faithful append-only continuation of an earlier checkpoint by
+    a consistency proof plus one inclusion proof per row."""
+
+    manifest: WindowPackManifest
+    from_checkpoint: Checkpoint
+    to_checkpoint: Checkpoint
+    consistency_proof: list
+    rows: list
+    inclusion_proofs: list
+
+    @classmethod
+    def from_json(cls, payload: object) -> "WindowEvidencePack":
+        data = _strict(
+            "window evidence pack",
+            payload,
+            {
+                "manifest",
+                "from_checkpoint",
+                "to_checkpoint",
+                "consistency_proof",
+                "rows",
+                "inclusion_proofs",
+            },
+        )
+        return cls(
+            manifest=WindowPackManifest.from_json(data["manifest"]),
+            from_checkpoint=Checkpoint.from_json(data["from_checkpoint"]),
+            to_checkpoint=Checkpoint.from_json(data["to_checkpoint"]),
+            consistency_proof=_str_list("consistency_proof", data["consistency_proof"]),
+            rows=[AuditRow.from_json(r) for r in data["rows"]],
+            inclusion_proofs=[RowInclusionProof.from_json(p) for p in data["inclusion_proofs"]],
+        )
+
+
+@dataclass(frozen=True)
+class WindowIntact:
+    from_tree_size: int
+    to_tree_size: int
+    rows: int
+
+    @classmethod
+    def from_json(cls, payload: object) -> "WindowIntact":
+        data = _strict(
+            "intact window", payload, {"status", "from_tree_size", "to_tree_size", "rows"}
+        )
+        return cls(
+            from_tree_size=data["from_tree_size"],
+            to_tree_size=data["to_tree_size"],
+            rows=data["rows"],
+        )
+
+
+@dataclass(frozen=True)
+class WindowInconsistentExtension:
+    """The later checkpoint is not an append-only extension of the earlier
+    one - the prior period was altered."""
+
+    from_tree_size: int
+    to_tree_size: int
+
+    @classmethod
+    def from_json(cls, payload: object) -> "WindowInconsistentExtension":
+        data = _strict(
+            "inconsistent-extension window", payload, {"status", "from_tree_size", "to_tree_size"}
+        )
+        return cls(from_tree_size=data["from_tree_size"], to_tree_size=data["to_tree_size"])
+
+
+@dataclass(frozen=True)
+class WindowRowNotIncluded:
+    """A window row is not included at its declared position in the later
+    checkpoint - the exported rows are not the genuine suffix."""
+
+    leaf_index: int
+
+    @classmethod
+    def from_json(cls, payload: object) -> "WindowRowNotIncluded":
+        data = _strict("row-not-included window", payload, {"status", "leaf_index"})
+        return cls(leaf_index=data["leaf_index"])
+
+
+@dataclass(frozen=True)
+class WindowAnchorMismatch:
+    """An externally held anchor disagrees with the pack's from-checkpoint."""
+
+    tree_size: int
+    anchor_checkpoint_hash: str
+    pack_checkpoint_hash: str
+
+    @classmethod
+    def from_json(cls, payload: object) -> "WindowAnchorMismatch":
+        data = _strict(
+            "anchor-mismatch window",
+            payload,
+            {"status", "tree_size", "anchor_checkpoint_hash", "pack_checkpoint_hash"},
+        )
+        return cls(
+            tree_size=data["tree_size"],
+            anchor_checkpoint_hash=data["anchor_checkpoint_hash"],
+            pack_checkpoint_hash=data["pack_checkpoint_hash"],
+        )
+
+
+@dataclass(frozen=True)
+class WindowSignatureInvalid:
+    """The to-checkpoint carries a signature that does not verify over its
+    tree head (cryptographic check only; authority is not judged here)."""
+
+    tree_size: int
+    key_id: str
+    purpose: str
+    public_key: str
+
+    @classmethod
+    def from_json(cls, payload: object) -> "WindowSignatureInvalid":
+        data = _strict(
+            "signature-invalid window",
+            payload,
+            {"status", "tree_size", "key_id", "purpose", "public_key"},
+        )
+        return cls(
+            tree_size=data["tree_size"],
+            key_id=data["key_id"],
+            purpose=data["purpose"],
+            public_key=data["public_key"],
+        )
+
+
+@dataclass(frozen=True)
+class WindowSignatureRequired:
+    """``--require-signatures`` was asked for and the to-checkpoint is
+    unsigned. A compliance-policy verdict, not an intrinsic tamper."""
+
+    tree_size: int
+
+    @classmethod
+    def from_json(cls, payload: object) -> "WindowSignatureRequired":
+        data = _strict("signature-required window", payload, {"status", "tree_size"})
+        return cls(tree_size=data["tree_size"])
+
+
+@dataclass(frozen=True)
+class WindowMalformed:
+    """The window pack is not a well-formed v2 artefact - it never had a
+    chance to prove anything."""
+
+    detail: str
+
+    @classmethod
+    def from_json(cls, payload: object) -> "WindowMalformed":
+        data = _strict("malformed window", payload, {"status", "detail"})
+        return cls(detail=data["detail"])
+
+
+WindowVerification = (
+    WindowIntact
+    | WindowInconsistentExtension
+    | WindowRowNotIncluded
+    | WindowAnchorMismatch
+    | WindowSignatureInvalid
+    | WindowSignatureRequired
+    | WindowMalformed
+)
+
+
+def parse_window_verification(payload: object) -> WindowVerification:
+    """The windowed-pack verdict, the output of ``evidence verify`` on a v2
+    window pack."""
+    status = payload.get("status") if isinstance(payload, dict) else None
+    match status:
+        case "intact":
+            return WindowIntact.from_json(payload)
+        case "inconsistent_extension":
+            return WindowInconsistentExtension.from_json(payload)
+        case "row_not_included":
+            return WindowRowNotIncluded.from_json(payload)
+        case "anchor_mismatch":
+            return WindowAnchorMismatch.from_json(payload)
+        case "signature_invalid":
+            return WindowSignatureInvalid.from_json(payload)
+        case "signature_required":
+            return WindowSignatureRequired.from_json(payload)
+        case "malformed":
+            return WindowMalformed.from_json(payload)
+        case _:
+            raise EnvelopeError(f"not a window verdict: {payload!r}")
