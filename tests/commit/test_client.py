@@ -79,12 +79,25 @@ def test_our_constructor_wires_the_operation_timeout(tmp_path: Path) -> None:
 
 
 def test_our_client_redacts_the_database_url_in_errors(tmp_path: Path) -> None:
-    # The generated client masks --database-url in raised messages; this
-    # proves an operational failure on a client we constructed (with our
-    # real conninfo) never leaks the credential.
+    # The generated client masks the --database-url argument in raised
+    # messages; this proves an operational failure on a client we
+    # constructed (with our real conninfo) never leaks the credential.
     binary = fake_binary(tmp_path, "", stderr="connection refused", exit_code=1)
     secret = "postgresql://user:s3cr3t@db/x"
     client = GlasshouseClient("model.morph", secret, binary=str(binary))
     with pytest.raises(MorphologError) as caught:
         client.verify()
     assert "s3cr3t" not in str(caught.value)
+
+
+def test_a_driver_echoing_the_conninfo_in_stderr_is_redacted(tmp_path: Path) -> None:
+    # The scarier case the redaction is for: a database driver echoes the
+    # full connection string in stderr. The generated client masks it
+    # there too, so the credential reaches neither a log nor a client.
+    secret = "postgresql://user:s3cr3t@db:5432/x"
+    binary = fake_binary(tmp_path, "", stderr=f"FATAL: could not connect to {secret}", exit_code=1)
+    client = GlasshouseClient("model.morph", secret, binary=str(binary))
+    with pytest.raises(MorphologError) as caught:
+        client.verify()
+    assert "s3cr3t" not in str(caught.value)
+    assert "<redacted>" in str(caught.value)

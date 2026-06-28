@@ -106,6 +106,13 @@ def _parser() -> argparse.ArgumentParser:
         help="Record a tamper-evidence checkpoint over the audit log's stable prefix "
         "(an external anchor the `verify` tree leg and evidence packs build on).",
     )
+    checkpoint.add_argument(
+        "--out",
+        type=Path,
+        default=None,
+        help="write the checkpoint JSON to this file - the external anchor that "
+        "`evidence-verify --anchor` checks a pack against",
+    )
     database_url(checkpoint)
 
     pack = commands.add_parser(
@@ -128,9 +135,9 @@ def _parser() -> argparse.ArgumentParser:
         default=None,
         help="an externally-held checkpoint JSON the pack must be shown to extend",
     )
-    # Verification is offline (no database is touched); the flag is here
-    # only so client construction is uniform across commands.
-    database_url(check_pack)
+    # Verification is offline (no database is touched), so no --database-url
+    # flag - but a default keeps client construction uniform.
+    check_pack.set_defaults(database_url="")
 
     return parser
 
@@ -154,13 +161,15 @@ def main(argv: list[str] | None = None) -> int:
 
         if args.command == "checkpoint":
             client = GlasshouseClient(str(MODEL_FILE), args.database_url)
-            outcome = client.checkpoint()
+            outcome = client.write_checkpoint(args.out) if args.out else client.checkpoint()
             kind = "created" if isinstance(outcome, CheckpointCreated) else "no new rows"
             checkpoint = outcome.checkpoint
             print(
                 f"checkpoint {kind}: tree_size {checkpoint.tree_size}, "
                 f"hash {checkpoint.checkpoint_hash}"
             )
+            if args.out:
+                print(f"anchor written to {args.out}")
             return 0
 
         if args.command == "evidence-export":

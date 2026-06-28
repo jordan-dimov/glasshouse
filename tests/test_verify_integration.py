@@ -16,6 +16,7 @@ from glasshouse.commit import (
     VIEWS_SCHEMA,
     Committed,
     GlasshouseClient,
+    MorphologError,
     apply_views,
     models,
 )
@@ -136,6 +137,31 @@ def test_a_consistent_stack_verifies_with_six_ok_legs(
     assert cli.main(["verify", "--database-url", DB]) == 0
     out = capsys.readouterr().out
     assert "glasshouse verify: consistent" in out
+
+
+def test_verify_survives_a_failing_verify_call(
+    monday: None,
+    morpholog: GlasshouseClient,
+    engine: sa.Engine,
+    store: CurveStore,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # An operational failure of the shared `verify` call fails the ledger
+    # and tree legs but must not abort the report - the independent legs
+    # still run and give as much evidence as they can.
+    catch_up(morpholog, engine)
+
+    def boom() -> object:
+        raise MorphologError("verify exploded")
+
+    monkeypatch.setattr(morpholog, "verify", boom)
+    report = verify(morpholog, engine, store)
+    assert "could not run" in _leg(report, "ledger").detail
+    assert not _leg(report, "ledger").ok
+    assert not _leg(report, "tree").ok
+    assert _leg(report, "model").ok
+    assert _leg(report, "projections").ok
+    assert _leg(report, "views").ok
 
 
 def test_a_dropped_inspection_model_fails_the_views_leg(

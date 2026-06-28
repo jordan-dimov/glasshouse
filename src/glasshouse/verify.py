@@ -38,6 +38,7 @@ from glasshouse.commit import (
     MODEL_HASH,
     VIEWS_SCHEMA,
     GlasshouseClient,
+    MorphologError,
     missing_catalogued_views,
     models,
     views_model_hash,
@@ -224,16 +225,24 @@ def _payload_leg(client: GlasshouseClient, store: CurveStore) -> Leg:
 
 
 def verify(client: GlasshouseClient, engine: sa.Engine, store: CurveStore) -> VerifyReport:
-    """All six legs, in dependency order. Each leg is independent: a
-    divergent ledger does not stop the projections being checked. The
-    ledger and tree legs share one `verify` call (replay and tree are two
-    halves of the same envelope)."""
-    ledger_report = client.verify()
+    """All six legs. Each leg is its own verdict: a divergent ledger does
+    not stop the projections being checked. The ledger and tree legs
+    share one `verify` call (replay and tree are two halves of the same
+    typed envelope), so an operational failure of that call fails *both*
+    of them - but the report still runs the model, projection, payload
+    and view legs, giving as much evidence as it can."""
+    try:
+        report = client.verify()
+        ledger, tree = _ledger_leg(report), _tree_leg(report)
+    except MorphologError as failure:
+        unavailable = f"verify could not run: {failure}"
+        ledger = Leg("ledger", False, unavailable)
+        tree = Leg("tree", False, unavailable)
     return VerifyReport(
         (
             _model_leg(client),
-            _ledger_leg(ledger_report),
-            _tree_leg(ledger_report),
+            ledger,
+            tree,
             _projection_leg(client, engine),
             _payload_leg(client, store),
             _views_leg(engine),

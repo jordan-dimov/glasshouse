@@ -17,7 +17,10 @@ from glasshouse.commit import MODEL_FILE, Committed, GlasshouseClient, models
 from glasshouse.commit.morpholog_client.envelopes import CheckpointCreated, TreeIntact
 from tests.support import BINARY, DB, needs_live_stack, provision
 
-pytestmark = needs_live_stack
+# usefixtures("cli_binary") pins GLASSHOUSE_MORPHOLOG_BIN for the legs
+# that drive cli.main (the CLI builds its own client and CI has no
+# morpholog on PATH).
+pytestmark = [needs_live_stack, pytest.mark.usefixtures("cli_binary")]
 
 ORG, BOOK = "acme-energy", "spec-de"
 
@@ -76,6 +79,22 @@ def test_the_cli_checkpoints_exports_and_verifies(
     assert cli.main(["evidence-export", str(pack), "--database-url", DB]) == 0
     assert pack.exists()
     assert cli.main(["evidence-verify", str(pack)]) == 0
+    assert "evidence verify: intact" in capsys.readouterr().out
+
+
+def test_the_anchor_round_trip(
+    anchored: GlasshouseClient, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # The full external-anchor workflow: checkpoint writes an anchor
+    # file, the pack is exported, and verify checks the pack extends the
+    # externally-held anchor (the check a coordinated rewrite cannot pass).
+    anchor = tmp_path / "anchor.json"
+    assert cli.main(["checkpoint", "--out", str(anchor), "--database-url", DB]) == 0
+    assert anchor.exists()
+    assert "anchor written to" in capsys.readouterr().out
+    pack = tmp_path / "pack.json"
+    assert cli.main(["evidence-export", str(pack), "--database-url", DB]) == 0
+    assert cli.main(["evidence-verify", str(pack), "--anchor", str(anchor)]) == 0
     assert "evidence verify: intact" in capsys.readouterr().out
 
 

@@ -57,17 +57,32 @@ class GlasshouseClient(Morpholog):
             timeout=timeout_seconds,
         )
 
+    def write_checkpoint(
+        self, path: str | Path
+    ) -> envelopes.CheckpointCreated | envelopes.CheckpointNoNewRows:
+        """Record a checkpoint and write its JSON to `path` as an external
+        anchor: the binary prints the checkpoint as JSON, and a later
+        `evidence_verify(pack, anchor_file=path)` against it catches a
+        rewrite that also rewrote the checkpoint table. Writes the exact
+        bytes (after parsing once to validate) and returns the typed
+        outcome."""
+        raw = self._invoke("checkpoint", "--database-url", self.database_url)
+        outcome = envelopes.parse_checkpoint_outcome(json.loads(raw))
+        Path(path).write_bytes(raw.encode("utf-8"))
+        return outcome
+
     def export_evidence_pack(self, path: str | Path, tree_size: int | None = None) -> None:
         """Write a complete-prefix evidence pack to `path` for offline
         verification. The binary writes the pack JSON to stdout; we write
-        those exact bytes (the offline verifier recomputes roots from
-        them) after parsing once to refuse a malformed pack loudly."""
+        those exact bytes as explicit UTF-8 (the offline verifier
+        recomputes roots from them) after parsing once to refuse a
+        malformed pack loudly."""
         args = ["evidence", "export", "--database-url", self.database_url]
         if tree_size is not None:
             args.extend(["--tree-size", str(tree_size)])
         raw = self._invoke(*args)
         envelopes.EvidencePack.from_json(json.loads(raw))  # validate or raise
-        Path(path).write_text(raw)
+        Path(path).write_bytes(raw.encode("utf-8"))
 
     def read[C: NamedClaimModel](self, model: type[C], as_of: str | None = None) -> list[C]:
         """Read one predicate back through the named surface, decoded by
