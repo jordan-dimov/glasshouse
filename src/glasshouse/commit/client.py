@@ -1,49 +1,32 @@
 """Glasshouse's thin extension of the generated client.
 
-What lives here is either genuinely ours (binary discovery under
-`GLASSHOUSE_MORPHOLOG_BIN`; `read`, the typed per-predicate as-of read
-composing generated surfaces) or a documented bridge over a generated
-client gap, filed upstream and deleted when delivered - the pattern
-that retired the as-of gap (morpholog#135, delivered in #138):
+The generated client now covers the whole surface Glasshouse drives -
+the operation timeout, batch `explain_on_reject`, `verify`, the audit
+tail, the tamper-evidence family (`checkpoint`, `evidence_export` /
+`evidence_verify`), and credential redaction in every raised error
+message - all typed and under the regenerate-and-diff drift gate. So the
+hand-written bridges are gone, including the last one (the `_invoke`
+redaction seam: the generated client now masks `--database-url` in its
+own messages, contract section 13 delivered). What remains is genuinely
+ours, nothing duplicated:
 
-* the optional operation timeout (morpholog#140, contract section 13):
-  unset by default - imports legitimately run long - and set at the
-  API boundary, where a hung binary must become a fast verdict; the
-  override of `_audit_lines` extends the same bound to the audit tail,
-  which the generated client runs outside `_invoke`;
-* `propose_batch(..., explain_on_reject=)`: the CLI composes the flag
-  with `--batch` and the envelope already parses per-row explanations,
-  but the generated method exposes neither the flag nor a timeout
-  (morpholog#141, contract section 14);
-* `verify_ledger`: `morpholog verify` exists and is pinned, but the
-  generated client has no surface for it (morpholog#141, contract
-  section 14).
+* **binary discovery** under `GLASSHOUSE_MORPHOLOG_BIN`;
+* **`read`**, the typed per-predicate as-of read composing the generated
+  named-claim surface;
+* **`export_evidence_pack`**, writing the binary's exact pack bytes to a
+  file for offline verification (the generated `evidence_export` returns
+  the typed pack for inspection, not a file).
 """
 
 from __future__ import annotations
 
 import json
 import os
-import subprocess
-from collections.abc import Mapping, Sequence
+from pathlib import Path
 from typing import ClassVar, Protocol, Self
 
 from glasshouse.commit.morpholog_client import envelopes
-from glasshouse.commit.morpholog_client.adapter import Morpholog, MorphologError
-from glasshouse.logging import get_logger
-
-log = get_logger("glasshouse.commit")
-
-
-def _redacted(args: Sequence[str]) -> str:
-    """The invoked command as one string for a log event, with the
-    database URL masked: it carries credentials, and a timeout event must
-    name the operation without leaking the secret into the logs."""
-    parts = list(args)
-    for index, part in enumerate(parts):
-        if part == "--database-url" and index + 1 < len(parts):
-            parts[index + 1] = "***"
-    return " ".join(parts)
+from glasshouse.commit.morpholog_client.adapter import Morpholog
 
 
 class NamedClaimModel(Protocol):
@@ -57,8 +40,8 @@ class NamedClaimModel(Protocol):
 
 
 class GlasshouseClient(Morpholog):
-    """The generated client plus Glasshouse's binary discovery, the
-    typed as-of read, and an optional operation timeout."""
+    """The generated client plus Glasshouse's binary discovery, the typed
+    as-of read, and the offline pack export."""
 
     def __init__(
         self,
@@ -67,131 +50,39 @@ class GlasshouseClient(Morpholog):
         binary: str | None = None,
         timeout_seconds: float | None = None,
     ) -> None:
-        super().__init__(file, database_url, binary or os.environ.get("GLASSHOUSE_MORPHOLOG_BIN"))
-        self.timeout_seconds = timeout_seconds
+        super().__init__(
+            file,
+            database_url,
+            binary or os.environ.get("GLASSHOUSE_MORPHOLOG_BIN"),
+            timeout=timeout_seconds,
+        )
 
-    def _invoke(self, *args: str, stdin: str | None = None) -> str:
-        """The generated `_invoke`, plus the timeout. Mirrors the
-        generated semantics exactly - decided results arrive on stdout,
-        empty stdout raises - and deletes the day the generated client
-        grows a timeout of its own."""
-        try:
-            proc = subprocess.run(
-                [self.binary, *args],
-                capture_output=True,
-                text=True,
-                input=stdin,
-                timeout=self.timeout_seconds,
-                check=False,
-            )
-        except subprocess.TimeoutExpired:
-            # A bounded operation that hangs is the API boundary's reason
-            # to exist; record the full operation (URL redacted) before it
-            # becomes a fast 503.
-            log.warning(
-                "commit.timeout", command=_redacted(args), timeout_seconds=self.timeout_seconds
-            )
-            raise MorphologError(
-                f"`{_redacted(args)}` timed out after {self.timeout_seconds}s"
-            ) from None
-        if not proc.stdout.strip():
-            # Redact the command: the args carry --database-url, and this
-            # message is logged, propagated, and (at the API boundary) at
-            # risk of being reflected to a client.
-            raise MorphologError(f"`{_redacted(args)}`:\n{proc.stderr.strip()}")
-        return proc.stdout
+    def write_checkpoint(
+        self, path: str | Path
+    ) -> envelopes.CheckpointCreated | envelopes.CheckpointNoNewRows:
+        """Record a checkpoint and write its JSON to `path` as an external
+        anchor: the binary prints the checkpoint as JSON, and a later
+        `evidence_verify(pack, anchor_file=path)` against it catches a
+        rewrite that also rewrote the checkpoint table. Writes the exact
+        bytes (after parsing once to validate) and returns the typed
+        outcome."""
+        raw = self._invoke("checkpoint", "--database-url", self.database_url)
+        outcome = envelopes.parse_checkpoint_outcome(json.loads(raw))
+        Path(path).write_bytes(raw.encode("utf-8"))
+        return outcome
 
-    def propose_batch(
-        self, rows: Sequence[Mapping[str, object]], explain_on_reject: bool = False
-    ) -> list[envelopes.BatchReceipt]:
-        """The generated `propose_batch`, plus the per-row explanations
-        and the timeout it lacks (contract section 14). Mirrors the
-        generated semantics: one receipt per processed row in input
-        order, exit 0 = every row processed, non-zero = operational
-        abort with the receipts that did arrive named in the error."""
-        ndjson = "".join(json.dumps(row) + "\n" for row in rows)
-        command = [
-            self.binary,
-            "propose",
-            self.file,
-            "--batch",
-            "-",
-            "--database-url",
-            self.database_url,
-        ]
-        if explain_on_reject:
-            command.append("--explain-on-reject")
-        try:
-            proc = subprocess.run(
-                command,
-                capture_output=True,
-                text=True,
-                input=ndjson,
-                timeout=self.timeout_seconds,
-                check=False,
-            )
-        except subprocess.TimeoutExpired:
-            log.warning(
-                "commit.timeout",
-                command="propose --batch",
-                rows=len(rows),
-                timeout_seconds=self.timeout_seconds,
-            )
-            raise MorphologError(f"batch timed out after {self.timeout_seconds}s") from None
-        receipts = [
-            envelopes.BatchReceipt.from_json(json.loads(line))
-            for line in proc.stdout.splitlines()
-            if line.strip()
-        ]
-        if proc.returncode != 0:
-            raise MorphologError(
-                f"batch aborted after {len(receipts)} receipt(s):\n{proc.stderr.strip()}"
-            )
-        return receipts
-
-    def verify_ledger(self) -> dict[str, object]:
-        """`morpholog verify`: replay the audit log and diff against the
-        claims table, and check the Merkle history tree. The divergent
-        verdict arrives on stdout at exit 1, which is exactly `_invoke`'s
-        discrimination rule; the JSON is
-        `{"replay": {"status", "claims", "transitions"},
-          "tree": {"status", "checkpoints", "tree_size"}}`. The tree
-        verdict is the tamper-evidence seam the legitimacy work will
-        surface; today the read side consumes `replay`."""
-        verdict = json.loads(self._invoke("verify", "--database-url", self.database_url))
-        if not isinstance(verdict, dict):
-            raise MorphologError(f"verify returned a non-object verdict: {verdict!r}")
-        return verdict
-
-    def _audit_lines(self, after: str | None, named: bool) -> list:  # type: ignore[type-arg]
-        """The generated `_audit_lines`, plus the timeout (the #140
-        family: the tail deliberately bypasses `_invoke`, so the
-        `_invoke` override cannot bound it). An empty tail stays a
-        lawful empty list; discrimination stays on the exit code."""
-        argv = [self.binary, "inspect", "audit"]
-        if after is not None:
-            argv.extend(["--after", after])
-        if named:
-            argv.extend(["--named", self.file])
-        argv.extend(["--database-url", self.database_url])
-        try:
-            proc = subprocess.run(
-                argv,
-                capture_output=True,
-                text=True,
-                timeout=self.timeout_seconds,
-                check=False,
-            )
-        except subprocess.TimeoutExpired:
-            log.warning(
-                "commit.timeout", command="inspect audit", timeout_seconds=self.timeout_seconds
-            )
-            raise MorphologError(f"inspect audit timed out after {self.timeout_seconds}s") from None
-        if proc.returncode != 0:
-            raise MorphologError(
-                f"inspect audit failed (exit {proc.returncode}):\n{proc.stderr.strip()}"
-            )
-        return [json.loads(line) for line in proc.stdout.splitlines() if line.strip()]
+    def export_evidence_pack(self, path: str | Path, tree_size: int | None = None) -> None:
+        """Write a complete-prefix evidence pack to `path` for offline
+        verification. The binary writes the pack JSON to stdout; we write
+        those exact bytes as explicit UTF-8 (the offline verifier
+        recomputes roots from them) after parsing once to refuse a
+        malformed pack loudly."""
+        args = ["evidence", "export", "--database-url", self.database_url]
+        if tree_size is not None:
+            args.extend(["--tree-size", str(tree_size)])
+        raw = self._invoke(*args)
+        envelopes.EvidencePack.from_json(json.loads(raw))  # validate or raise
+        Path(path).write_bytes(raw.encode("utf-8"))
 
     def read[C: NamedClaimModel](self, model: type[C], as_of: str | None = None) -> list[C]:
         """Read one predicate back through the named surface, decoded by

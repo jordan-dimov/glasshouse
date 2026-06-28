@@ -28,6 +28,7 @@ from glasshouse.commit import (
     MorphologError,
     apply_views,
 )
+from glasshouse.commit.morpholog_client.envelopes import CheckpointCreated, TreeIntact
 from glasshouse.compute.store import CurveStore, engine_url
 from glasshouse.config import get_settings
 from glasshouse.imports import (
@@ -100,6 +101,44 @@ def _parser() -> argparse.ArgumentParser:
     project.add_argument("--interval", type=float, default=1.0, help="poll interval in seconds")
     database_url(project)
 
+    checkpoint = commands.add_parser(
+        "checkpoint",
+        help="Record a tamper-evidence checkpoint over the audit log's stable prefix "
+        "(an external anchor the `verify` tree leg and evidence packs build on).",
+    )
+    checkpoint.add_argument(
+        "--out",
+        type=Path,
+        default=None,
+        help="write the checkpoint JSON to this file - the external anchor that "
+        "`evidence-verify --anchor` checks a pack against",
+    )
+    database_url(checkpoint)
+
+    pack = commands.add_parser(
+        "evidence-export",
+        help="Write a complete-prefix evidence pack to a file for offline verification "
+        "(a third party verifies it with no database access).",
+    )
+    pack.add_argument("out", type=Path, help="the pack JSON file to write")
+    database_url(pack)
+
+    check_pack = commands.add_parser(
+        "evidence-verify",
+        help="Verify an evidence pack offline (no database): recompute the Merkle root and "
+        "check it against the pack's checkpoints.",
+    )
+    check_pack.add_argument("pack", type=Path, help="the pack JSON file")
+    check_pack.add_argument(
+        "--anchor",
+        type=Path,
+        default=None,
+        help="an externally-held checkpoint JSON the pack must be shown to extend",
+    )
+    # Verification is offline (no database is touched), so no --database-url
+    # flag - but a default keeps client construction uniform.
+    check_pack.set_defaults(database_url="")
+
     return parser
 
 
@@ -119,6 +158,34 @@ def main(argv: list[str] | None = None) -> int:
             apply_views(engine)
             print(f"applied the {VIEWS_SCHEMA} inspection model")
             return 0
+
+        if args.command == "checkpoint":
+            client = GlasshouseClient(str(MODEL_FILE), args.database_url)
+            outcome = client.write_checkpoint(args.out) if args.out else client.checkpoint()
+            kind = "created" if isinstance(outcome, CheckpointCreated) else "no new rows"
+            checkpoint = outcome.checkpoint
+            print(
+                f"checkpoint {kind}: tree_size {checkpoint.tree_size}, "
+                f"hash {checkpoint.checkpoint_hash}"
+            )
+            if args.out:
+                print(f"anchor written to {args.out}")
+            return 0
+
+        if args.command == "evidence-export":
+            client = GlasshouseClient(str(MODEL_FILE), args.database_url)
+            client.export_evidence_pack(args.out)
+            print(f"evidence pack written to {args.out}")
+            return 0
+
+        if args.command == "evidence-verify":
+            client = GlasshouseClient(str(MODEL_FILE), args.database_url)
+            anchor = str(args.anchor) if args.anchor is not None else None
+            pack_verdict = client.evidence_verify(str(args.pack), anchor_file=anchor)
+            intact = isinstance(pack_verdict, TreeIntact)
+            label = "intact" if intact else type(pack_verdict).__name__.removeprefix("Tree")
+            print(f"evidence verify: {label}")
+            return 0 if intact else 1
 
         if args.command == "project":
             client = GlasshouseClient(str(MODEL_FILE), args.database_url)

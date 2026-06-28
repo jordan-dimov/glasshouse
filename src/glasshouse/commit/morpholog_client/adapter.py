@@ -21,6 +21,26 @@ import subprocess
 from . import envelopes
 
 
+# Flags whose VALUE is a credential. It must never appear in a raised
+# message: these are structured-logged and may be reflected to a caller.
+_CREDENTIAL_FLAGS = frozenset({"--database-url"})
+
+
+def _redact_argv(args: list[str]) -> str:
+    """Join an argv for an error message, masking the value after any
+    credential-bearing flag. The rest of the argv is safe to echo."""
+    parts: list[str] = []
+    redact_next = False
+    for arg in args:
+        if redact_next:
+            parts.append("<redacted>")
+            redact_next = False
+        else:
+            parts.append(arg)
+            redact_next = arg in _CREDENTIAL_FLAGS
+    return " ".join(parts)
+
+
 class MorphologError(RuntimeError):
     """An operational failure from the CLI - distinct from a lawful
     business rejection, which is a decided outcome on stdout."""
@@ -33,26 +53,66 @@ class Morpholog:
     ``binary`` resolves as: explicit argument, then the
     ``MORPHOLOG_BIN`` environment variable, then ``morpholog`` on
     ``PATH``.
+
+    ``timeout`` bounds normal single-operation calls (read, commit,
+    audit, outbox) in seconds; a call that overruns raises
+    ``MorphologError`` - a stuck binary becomes an operational failure,
+    never a stuck request. It defaults to unbounded. ``propose_batch``
+    stays unbounded even when it is set - a large import is the
+    legitimate long case - and takes a per-call ``timeout`` to bound
+    one batch.
     """
 
-    def __init__(self, file: str, database_url: str, binary: str | None = None) -> None:
+    def __init__(
+        self,
+        file: str,
+        database_url: str,
+        binary: str | None = None,
+        timeout: float | None = None,
+    ) -> None:
         self.file = str(file)
         self.database_url = database_url
         self.binary = binary or os.environ.get("MORPHOLOG_BIN", "morpholog")
+        self.timeout = timeout
 
     # ------------------------------------------------------------
     # The one subprocess seam.
     # ------------------------------------------------------------
 
+    def _run(
+        self, args: list[str], stdin: str | None = None, *, timeout: float | None
+    ) -> "subprocess.CompletedProcess[str]":
+        """Every invocation lands here. A timeout is operational, not a
+        decided outcome, so it raises ``MorphologError``."""
+        try:
+            return subprocess.run(
+                [self.binary, *args],
+                capture_output=True,
+                text=True,
+                input=stdin,
+                timeout=timeout,
+            )
+        except subprocess.TimeoutExpired:
+            raise MorphologError(
+                f"`{self.binary} {_redact_argv(args)}` timed out after {timeout}s"
+            ) from None
+
+    def _redact_stderr(self, stderr: str) -> str:
+        """Mask the client's own conninfo in any stderr it surfaces - a
+        PG driver error can echo the connection string verbatim. Used at
+        every raised operational error, not only ``_invoke``, so a path
+        that bypasses ``_invoke`` (batch, audit) cannot leak it."""
+        stderr = stderr.strip()
+        if self.database_url:
+            stderr = stderr.replace(self.database_url, "<redacted>")
+        return stderr
+
     def _invoke(self, *args: str, stdin: str | None = None) -> str:
-        proc = subprocess.run(
-            [self.binary, *args],
-            capture_output=True,
-            text=True,
-            input=stdin,
-        )
+        proc = self._run(list(args), stdin=stdin, timeout=self.timeout)
         if not proc.stdout.strip():
-            raise MorphologError(f"`{' '.join(args)}`:\n{proc.stderr.strip()}")
+            raise MorphologError(
+                f"`{_redact_argv(list(args))}`:\n{self._redact_stderr(proc.stderr)}"
+            )
         return proc.stdout
 
     def _json(self, *args: str) -> object:
@@ -113,27 +173,30 @@ class Morpholog:
             explain_on_reject=explain_on_reject,
         )
 
-    def propose_batch(self, rows: list) -> list:
+    def propose_batch(
+        self,
+        rows: list,
+        timeout: float | None = None,
+        *,
+        explain_on_reject: bool = False,
+    ) -> list:
         """Admit many rows in one invocation (`propose --batch -`).
 
         Each row is a dict with ``transformation``, ``actor``, and one
         of ``args``/``args_named``. Returns one ``BatchReceipt`` per
         processed row; a non-zero exit is operational (the batch
         aborted) and raises with the receipts that did arrive named in
-        the error.
+        the error. ``explain_on_reject`` attaches the same-snapshot why
+        to every rejected row, as on ``propose``. ``timeout`` bounds
+        this one call and defaults to unbounded, ignoring the
+        client-wide timeout - a large import is the legitimate
+        long-running case.
         """
         ndjson = "".join(json.dumps(row) + "\n" for row in rows)
-        proc = subprocess.run(
-            [
-                self.binary,
-                "propose", self.file,
-                "--batch", "-",
-                "--database-url", self.database_url,
-            ],
-            capture_output=True,
-            text=True,
-            input=ndjson,
-        )
+        args = ["propose", self.file, "--batch", "-", "--database-url", self.database_url]
+        if explain_on_reject:
+            args.append("--explain-on-reject")
+        proc = self._run(args, stdin=ndjson, timeout=timeout)
         receipts = [
             envelopes.BatchReceipt.from_json(json.loads(line))
             for line in proc.stdout.splitlines()
@@ -141,7 +204,8 @@ class Morpholog:
         ]
         if proc.returncode != 0:
             raise MorphologError(
-                f"batch aborted after {len(receipts)} receipt(s):\n{proc.stderr.strip()}"
+                f"batch aborted after {len(receipts)} receipt(s):\n"
+                f"{self._redact_stderr(proc.stderr)}"
             )
         return receipts
 
@@ -222,16 +286,17 @@ class Morpholog:
         # Not _invoke: an empty tail is a lawful empty stdout, not a
         # protocol violation - so the discrimination here is on the
         # exit code alone.
-        argv = [self.binary, "inspect", "audit"]
+        argv = ["inspect", "audit"]
         if after is not None:
             argv.extend(["--after", after])
         if named:
             argv.extend(["--named", self.file])
         argv.extend(["--database-url", self.database_url])
-        proc = subprocess.run(argv, capture_output=True, text=True)
+        proc = self._run(argv, timeout=self.timeout)
         if proc.returncode != 0:
             raise MorphologError(
-                f"inspect audit failed (exit {proc.returncode}):\n{proc.stderr.strip()}"
+                f"inspect audit failed (exit {proc.returncode}):\n"
+                f"{self._redact_stderr(proc.stderr)}"
             )
         return [
             json.loads(line) for line in proc.stdout.splitlines() if line.strip()
@@ -251,6 +316,90 @@ class Morpholog:
                 "--database-url", self.database_url,
             )
         )
+
+    # ------------------------------------------------------------
+    # Tamper-evidence: replay, checkpoints, evidence packs.
+    # ------------------------------------------------------------
+
+    def verify(self, anchor_file: str | None = None) -> envelopes.VerifyReport:
+        """Replay the audit log against the claims table and check the
+        audit Merkle tree against its checkpoints (and an external
+        ``anchor_file`` if given). A divergence or tamper is a decided
+        verdict on stdout, not an operational error."""
+        args = ["verify", "--database-url", self.database_url]
+        if anchor_file is not None:
+            args.extend(["--anchor-file", str(anchor_file)])
+        return envelopes.VerifyReport.from_json(self._json(*args))
+
+    def checkpoint(
+        self, signing_key: str | None = None, key_id: str | None = None
+    ) -> "envelopes.CheckpointCreated | envelopes.CheckpointNoNewRows":
+        """Record a checkpoint over the current stable prefix, or return
+        the unchanged head - either way a usable external anchor. Pass
+        ``signing_key`` (a PKCS#8 PEM path) and ``key_id`` to sign the new
+        tree head, so the anchor is attributable."""
+        if (signing_key is None) != (key_id is None):
+            raise ValueError("signing_key and key_id must be given together")
+        args = ["checkpoint", "--database-url", self.database_url]
+        if signing_key is not None:
+            args.extend(["--signing-key", str(signing_key), "--key-id", str(key_id)])
+        return envelopes.parse_checkpoint_outcome(self._json(*args))
+
+    def evidence_export(self, tree_size: int | None = None) -> envelopes.EvidencePack:
+        """Export a complete-prefix evidence pack covering the latest
+        checkpoint, or the one at ``tree_size``. The pack carries the
+        full audit prefix - confidential data, not selective
+        disclosure."""
+        args = ["evidence", "export", "--database-url", self.database_url]
+        if tree_size is not None:
+            args.extend(["--tree-size", str(tree_size)])
+        return envelopes.EvidencePack.from_json(self._json(*args))
+
+    def evidence_verify(
+        self, pack_file: str, anchor_file: str | None = None
+    ) -> envelopes.TreeVerification:
+        """Verify a prefix evidence pack offline - no database. Returns the
+        tamper-evidence verdict; a tamper or malformed pack is a decided
+        verdict on stdout."""
+        args = ["evidence", "verify", str(pack_file)]
+        if anchor_file is not None:
+            args.extend(["--anchor-file", str(anchor_file)])
+        return envelopes.parse_tree_verification(self._json(*args))
+
+    def evidence_export_window(
+        self,
+        from_tree_size: int | None = None,
+        to_tree_size: int | None = None,
+        from_anchor: str | None = None,
+    ) -> envelopes.WindowEvidencePack:
+        """Export a WINDOW pack between an earlier checkpoint and the
+        covering one (latest, or ``to_tree_size``): it proves the covered
+        range extends that start. Give the start as ``from_anchor`` (a path
+        to the prior period's checkpoint file - the trust object, and export
+        refuses if the stored start has diverged from it) or the weaker
+        ``from_tree_size``; exactly one. Carries the window's rows -
+        confidential data, not selective disclosure."""
+        if (from_anchor is None) == (from_tree_size is None):
+            raise ValueError("give exactly one of from_anchor or from_tree_size")
+        args = ["evidence", "export", "--database-url", self.database_url]
+        if from_anchor is not None:
+            args.extend(["--from-anchor", str(from_anchor)])
+        else:
+            args.extend(["--from-tree-size", str(from_tree_size)])
+        if to_tree_size is not None:
+            args.extend(["--tree-size", str(to_tree_size)])
+        return envelopes.WindowEvidencePack.from_json(self._json(*args))
+
+    def evidence_verify_window(
+        self, pack_file: str, anchor_file: str | None = None
+    ) -> envelopes.WindowVerification:
+        """Verify a window pack offline - no database. Returns the window
+        verdict; a tamper, inconsistent extension, or malformed pack is a
+        decided verdict on stdout."""
+        args = ["evidence", "verify", str(pack_file)]
+        if anchor_file is not None:
+            args.extend(["--anchor-file", str(anchor_file)])
+        return envelopes.parse_window_verification(self._json(*args))
 
     # ------------------------------------------------------------
     # The outbox lease protocol.

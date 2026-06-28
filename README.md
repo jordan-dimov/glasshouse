@@ -45,7 +45,10 @@ uv run python -m glasshouse.cli apply-views          # the SQL inspection model,
 uv run python -m glasshouse.cli import-trades trades.csv --org acme --actor alice --project
 uv run python -m glasshouse.cli import-curves curves.csv --org acme --actor carol
 uv run python -m glasshouse.cli project --follow     # the projector as a worker
-uv run python -m glasshouse.cli verify               # all five legs agree, or the exit code says not
+uv run python -m glasshouse.cli verify               # all six legs agree, or the exit code says not
+uv run python -m glasshouse.cli checkpoint           # anchor the audit log's tamper-evidence tree
+uv run python -m glasshouse.cli evidence-export pack.json   # a portable pack a third party verifies offline
+uv run python -m glasshouse.cli evidence-verify pack.json   # recompute the Merkle root, no database needed
 ```
 
 Provisioning a fresh database is `morpholog init` (the governed schema), the Alembic migration (the app schema), then `glasshouse apply-views` (the official inspection model). `glasshouse verify`'s `views` leg fails until that last step has run, by design: the inspection model is part of the operational surface it checks.

@@ -16,6 +16,7 @@ from glasshouse.commit import (
     VIEWS_SCHEMA,
     Committed,
     GlasshouseClient,
+    MorphologError,
     apply_views,
     models,
 )
@@ -101,6 +102,9 @@ def monday(morpholog: GlasshouseClient, engine: sa.Engine, store: CurveStore) ->
     # The official inspection model is part of the provisioned substrate
     # the views leg checks (init created the governed schema it reads).
     apply_views(engine)
+    # Anchor a tamper-evidence checkpoint so the tree leg verifies a real
+    # history tree, not a trivially-empty one.
+    morpholog.checkpoint()
 
 
 def _leg(report: Any, name: str) -> Any:
@@ -108,7 +112,7 @@ def _leg(report: Any, name: str) -> Any:
     return leg
 
 
-def test_a_consistent_stack_verifies_with_five_ok_legs(
+def test_a_consistent_stack_verifies_with_six_ok_legs(
     monday: None,
     morpholog: GlasshouseClient,
     engine: sa.Engine,
@@ -121,15 +125,43 @@ def test_a_consistent_stack_verifies_with_five_ok_legs(
     assert [leg.name for leg in report.legs] == [
         "model",
         "ledger",
+        "tree",
         "projections",
         "payloads",
         "views",
     ]
+    # The tree leg verified a real checkpoint (anchored in the fixture).
+    assert "checkpoint" in _leg(report, "tree").detail
 
     # And through the CLI seam, with the verdict as the exit code.
     assert cli.main(["verify", "--database-url", DB]) == 0
     out = capsys.readouterr().out
     assert "glasshouse verify: consistent" in out
+
+
+def test_verify_survives_a_failing_verify_call(
+    monday: None,
+    morpholog: GlasshouseClient,
+    engine: sa.Engine,
+    store: CurveStore,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # An operational failure of the shared `verify` call fails the ledger
+    # and tree legs but must not abort the report - the independent legs
+    # still run and give as much evidence as they can.
+    catch_up(morpholog, engine)
+
+    def boom() -> object:
+        raise MorphologError("verify exploded")
+
+    monkeypatch.setattr(morpholog, "verify", boom)
+    report = verify(morpholog, engine, store)
+    assert "could not run" in _leg(report, "ledger").detail
+    assert not _leg(report, "ledger").ok
+    assert not _leg(report, "tree").ok
+    assert _leg(report, "model").ok
+    assert _leg(report, "projections").ok
+    assert _leg(report, "views").ok
 
 
 def test_a_dropped_inspection_model_fails_the_views_leg(
