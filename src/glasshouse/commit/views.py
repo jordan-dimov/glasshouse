@@ -44,10 +44,21 @@ def apply_views(engine: sa.Engine) -> None:
     - and `CREATE OR REPLACE VIEW` makes re-application idempotent. Views
     live in the `morpholog_views` schema, namespaced away from the
     governed `morpholog` schema, so this never touches governed state.
+
+    The script goes to the DBAPI cursor with no parameters: the sealing
+    step contains SQL `format('%I.%I', ...)`, and psycopg only leaves
+    `%` untouched when no parameter set is passed (`exec_driver_sql`
+    passes one, turning the seal's `%I` into a placeholder error). The
+    documented upstream path is psql, which never interprets `%`; this
+    is the programmatic equivalent, byte-exact.
     """
     script = VIEWS_FILE.read_text()
     with engine.connect().execution_options(isolation_level="AUTOCOMMIT") as connection:
-        connection.exec_driver_sql(script)
+        cursor = connection.connection.cursor()
+        try:
+            cursor.execute(script)
+        finally:
+            cursor.close()
 
 
 def views_model_hash(engine: sa.Engine) -> str | None:

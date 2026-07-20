@@ -11,7 +11,7 @@ from pathlib import Path
 
 import pytest
 
-from glasshouse.commit import GlasshouseClient, MorphologError, models
+from glasshouse.commit import GlasshouseClient, MorphologError, envelopes, models
 from tests.support import fake_binary
 
 NAMED_OFFICIAL_CURVE = json.dumps(
@@ -49,6 +49,42 @@ def test_read_as_of_reaches_the_cli(tmp_path: Path) -> None:
     client(tmp_path).read(models.OfficialCurveClaim, as_of="0197-transition-id")
     argv = (tmp_path / "argv.txt").read_text().splitlines()
     assert argv[argv.index("--as-of") + 1] == "0197-transition-id"
+
+
+def test_verify_passes_the_views_schema_flag_through(tmp_path: Path) -> None:
+    # The one bridge back in the sliver: the binary's `--views-schema`
+    # (the sealed view surface) is not on the generated verify() yet, so
+    # our override carries it and the report's views verdict decodes.
+    report_json = json.dumps(
+        {
+            "replay": {"status": "consistent", "transitions": 1, "claims": 1},
+            "tree": {"status": "intact", "checkpoints": 0, "tree_size": 0},
+            "views": {"status": "intact", "views_checked": 10},
+        }
+    )
+    binary = fake_binary(tmp_path, report_json)
+    client = GlasshouseClient("model.morph", "postgres:///x", binary=str(binary))
+    report = client.verify(views_schema="morpholog_views")
+    assert report.views == envelopes.ViewsIntact(views_checked=10)
+    argv = (tmp_path / "argv.txt").read_text().splitlines()
+    assert argv[argv.index("--views-schema") + 1] == "morpholog_views"
+
+
+def test_verify_without_the_flag_matches_the_generated_call(tmp_path: Path) -> None:
+    # No flag, no verdict: the plain call stays byte-compatible with the
+    # generated body it mirrors.
+    report_json = json.dumps(
+        {
+            "replay": {"status": "consistent", "transitions": 1, "claims": 1},
+            "tree": {"status": "intact", "checkpoints": 0, "tree_size": 0},
+        }
+    )
+    client = GlasshouseClient(
+        "model.morph", "postgres:///x", binary=str(fake_binary(tmp_path, report_json))
+    )
+    assert client.verify().views is None
+    argv = (tmp_path / "argv.txt").read_text().splitlines()
+    assert "--views-schema" not in argv
 
 
 def test_binary_discovery_honours_the_glasshouse_env_var(

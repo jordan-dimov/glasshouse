@@ -895,19 +895,79 @@ def parse_tree_verification(payload: object) -> TreeVerification:
 
 
 @dataclass(frozen=True)
+class ViewsIntact:
+    """Every catalogued view's live definition matches its seal."""
+
+    views_checked: int
+
+    @classmethod
+    def from_json(cls, payload: object) -> "ViewsIntact":
+        data = _strict("intact views", payload, {"status", "views_checked"})
+        return cls(views_checked=data["views_checked"])
+
+
+@dataclass(frozen=True)
+class ViewsTampered:
+    """The view surface disagrees with its seal: `mismatched` views were
+    redefined in place, `missing` views lack a seal row or a live
+    definition."""
+
+    mismatched: list
+    missing: list
+
+    @classmethod
+    def from_json(cls, payload: object) -> "ViewsTampered":
+        data = _strict("tampered views", payload, {"status", "mismatched", "missing"})
+        return cls(mismatched=list(data["mismatched"]), missing=list(data["missing"]))
+
+
+@dataclass(frozen=True)
+class ViewsNotSealed:
+    """No seal table in the schema: the views predate sealing or were
+    never applied. Visible, not a failure."""
+
+    @classmethod
+    def from_json(cls, payload: object) -> "ViewsNotSealed":
+        _strict("unsealed views", payload, {"status"})
+        return cls()
+
+
+ViewsVerification = ViewsIntact | ViewsTampered | ViewsNotSealed
+
+
+def parse_views_verification(payload: object) -> ViewsVerification:
+    """Parse a `views` verdict by its `status` tag."""
+    if not isinstance(payload, dict):
+        raise EnvelopeError(f"not a views verdict: {payload!r}")
+    match payload.get("status"):
+        case "intact":
+            return ViewsIntact.from_json(payload)
+        case "tampered":
+            return ViewsTampered.from_json(payload)
+        case "not_sealed":
+            return ViewsNotSealed.from_json(payload)
+        case _:
+            raise EnvelopeError(f"not a views verdict: {payload!r}")
+
+
+@dataclass(frozen=True)
 class VerifyReport:
     """The `verify` envelope: the replay verdict beside the
-    tamper-evidence verdict."""
+    tamper-evidence verdict, plus the generated-view-surface verdict
+    when the verifier asked for it (`--views-schema`)."""
 
     replay: ReplayConsistent | ReplayDivergent
     tree: TreeVerification
+    views: ViewsVerification | None = None
 
     @classmethod
     def from_json(cls, payload: object) -> "VerifyReport":
-        data = _strict("verify report", payload, {"replay", "tree"})
+        data = _strict("verify report", payload, {"replay", "tree"}, optional={"views"})
+        views = data.get("views")
         return cls(
             replay=parse_verify_outcome(data["replay"]),
             tree=parse_tree_verification(data["tree"]),
+            views=None if views is None else parse_views_verification(views),
         )
 
 
@@ -1315,3 +1375,188 @@ def parse_window_verification(payload: object) -> WindowVerification:
             return WindowMalformed.from_json(payload)
         case _:
             raise EnvelopeError(f"not a window verdict: {payload!r}")
+
+
+@dataclass(frozen=True)
+class SelectivePackManifest:
+    """The selective pack's header: the covering checkpoint's coordinates."""
+
+    pack_format_version: int
+    pack_kind: str
+    tree_size: int
+    root_hash: str
+    checkpoint_hash: str
+
+    @classmethod
+    def from_json(cls, payload: object) -> "SelectivePackManifest":
+        data = _strict(
+            "selective pack manifest",
+            payload,
+            {"pack_format_version", "pack_kind", "tree_size", "root_hash", "checkpoint_hash"},
+        )
+        return cls(
+            pack_format_version=data["pack_format_version"],
+            pack_kind=data["pack_kind"],
+            tree_size=data["tree_size"],
+            root_hash=data["root_hash"],
+            checkpoint_hash=data["checkpoint_hash"],
+        )
+
+
+@dataclass(frozen=True)
+class SelectiveEvidencePack:
+    """A selective evidence pack: a CHOSEN subset of audit rows, each proven
+    included at its declared position under the covering checkpoint.
+    Undisclosed rows are absent entirely. It proves the disclosed rows
+    authentic - never that the selection is complete."""
+
+    manifest: SelectivePackManifest
+    checkpoint: Checkpoint
+    rows: list
+    inclusion_proofs: list
+
+    @classmethod
+    def from_json(cls, payload: object) -> "SelectiveEvidencePack":
+        data = _strict(
+            "selective evidence pack",
+            payload,
+            {"manifest", "checkpoint", "rows", "inclusion_proofs"},
+        )
+        return cls(
+            manifest=SelectivePackManifest.from_json(data["manifest"]),
+            checkpoint=Checkpoint.from_json(data["checkpoint"]),
+            rows=[AuditRow.from_json(r) for r in data["rows"]],
+            inclusion_proofs=[RowInclusionProof.from_json(p) for p in data["inclusion_proofs"]],
+        )
+
+
+@dataclass(frozen=True)
+class SelectiveIntact:
+    """Every disclosed row is included at its declared position.
+    ``rows_disclosed`` counts what the pack chose to show - it says nothing
+    about how many rows the tree holds or the selection missed."""
+
+    tree_size: int
+    rows_disclosed: int
+
+    @classmethod
+    def from_json(cls, payload: object) -> "SelectiveIntact":
+        data = _strict("intact selective", payload, {"status", "tree_size", "rows_disclosed"})
+        return cls(tree_size=data["tree_size"], rows_disclosed=data["rows_disclosed"])
+
+
+@dataclass(frozen=True)
+class SelectiveRowNotIncluded:
+    """A disclosed row is not the row the checkpoint committed to at its
+    declared position."""
+
+    leaf_index: int
+
+    @classmethod
+    def from_json(cls, payload: object) -> "SelectiveRowNotIncluded":
+        data = _strict("row-not-included selective", payload, {"status", "leaf_index"})
+        return cls(leaf_index=data["leaf_index"])
+
+
+@dataclass(frozen=True)
+class SelectiveAnchorMismatch:
+    """An externally held anchor disagrees with the pack's checkpoint."""
+
+    tree_size: int
+    anchor_checkpoint_hash: str
+    pack_checkpoint_hash: str
+
+    @classmethod
+    def from_json(cls, payload: object) -> "SelectiveAnchorMismatch":
+        data = _strict(
+            "anchor-mismatch selective",
+            payload,
+            {"status", "tree_size", "anchor_checkpoint_hash", "pack_checkpoint_hash"},
+        )
+        return cls(
+            tree_size=data["tree_size"],
+            anchor_checkpoint_hash=data["anchor_checkpoint_hash"],
+            pack_checkpoint_hash=data["pack_checkpoint_hash"],
+        )
+
+
+@dataclass(frozen=True)
+class SelectiveSignatureInvalid:
+    """The checkpoint carries a signature that does not verify over its
+    tree head (cryptographic check only; authority is not judged here)."""
+
+    tree_size: int
+    key_id: str
+    purpose: str
+    public_key: str
+
+    @classmethod
+    def from_json(cls, payload: object) -> "SelectiveSignatureInvalid":
+        data = _strict(
+            "signature-invalid selective",
+            payload,
+            {"status", "tree_size", "key_id", "purpose", "public_key"},
+        )
+        return cls(
+            tree_size=data["tree_size"],
+            key_id=data["key_id"],
+            purpose=data["purpose"],
+            public_key=data["public_key"],
+        )
+
+
+@dataclass(frozen=True)
+class SelectiveSignatureRequired:
+    """``--require-signatures`` was asked for and the covering checkpoint
+    carries no signature."""
+
+    tree_size: int
+
+    @classmethod
+    def from_json(cls, payload: object) -> "SelectiveSignatureRequired":
+        data = _strict("signature-required selective", payload, {"status", "tree_size"})
+        return cls(tree_size=data["tree_size"])
+
+
+@dataclass(frozen=True)
+class SelectiveMalformed:
+    """The selective pack is not a well-formed v3 artefact - it never had a
+    chance to prove anything."""
+
+    detail: str
+
+    @classmethod
+    def from_json(cls, payload: object) -> "SelectiveMalformed":
+        data = _strict("malformed selective", payload, {"status", "detail"})
+        return cls(detail=data["detail"])
+
+
+SelectiveVerification = (
+    SelectiveIntact
+    | SelectiveRowNotIncluded
+    | SelectiveAnchorMismatch
+    | SelectiveSignatureInvalid
+    | SelectiveSignatureRequired
+    | SelectiveMalformed
+)
+
+
+def parse_selective_verification(payload: object) -> SelectiveVerification:
+    """The selective-pack verdict, the output of ``evidence verify`` on a v3
+    selective pack."""
+    status = payload.get("status") if isinstance(payload, dict) else None
+    match status:
+        case "intact":
+            return SelectiveIntact.from_json(payload)
+        case "row_not_included":
+            return SelectiveRowNotIncluded.from_json(payload)
+        case "anchor_mismatch":
+            return SelectiveAnchorMismatch.from_json(payload)
+        case "signature_invalid":
+            return SelectiveSignatureInvalid.from_json(payload)
+        case "signature_required":
+            return SelectiveSignatureRequired.from_json(payload)
+        case "malformed":
+            return SelectiveMalformed.from_json(payload)
+        case _:
+            raise EnvelopeError(f"not a selective verdict: {payload!r}")

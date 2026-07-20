@@ -1,4 +1,4 @@
-"""`glasshouse verify` against the real stack: all five legs consistent
+"""`glasshouse verify` against the real stack: all six legs consistent
 after the Monday-morning flow, then each tamperable leg caught and
 restored. The committed history is a module fixture; tests are
 state-based and order-independent (tampers restore in finally)."""
@@ -130,8 +130,10 @@ def test_a_consistent_stack_verifies_with_six_ok_legs(
         "payloads",
         "views",
     ]
-    # The tree leg verified a real checkpoint (anchored in the fixture).
+    # The tree leg verified a real checkpoint (anchored in the fixture),
+    # and the views leg verified the seal, not just hash and inventory.
     assert "checkpoint" in _leg(report, "tree").detail
+    assert "seal intact" in _leg(report, "views").detail
 
     # And through the CLI seam, with the verdict as the exit code.
     assert cli.main(["verify", "--database-url", DB]) == 0
@@ -146,12 +148,14 @@ def test_verify_survives_a_failing_verify_call(
     store: CurveStore,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    # An operational failure of the shared `verify` call fails the ledger
-    # and tree legs but must not abort the report - the independent legs
-    # still run and give as much evidence as they can.
+    # An operational failure of the shared `verify` call fails the
+    # ledger, tree and views legs but must not abort the report - the
+    # independent legs still run and give as much evidence as they can.
+    # The views leg loses only its seal verdict: its local checks still
+    # ran, and the detail says exactly what is missing.
     catch_up(morpholog, engine)
 
-    def boom() -> object:
+    def boom(**_kwargs: object) -> object:
         raise MorphologError("verify exploded")
 
     monkeypatch.setattr(morpholog, "verify", boom)
@@ -161,7 +165,8 @@ def test_verify_survives_a_failing_verify_call(
     assert not _leg(report, "tree").ok
     assert _leg(report, "model").ok
     assert _leg(report, "projections").ok
-    assert _leg(report, "views").ok
+    assert not _leg(report, "views").ok
+    assert "seal unverified" in _leg(report, "views").detail
 
 
 def test_a_dropped_inspection_model_fails_the_views_leg(
@@ -197,6 +202,52 @@ def test_a_dropped_single_view_fails_the_views_leg(
         assert _leg(report, "ledger").ok  # the legs are independent
     finally:
         apply_views(engine)  # CREATE OR REPLACE restores the dropped view
+
+
+def test_a_view_redefined_in_place_fails_the_views_leg(
+    monday: None, morpholog: GlasshouseClient, engine: sa.Engine, store: CurveStore
+) -> None:
+    # The gap the seal exists for (our #184): same name, same columns,
+    # same catalogue row, same model hash - different query answered.
+    # Hash and inventory both pass; only the seal sees it.
+    catch_up(morpholog, engine)
+    with engine.begin() as connection:
+        stored = connection.execute(
+            sa.text(f"SELECT pg_get_viewdef('\"{VIEWS_SCHEMA}\".trade_terms'::regclass, true)")
+        ).scalar_one()
+        connection.execute(
+            sa.text(
+                f'CREATE OR REPLACE VIEW "{VIEWS_SCHEMA}".trade_terms AS '
+                f"SELECT * FROM ({stored.rstrip().rstrip(';')}) AS redefined"
+            )
+        )
+    try:
+        report = verify(morpholog, engine, store)
+        assert not report.ok
+        leg = _leg(report, "views")
+        assert not leg.ok
+        assert "redefined in place: trade_terms" in leg.detail
+        assert _leg(report, "ledger").ok  # the legs are independent
+    finally:
+        apply_views(engine)  # restores the definition and re-seals
+
+
+def test_an_unsealed_surface_fails_the_views_leg(
+    monday: None, morpholog: GlasshouseClient, engine: sa.Engine, store: CurveStore
+) -> None:
+    # A surface applied by the pre-seal script: hash and inventory pass,
+    # but nothing attests the definitions. Glasshouse fails it (one
+    # re-apply seals it); upstream's own default is pass-with-verdict.
+    catch_up(morpholog, engine)
+    with engine.begin() as connection:
+        connection.execute(sa.text(f'DROP TABLE "{VIEWS_SCHEMA}"."_morpholog_view_defs"'))
+    try:
+        report = verify(morpholog, engine, store)
+        leg = _leg(report, "views")
+        assert not leg.ok
+        assert "re-apply the inspection model" in leg.detail
+    finally:
+        apply_views(engine)  # recreates and refills the seal table
 
 
 def test_a_tampered_payload_fails_the_payload_leg(
