@@ -19,7 +19,7 @@ jobs:
         python-version: ["3.13", "3.14"]
     steps:
       - uses: actions/checkout@v7
-      - uses: astral-sh/setup-uv@v8.2.0
+      - uses: astral-sh/setup-uv@v8.3.2
         with:
           python-version: ${{ matrix.python-version }}
       - run: uv lock --check
@@ -67,7 +67,7 @@ jobs:
         with:
           workspaces: morpholog
       - run: cargo build --release --manifest-path morpholog/Cargo.toml
-      - uses: astral-sh/setup-uv@v8.2.0
+      - uses: astral-sh/setup-uv@v8.3.2
         with:
           python-version: "3.13"
       - run: uv sync --dev
