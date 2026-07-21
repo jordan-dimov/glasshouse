@@ -23,6 +23,7 @@ from glasshouse.commit import (
     Committed,
     GlasshouseClient,
     apply_views,
+    envelopes,
     models,
     views_model_hash,
 )
@@ -86,6 +87,16 @@ def test_applying_twice_is_idempotent(applied: sa.Engine) -> None:
     # the deployment can run it unconditionally.
     apply_views(applied)
     assert views_model_hash(applied) == MODEL_HASH
+
+
+def test_the_applied_surface_seals_itself(applied: sa.Engine) -> None:
+    # The script records each view's stored definition hash at apply
+    # time (upstream #190, our #184); the binary's cross-check of
+    # catalogue, seal and live views verifies intact over the whole
+    # inventory: nine predicate views plus the catalogue itself.
+    client = GlasshouseClient(str(MODEL_FILE), DB, binary=str(BINARY))
+    verdict = client.verify(views_schema=VIEWS_SCHEMA).views
+    assert verdict == envelopes.ViewsIntact(views_checked=10)
 
 
 def test_applying_does_not_leak_autocommit() -> None:

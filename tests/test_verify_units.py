@@ -15,11 +15,17 @@ from glasshouse.commit import (
     missing_catalogued_views,
     views_model_hash,
 )
+from glasshouse.commit.morpholog_client.envelopes import (
+    ViewsIntact,
+    ViewsNotSealed,
+    ViewsTampered,
+)
 from glasshouse.verify import Leg, VerifyReport, _ledger_leg, _model_leg, _tree_leg, _views_leg
 from tests.support import fake_binary
 
 INTACT_TREE = {"status": "intact", "checkpoints": 0, "tree_size": 0}
 CONSISTENT_REPLAY = {"status": "consistent", "transitions": 8, "claims": 12}
+INTACT_SEAL = ViewsIntact(views_checked=10)
 
 
 def client_with(tmp_path: Path, stdout: str) -> GlasshouseClient:
@@ -85,16 +91,22 @@ def _dead_engine() -> sa.Engine:
     return sa.create_engine("postgresql+psycopg://127.0.0.1:1/nowhere")
 
 
-def test_the_views_leg_passes_when_the_catalogue_agrees(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_the_views_leg_passes_when_the_catalogue_and_seal_agree(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     monkeypatch.setattr(verify_module, "views_model_hash", lambda _engine: MODEL_HASH)
     monkeypatch.setattr(verify_module, "missing_catalogued_views", lambda _engine: ())
-    assert _views_leg(_dead_engine()).ok
+    leg = _views_leg(_dead_engine(), INTACT_SEAL)
+    assert leg.ok
+    assert "seal intact over 10 view(s)" in leg.detail
 
 
 def test_the_views_leg_names_both_hashes_on_drift(monkeypatch: pytest.MonkeyPatch) -> None:
+    # The local hash check decides without a seal verdict (the shared
+    # verify call may have failed; the drift is evident regardless).
     monkeypatch.setattr(verify_module, "views_model_hash", lambda _engine: "sha256:0000")
     monkeypatch.setattr(verify_module, "missing_catalogued_views", lambda _engine: ())
-    leg = _views_leg(_dead_engine())
+    leg = _views_leg(_dead_engine(), None)
     assert not leg.ok
     assert "sha256:0000" in leg.detail
     assert MODEL_HASH in leg.detail
@@ -102,7 +114,7 @@ def test_the_views_leg_names_both_hashes_on_drift(monkeypatch: pytest.MonkeyPatc
 
 def test_the_views_leg_reports_an_unapplied_surface(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(verify_module, "views_model_hash", lambda _engine: None)
-    leg = _views_leg(_dead_engine())
+    leg = _views_leg(_dead_engine(), None)
     assert not leg.ok
     assert "not applied" in leg.detail
 
@@ -114,9 +126,45 @@ def test_the_views_leg_catches_a_dropped_view_the_hash_would_miss(
     # gone: the inventory check fails where the hash alone would pass.
     monkeypatch.setattr(verify_module, "views_model_hash", lambda _engine: MODEL_HASH)
     monkeypatch.setattr(verify_module, "missing_catalogued_views", lambda _engine: ("trade_terms",))
-    leg = _views_leg(_dead_engine())
+    leg = _views_leg(_dead_engine(), None)
     assert not leg.ok
     assert "trade_terms" in leg.detail
+
+
+def test_the_views_leg_cannot_claim_ok_without_a_seal_verdict(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Local checks clean but the shared verify call failed: "ok" now
+    # means unredefined, which only the seal can attest.
+    monkeypatch.setattr(verify_module, "views_model_hash", lambda _engine: MODEL_HASH)
+    monkeypatch.setattr(verify_module, "missing_catalogued_views", lambda _engine: ())
+    leg = _views_leg(_dead_engine(), None)
+    assert not leg.ok
+    assert "seal unverified" in leg.detail
+
+
+def test_the_views_leg_fails_an_unsealed_surface(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Upstream reports not_sealed and passes; Glasshouse fails it - the
+    # committed script seals at apply time, so an unsealed live surface
+    # is not the committed surface, and one re-apply seals it.
+    monkeypatch.setattr(verify_module, "views_model_hash", lambda _engine: MODEL_HASH)
+    monkeypatch.setattr(verify_module, "missing_catalogued_views", lambda _engine: ())
+    leg = _views_leg(_dead_engine(), ViewsNotSealed())
+    assert not leg.ok
+    assert "re-apply the inspection model" in leg.detail
+
+
+def test_the_views_leg_names_the_redefined_and_missing_views(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(verify_module, "views_model_hash", lambda _engine: MODEL_HASH)
+    monkeypatch.setattr(verify_module, "missing_catalogued_views", lambda _engine: ())
+    leg = _views_leg(
+        _dead_engine(), ViewsTampered(mismatched=["trade_terms"], missing=["official_curve"])
+    )
+    assert not leg.ok
+    assert "redefined in place: trade_terms" in leg.detail
+    assert "seal or view missing: official_curve" in leg.detail
 
 
 def test_views_model_hash_is_none_on_an_unreachable_database() -> None:

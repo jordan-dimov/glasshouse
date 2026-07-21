@@ -15,7 +15,12 @@ ours, nothing duplicated:
   named-claim surface;
 * **`export_evidence_pack`**, writing the binary's exact pack bytes to a
   file for offline verification (the generated `evidence_export` returns
-  the typed pack for inspection, not a file).
+  the typed pack for inspection, not a file);
+* **the `views_schema` flag on `verify`** - one bridge is back: the
+  binary grew `verify --views-schema` (the sealed view surface, our
+  #184), but the generated `verify()` does not expose the flag yet, so
+  an override mirrors the generated body plus one flag. Deletes when
+  upstream adds the parameter (contract section 18).
 """
 
 from __future__ import annotations
@@ -56,6 +61,21 @@ class GlasshouseClient(Morpholog):
             binary or os.environ.get("GLASSHOUSE_MORPHOLOG_BIN"),
             timeout=timeout_seconds,
         )
+
+    def verify(
+        self, anchor_file: str | None = None, views_schema: str | None = None
+    ) -> envelopes.VerifyReport:
+        """The generated `verify` plus `--views-schema`: ask the binary to
+        cross-check the sealed view surface in that schema too, so the
+        report's optional `views` verdict is populated. Mirrors the
+        generated body plus the one flag; deletes when the generated
+        client grows the parameter (contract section 18)."""
+        args = ["verify", "--database-url", self.database_url]
+        if anchor_file is not None:
+            args.extend(["--anchor-file", str(anchor_file)])
+        if views_schema is not None:
+            args.extend(["--views-schema", views_schema])
+        return envelopes.VerifyReport.from_json(self._json(*args))
 
     def write_checkpoint(
         self, path: str | Path

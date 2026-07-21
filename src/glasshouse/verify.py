@@ -21,7 +21,12 @@ Six independent legs, each its own verdict:
   reported as a warning - detectable garbage, not a lie;
 * **views** - the official inspection model (law 4): the generated
   per-predicate SQL views still name the committed programme (the
-  `morpholog_views` catalogue's model hash vs `MODEL_HASH`).
+  `morpholog_views` catalogue's model hash vs `MODEL_HASH`), the whole
+  inventory is present, and the surface agrees with its seal - the
+  binary's `--views-schema` cross-check of each view's live definition
+  against the hash recorded when the views were applied, which is what
+  catches a view redefined in place under the same name (our #184,
+  delivered upstream in #190).
 
 The model, ledger and tree legs are now generated, typed surfaces under
 the regenerate-and-diff drift gate - the silent-drift hole that the
@@ -46,6 +51,9 @@ from glasshouse.commit import (
 from glasshouse.commit.morpholog_client.envelopes import (
     ReplayConsistent,
     TreeIntact,
+    ViewsIntact,
+    ViewsNotSealed,
+    ViewsVerification,
 )
 from glasshouse.commit.morpholog_client.envelopes import (
     VerifyReport as LedgerVerifyReport,
@@ -125,24 +133,46 @@ def _tree_leg(report: LedgerVerifyReport) -> Leg:
     return Leg("tree", False, f"history tree verdict: {verdict}")
 
 
-def _views_leg(engine: sa.Engine) -> Leg:
-    # The official inspection model (law 4): the generated per-predicate
-    # views still name the committed programme AND the whole inventory is
-    # present. The catalogue stamps the same hash the binary and client
-    # name; the inventory check guards against a dropped or renamed view
-    # the hash alone would miss (the catalogue is itself a view, so a hash
-    # read can succeed while a sibling is gone). A redefined view of the
-    # same name still slips through both - a per-view definition hash is
-    # the upstream extension that would close it.
+def _views_leg(engine: sa.Engine, seal: ViewsVerification | None) -> Leg:
+    # The official inspection model (law 4), three independent checks:
+    # the catalogue stamps the same hash the binary and client name; the
+    # inventory check guards against a dropped or renamed view the hash
+    # alone would miss (the catalogue is itself a view, so a hash read
+    # can succeed while a sibling is gone); and the binary's seal verdict
+    # catches a view redefined in place under the same name, which both
+    # of the local checks are blind to. The local checks are database
+    # reads, so they still give evidence when the shared `verify` call
+    # failed and no seal verdict exists (`seal is None`) - but the leg
+    # cannot claim ok without one, because "ok" now means unredefined.
     deployed = views_model_hash(engine)
     if deployed is None:
         return Leg("views", False, f"the {VIEWS_SCHEMA} inspection model is not applied")
     missing = missing_catalogued_views(engine)
     if missing:
         return Leg("views", False, f"catalogued view(s) missing: {', '.join(missing)}")
-    if deployed == MODEL_HASH:
-        return Leg("views", True, f"inspection model names {deployed}, full inventory present")
-    return Leg("views", False, f"inspection model names {deployed}, committed client {MODEL_HASH}")
+    if deployed != MODEL_HASH:
+        return Leg(
+            "views", False, f"inspection model names {deployed}, committed client {MODEL_HASH}"
+        )
+    if seal is None:
+        return Leg("views", False, "seal unverified: the verify call could not run")
+    if isinstance(seal, ViewsNotSealed):
+        # The committed script seals at apply time, so an unsealed live
+        # surface is not the committed surface: re-apply to seal it.
+        return Leg("views", False, "surface is unsealed: re-apply the inspection model")
+    if isinstance(seal, ViewsIntact):
+        return Leg(
+            "views",
+            True,
+            f"inspection model names {deployed}, full inventory present, "
+            f"seal intact over {seal.views_checked} view(s)",
+        )
+    tampered = []
+    if seal.mismatched:
+        tampered.append(f"redefined in place: {', '.join(seal.mismatched)}")
+    if seal.missing:
+        tampered.append(f"seal or view missing: {', '.join(seal.missing)}")
+    return Leg("views", False, f"seal broken - {'; '.join(tampered)}")
 
 
 def _projection_leg(client: GlasshouseClient, engine: sa.Engine) -> Leg:
@@ -226,18 +256,21 @@ def _payload_leg(client: GlasshouseClient, store: CurveStore) -> Leg:
 
 def verify(client: GlasshouseClient, engine: sa.Engine, store: CurveStore) -> VerifyReport:
     """All six legs. Each leg is its own verdict: a divergent ledger does
-    not stop the projections being checked. The ledger and tree legs
-    share one `verify` call (replay and tree are two halves of the same
-    typed envelope), so an operational failure of that call fails *both*
-    of them - but the report still runs the model, projection, payload
-    and view legs, giving as much evidence as it can."""
+    not stop the projections being checked. The ledger, tree and views
+    legs share one `verify` call (replay, tree and the views seal are
+    faces of the same typed envelope), so an operational failure of that
+    call fails all three - the views leg's local checks still report
+    their evidence, but "ok" needs the seal - while the model, projection
+    and payload legs still run, giving as much evidence as they can."""
     try:
-        report = client.verify()
+        report = client.verify(views_schema=VIEWS_SCHEMA)
         ledger, tree = _ledger_leg(report), _tree_leg(report)
+        seal = report.views
     except MorphologError as failure:
         unavailable = f"verify could not run: {failure}"
         ledger = Leg("ledger", False, unavailable)
         tree = Leg("tree", False, unavailable)
+        seal = None
     return VerifyReport(
         (
             _model_leg(client),
@@ -245,6 +278,6 @@ def verify(client: GlasshouseClient, engine: sa.Engine, store: CurveStore) -> Ve
             tree,
             _projection_leg(client, engine),
             _payload_leg(client, store),
-            _views_leg(engine),
+            _views_leg(engine, seal),
         )
     )
