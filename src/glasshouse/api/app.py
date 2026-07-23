@@ -9,18 +9,17 @@ three independent verdicts: is the binary present and speaking, does the
 database answer, and do the two agree through a governed read.
 """
 
-import shutil
-import subprocess
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
-import sqlalchemy as sa
-from fastapi import FastAPI, Response
+from fastapi import FastAPI, Request, Response
+from fastapi.responses import JSONResponse
 
 from glasshouse import __version__
+from glasshouse.api import health
 from glasshouse.api.deps import build_client, build_engine
+from glasshouse.api.queries import ReadUnavailableError
 from glasshouse.api.routers import explain, reads
-from glasshouse.commit import MorphologError
 from glasshouse.config import get_settings
 from glasshouse.logging import configure_logging, get_logger
 
@@ -55,49 +54,22 @@ def create_app() -> FastAPI:
     app.include_router(reads.router)
     app.include_router(explain.router)
 
+    @app.exception_handler(ReadUnavailableError)
+    async def read_unavailable(_request: Request, _exc: ReadUnavailableError) -> Response:
+        # One verdict for every edge the shared query layer serves. The
+        # JSON body is pinned by the pure tests; do not improve it.
+        return JSONResponse({"detail": "database unavailable"}, status_code=503)
+
     @app.get("/healthz")
     def healthz() -> dict[str, str]:
         return {"status": "ok", "version": __version__}
 
     @app.get("/readyz")
     def readyz(response: Response) -> dict[str, str]:
-        checks: dict[str, str] = {}
-
-        binary = shutil.which(settings.morpholog_bin)
-        if binary is None:
-            checks["morpholog"] = "missing"
-        else:
-            try:
-                result = subprocess.run(
-                    [binary, "--version"], capture_output=True, text=True, timeout=10, check=False
-                )
-                checks["morpholog"] = "ok" if result.returncode == 0 else "error"
-            except (OSError, subprocess.TimeoutExpired):
-                # A binary that hangs or cannot execute is a readiness
-                # verdict, not a 500.
-                checks["morpholog"] = "error"
-
-        try:
-            with app.state.engine.connect() as connection:
-                connection.execute(sa.text("select 1"))
-            checks["database"] = "ok"
-        except sa.exc.SQLAlchemyError:
-            checks["database"] = "error"
-
-        # The commit layer: binary, database, the committed model file
-        # and the provisioned schema agreeing through one cheap governed
-        # read. Named on purpose - the named surface makes the programme
-        # the authority, so this proves the model too; the client's
-        # timeout makes a hang a fast verdict.
-        try:
-            app.state.client.claims_named("MayCaptureTrade")
-            checks["commit"] = "ok"
-        except (MorphologError, OSError):
-            checks["commit"] = "error"
-
-        if any(verdict != "ok" for verdict in checks.values()):
+        verdicts = health.checks(settings, app.state.engine, app.state.client)
+        if any(verdict != "ok" for verdict in verdicts.values()):
             response.status_code = 503
-        return checks
+        return verdicts
 
     return app
 

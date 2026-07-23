@@ -80,7 +80,7 @@ def test_readyz_reports_a_hanging_binary_as_error_not_500(
     def hang(*args: object, **kwargs: object) -> object:
         raise subprocess.TimeoutExpired(cmd="morpholog --version", timeout=10)
 
-    monkeypatch.setattr("glasshouse.api.app.subprocess.run", hang)
+    monkeypatch.setattr("glasshouse.api.health.subprocess.run", hang)
     with TestClient(create_app()) as client:
         response = client.get("/readyz")
     assert response.status_code == 503
