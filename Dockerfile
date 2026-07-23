@@ -15,7 +15,7 @@
 FROM rust:1.95-slim AS morpholog-builder
 RUN apt-get update && apt-get install -y --no-install-recommends git pkg-config libssl-dev \
     && rm -rf /var/lib/apt/lists/*
-ARG MORPHOLOG_REF=8e090e877e58439fdf8bb7f5116e7bb200c608f6
+ARG MORPHOLOG_REF=35322d9765fbc5e6c50f0c460e8618712bfc80ba
 RUN git clone https://github.com/jordan-dimov/morpholog /src/morpholog \
     && git -C /src/morpholog checkout "${MORPHOLOG_REF}"
 WORKDIR /src/morpholog
