@@ -1,0 +1,63 @@
+{% extends "base.html" %}
+{% from "_macros.html" import num, evidence, badge, empty_state %}
+{% block title %}Overview - {{ org }} - Glasshouse{% endblock %}
+{% block content %}
+<div class="page-header">
+  <h1>Overview</h1>
+  <p class="page-header__note">Can {{ org }} start its day?</p>
+</div>
+
+<div class="tiles">
+  <section class="tile">
+    <h2>Books</h2>
+    {% if summary.books %}
+    <table class="tile-table">
+      <tbody>
+        {% for entry in summary.books %}
+        <tr><th scope="row">{{ entry.book }}</th><td class="numeric">{{ entry.trade_count }} trade{{ "s" if entry.trade_count != 1 }}</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% else %}
+    {{ empty_state("No trades captured yet.") }}
+    {% endif %}
+  </section>
+
+  <section class="tile">
+    <h2>Latest valuation run</h2>
+    {% if summary.valuation.trade_count %}
+    <dl class="tile-facts">
+      <div><dt>Trades marked</dt><dd class="numeric">{{ summary.valuation.trade_count }}</dd></div>
+      <div><dt>Newest mark</dt><dd>{{ summary.valuation.valued_at | utc }}</dd></div>
+      <div><dt>Total MtM (EUR)</dt><dd>{{ num(summary.valuation.total_mtm) }}</dd></div>
+    </dl>
+    <p class="tile__note">Latest mark per trade; valuation history is never summed.</p>
+    {% else %}
+    {{ empty_state("No valuations admitted yet.") }}
+    {% endif %}
+  </section>
+
+  <section class="tile">
+    <h2>Projection freshness</h2>
+    {% if summary.projection.transition_id %}
+    <dl class="tile-facts">
+      <div><dt>Cursor at</dt><dd>{{ summary.projection.committed_at | utc }}</dd></div>
+      <div><dt>Transition</dt><dd>{{ evidence(summary.projection.transition_id) }}</dd></div>
+    </dl>
+    {% else %}
+    {{ empty_state("Never projected: the read model has no cursor yet.") }}
+    {% endif %}
+  </section>
+
+  <section class="tile">
+    <h2>System health</h2>
+    <dl class="tile-facts">
+      {% for check, verdict in health.items() %}
+      <div><dt>{{ check }}</dt><dd>{{ badge("ok" if verdict == "ok" else "break", verdict) }}</dd></div>
+      {% endfor %}
+    </dl>
+  </section>
+</div>
+
+<p class="omissions">Curve operations and import quarantines will appear here when their dedicated screens land.</p>
+{% endblock %}

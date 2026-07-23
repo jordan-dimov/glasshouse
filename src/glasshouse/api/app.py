@@ -14,6 +14,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request, Response
 from fastapi.responses import JSONResponse
+from fastapi.staticfiles import StaticFiles
 
 from glasshouse import __version__
 from glasshouse.api import health
@@ -22,6 +23,9 @@ from glasshouse.api.queries import ReadUnavailableError
 from glasshouse.api.routers import explain, reads
 from glasshouse.config import get_settings
 from glasshouse.logging import configure_logging, get_logger
+from glasshouse.web import STATIC_DIR
+from glasshouse.web import routes as web
+from glasshouse.web.routes import unavailable_page
 
 
 def create_app() -> FastAPI:
@@ -53,11 +57,17 @@ def create_app() -> FastAPI:
 
     app.include_router(reads.router)
     app.include_router(explain.router)
+    app.include_router(web.router)
+    app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
     @app.exception_handler(ReadUnavailableError)
-    async def read_unavailable(_request: Request, _exc: ReadUnavailableError) -> Response:
-        # One verdict for every edge the shared query layer serves. The
-        # JSON body is pinned by the pure tests; do not improve it.
+    async def read_unavailable(request: Request, _exc: ReadUnavailableError) -> Response:
+        # One verdict for every edge the shared query layer serves: the
+        # Control Room gets the HTML face, everything else the JSON body
+        # the pure tests pin. Do not improve the wording.
+        path = request.url.path
+        if path == "/ui" or path.startswith("/ui/"):
+            return unavailable_page(request)
         return JSONResponse({"detail": "database unavailable"}, status_code=503)
 
     @app.get("/healthz")

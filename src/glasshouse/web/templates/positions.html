@@ -1,0 +1,87 @@
+{% extends "base.html" %}
+{% from "_macros.html" import num_cell, evidence, empty_state %}
+{% block title %}Positions &amp; P&amp;L - {{ org }} - Glasshouse{% endblock %}
+{% block content %}
+<div class="page-header">
+  <h1>Positions &amp; P&amp;L</h1>
+  <p class="page-header__note">Net MW per UTC delivery hour (buy +, sell -), and the current mark per trade.</p>
+</div>
+
+<form class="filter-bar" method="get" action="/ui/positions">
+  <input type="hidden" name="org" value="{{ org }}">
+  <label>Book <input type="text" name="book" value="{{ book or "" }}" placeholder="exact match"></label>
+  <label>Market <input type="text" name="market" value="{{ market or "" }}" placeholder="exact match"></label>
+  <label>From (UTC) <input type="datetime-local" name="start" value="{{ start or "" }}"></label>
+  <label>To (UTC) <input type="datetime-local" name="end" value="{{ end or "" }}"></label>
+  <button type="submit">Apply</button>
+</form>
+
+<section>
+  <h2>Positions</h2>
+  {% if positions %}
+  <div class="table-scroll">
+    <table class="data-table" aria-label="Net position by delivery hour for {{ org }}">
+      <thead>
+        <tr>
+          <th scope="col">Book</th>
+          <th scope="col">Market</th>
+          <th scope="col">Delivery hour (UTC)</th>
+          <th scope="col" class="numeric">Net MW</th>
+          <th scope="col">Transition</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for position in positions %}
+        <tr>
+          <td>{{ position.book }}</td>
+          <td>{{ position.market }}</td>
+          <td>{{ position.period_start | utc }}</td>
+          {{ num_cell(position.net_mw) }}
+          <td>{{ evidence(position.transition_id) }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+  {{ empty_state("No positions in this window.") }}
+  {% endif %}
+</section>
+
+<section>
+  <h2>Current valuation by trade</h2>
+  {% if valuations %}
+  <div class="table-scroll">
+    <table class="data-table" aria-label="Current valuation by trade for {{ org }}">
+      <thead>
+        <tr>
+          <th scope="col">Trade</th>
+          <th scope="col">Book</th>
+          <th scope="col">Curve version</th>
+          <th scope="col" class="numeric">MtM (EUR)</th>
+          <th scope="col">Valued at</th>
+          <th scope="col">Actor</th>
+          <th scope="col">Transition</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for mark in valuations %}
+        <tr>
+          <td class="mono">{{ mark.trade }}</td>
+          <td>{{ mark.book }}</td>
+          <td class="mono">{{ mark.curve_version }}</td>
+          {{ num_cell(mark.mtm) }}
+          <td>{{ mark.valued_at | utc }}</td>
+          <td>{{ mark.actor }}</td>
+          <td>{{ evidence(mark.transition_id) }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  <p class="tile__note">The curve version beside each mark is the number's in-place explanation; valuation history stays on the API (`/valuations`) and joins the evidence screens later.</p>
+  {% else %}
+  {{ empty_state("No current valuations.") }}
+  {% endif %}
+</section>
+{% endblock %}

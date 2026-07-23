@@ -1,0 +1,20 @@
+{% extends "base.html" %}
+{% block title %}Blotter - {{ org }} - Glasshouse{% endblock %}
+{% block content %}
+<div class="page-header">
+  <h1>Blotter</h1>
+  <p class="page-header__note">Every captured trade, exactly as admitted. No editable cells: amendments are governed proposals.</p>
+</div>
+
+<form class="filter-bar" method="get" action="/ui/blotter"
+      hx-get="/ui/blotter" hx-target="#blotter-results" hx-swap="innerHTML" hx-push-url="true">
+  <input type="hidden" name="org" value="{{ org }}">
+  <label>Book <input type="text" name="book" value="{{ book or "" }}" placeholder="exact match"></label>
+  <label>Market <input type="text" name="market" value="{{ market or "" }}" placeholder="exact match"></label>
+  <button type="submit">Apply</button>
+</form>
+
+<div id="blotter-results">
+{% include "partials/blotter_table.html" %}
+</div>
+{% endblock %}

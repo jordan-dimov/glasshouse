@@ -1,0 +1,56 @@
+{% from "_macros.html" import num_cell, evidence, empty_state %}
+{% if trades %}
+<div class="table-scroll">
+  <table class="data-table" aria-label="Trade blotter for {{ org }}">
+    <thead>
+      <tr>
+        <th scope="col">Trade</th>
+        <th scope="col">Book</th>
+        <th scope="col">Counterparty</th>
+        <th scope="col">Market</th>
+        <th scope="col">Direction</th>
+        <th scope="col" class="numeric">Quantity (MW)</th>
+        <th scope="col" class="numeric">Price (EUR/MWh)</th>
+        <th scope="col">Delivery start (UTC)</th>
+        <th scope="col">Delivery end (UTC)</th>
+        <th scope="col">Captured at</th>
+        <th scope="col">Actor</th>
+        <th scope="col">Transition</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for trade in trades %}
+      <tr>
+        <td class="mono">{{ trade.trade }}</td>
+        <td>{{ trade.book }}</td>
+        <td>{{ trade.counterparty }}</td>
+        <td>{{ trade.market }}</td>
+        <td>{{ trade.direction }}</td>
+        {{ num_cell(trade.quantity) }}
+        {{ num_cell(trade.price) }}
+        <td>{{ trade.delivery_start | utc }}</td>
+        <td>{{ trade.delivery_end | utc }}</td>
+        <td>{{ trade.captured_at | utc }}</td>
+        <td>{{ trade.actor }}</td>
+        <td>{{ evidence(trade.transition_id) }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% else %}
+{{ empty_state("No trades match this view.") }}
+{% endif %}
+<nav class="pager" aria-label="Blotter pages">
+  {% set filter_query = ("&book=" ~ (book | urlencode) if book else "") ~ ("&market=" ~ (market | urlencode) if market else "") %}
+  {% if offset > 0 %}
+  <a href="/ui/blotter?org={{ org | urlencode }}{{ filter_query }}&offset={{ prev_offset }}"
+     hx-get="/ui/blotter?org={{ org | urlencode }}{{ filter_query }}&offset={{ prev_offset }}"
+     hx-target="#blotter-results" hx-swap="innerHTML" hx-push-url="true">Previous 50</a>
+  {% endif %}
+  {% if has_more %}
+  <a href="/ui/blotter?org={{ org | urlencode }}{{ filter_query }}&offset={{ next_offset }}"
+     hx-get="/ui/blotter?org={{ org | urlencode }}{{ filter_query }}&offset={{ next_offset }}"
+     hx-target="#blotter-results" hx-swap="innerHTML" hx-push-url="true">Next 50</a>
+  {% endif %}
+</nav>
