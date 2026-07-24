@@ -1,0 +1,18 @@
+{% from "_macros.html" import badge %}
+<h2>Verification: {{ "consistent" if report.ok else "DIVERGENT" }}</h2>
+<div class="table-scroll">
+  <table class="data-table" aria-label="glasshouse verify legs">
+    <thead>
+      <tr><th scope="col">Leg</th><th scope="col">Verdict</th><th scope="col">Evidence</th></tr>
+    </thead>
+    <tbody>
+      {% for leg in report.legs %}
+      <tr>
+        <td>{{ leg.name }}</td>
+        <td>{{ badge("ok" if leg.ok else "break", "ok" if leg.ok else "FAIL") }}</td>
+        <td>{{ leg.detail }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>

@@ -9,6 +9,9 @@ from decimal import Decimal
 from types import SimpleNamespace
 
 from glasshouse.api.schemas import (
+    AttestationInfo,
+    AuditClaim,
+    AuditEntry,
     BlotterTrade,
     BookSummary,
     CurveDiff,
@@ -24,6 +27,7 @@ from glasshouse.api.schemas import (
 from glasshouse.imports import ImportReport, RowOutcome
 from glasshouse.imports.curves import COLUMNS as CURVE_COLUMNS
 from glasshouse.imports.trades import COLUMNS as TRADE_COLUMNS
+from glasshouse.verify import Leg, VerifyReport
 from glasshouse.web.templating import templates
 
 T0 = dt.datetime(2026, 7, 1, tzinfo=dt.UTC)
@@ -285,6 +289,61 @@ def test_the_receipts_page_accounts_for_every_row() -> None:
     assert "badge--rejected" in html
     assert "badge--error" in html
     assert "safe by construction" in html  # the double-submit story, stated
+
+
+def _audit_entry(attested: bool) -> AuditEntry:
+    return AuditEntry(
+        transition_id="txn-9f8e7d6c5b4a",
+        committed_at=T0,
+        transformation="capture_trade",
+        actor="alice",
+        attestation=(
+            AttestationInfo(mode="gateway", authenticated_by="glasshouse_web") if attested else None
+        ),
+        asserted=[
+            AuditClaim(predicate="TradeCaptured", args={"org": "acme-energy", "trade": "T-001"})
+        ],
+        retracted=[],
+        invariants_checked=4,
+        intents=0,
+    )
+
+
+def test_the_audit_page_shows_the_whole_ledger_honestly() -> None:
+    html = _render(
+        "audit.html",
+        org="acme-energy",
+        org_options=["acme-energy"],
+        active="audit",
+        rows=[(_audit_entry(attested=True), True), (_audit_entry(attested=False), False)],
+        total=2,
+        offset=0,
+        prev_offset=0,
+        next_offset=50,
+        has_more=False,
+        report=None,
+    )
+    assert "belongs to the ledger, not to one organisation" in html
+    assert "gateway via" in html  # attestation beside the actor
+    assert "not recorded" in html  # pre-attestation rows render gracefully
+    assert "audit-row--org" in html  # the soft highlight, never a filter
+    assert "TradeCaptured(org=acme-energy" in html
+    assert "glasshouse evidence-verify" in html  # the offline pointer
+
+
+def test_the_verify_report_fragment_is_a_fragment_with_loud_failures() -> None:
+    report = VerifyReport(
+        (
+            Leg("model", True, "binary and committed client agree"),
+            Leg("projections", False, "blotter_trade: 1 missing, 0 unexpected"),
+        )
+    )
+    html = templates.env.get_template("partials/verify_report.html").render(report=report)
+    assert "<html" not in html
+    assert "DIVERGENT" in html
+    assert ">FAIL<" in html
+    assert ">ok<" in html
+    assert "1 missing" in html
 
 
 def test_the_error_page_needs_no_context() -> None:

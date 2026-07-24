@@ -16,12 +16,15 @@ from __future__ import annotations
 import base64
 import binascii
 import datetime as dt
+import tempfile
+from pathlib import Path
 from typing import Any
 
 import sqlalchemy as sa
 from fastapi import APIRouter, Depends, File, Form, Query, Request, Response, UploadFile
 from fastapi.responses import RedirectResponse
 
+from glasshouse.api import audit as audit_queries
 from glasshouse.api import curves as curve_queries
 from glasshouse.api import health, queries
 from glasshouse.api.curves import UnknownCurveVersionError
@@ -38,6 +41,7 @@ from glasshouse.imports import (
     preview_trades,
 )
 from glasshouse.projections import catch_up
+from glasshouse.verify import verify as run_verify
 from glasshouse.web.templating import templates
 
 router = APIRouter(include_in_schema=False)
@@ -328,6 +332,96 @@ def imports_commit(
         "applied": applied,
     }
     return templates.TemplateResponse(request, "imports_result.html", context)
+
+
+@router.get("/ui/audit")
+def audit_screen(
+    request: Request,
+    org: str | None = None,
+    offset: int = Query(default=0, ge=0),
+    engine: sa.Engine = Depends(get_engine),
+    client: GlasshouseClient = Depends(get_client),
+) -> Response:
+    if not org:
+        return RedirectResponse("/ui", status_code=303)
+    # The ledger read comes first (deliberately before the chrome): the
+    # log is the screen's subject, and a binary that cannot answer is
+    # its own honest 503 whatever the read model is doing.
+    entries = audit_queries.list_audit(client)
+    page = entries[offset : offset + PAGE_SIZE]
+    context = _chrome(engine, org, "audit") | {
+        "rows": [(entry, audit_queries.mentions_org(entry, org)) for entry in page],
+        "total": len(entries),
+        "offset": offset,
+        "prev_offset": max(0, offset - PAGE_SIZE),
+        "next_offset": offset + PAGE_SIZE,
+        "has_more": offset + PAGE_SIZE < len(entries),
+        "report": None,
+    }
+    return templates.TemplateResponse(request, "audit.html", context)
+
+
+@router.post("/ui/audit/verify")
+def audit_verify(
+    request: Request,
+    org: str = Form(),
+    engine: sa.Engine = Depends(get_engine),
+    client: GlasshouseClient = Depends(get_client),
+    store: CurveStore = Depends(get_store),
+) -> Response:
+    # Read-only however many times it is pressed; several bounded
+    # subprocess calls, so it runs on demand, never on page load.
+    report = run_verify(client, engine, store)
+    if request.headers.get("HX-Request"):
+        return templates.TemplateResponse(
+            request, "partials/verify_report.html", {"report": report}
+        )
+    entries = audit_queries.list_audit(client)
+    context = _chrome(engine, org, "audit") | {
+        "rows": [(entry, audit_queries.mentions_org(entry, org)) for entry in entries[:PAGE_SIZE]],
+        "total": len(entries),
+        "offset": 0,
+        "prev_offset": 0,
+        "next_offset": PAGE_SIZE,
+        "has_more": len(entries) > PAGE_SIZE,
+        "report": report,
+    }
+    return templates.TemplateResponse(request, "audit.html", context)
+
+
+@router.get("/ui/audit/evidence-pack")
+def evidence_pack_download(
+    client: GlasshouseClient = Depends(get_client),
+) -> Response:
+    # The binary's exact pack bytes, straight to the operator's machine:
+    # a pack is only evidence if it leaves the database's blast radius.
+    with tempfile.TemporaryDirectory() as scratch:
+        path = Path(scratch) / "pack.json"
+        client.export_evidence_pack(path)
+        payload = path.read_bytes()
+    return Response(
+        content=payload,
+        media_type="application/json",
+        headers={"Content-Disposition": 'attachment; filename="glasshouse-evidence-pack.json"'},
+    )
+
+
+@router.post("/ui/audit/checkpoint")
+def checkpoint_download(
+    client: GlasshouseClient = Depends(get_client),
+) -> Response:
+    # A download deliberately, not server-side storage: an anchor only
+    # anchors when held outside the database it checks. Re-pressing is
+    # lawful (a no-new-rows checkpoint still yields valid anchor JSON).
+    with tempfile.TemporaryDirectory() as scratch:
+        path = Path(scratch) / "anchor.json"
+        client.write_checkpoint(path)
+        payload = path.read_bytes()
+    return Response(
+        content=payload,
+        media_type="application/json",
+        headers={"Content-Disposition": 'attachment; filename="glasshouse-checkpoint-anchor.json"'},
+    )
 
 
 @router.get("/ui/positions")

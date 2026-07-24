@@ -5,12 +5,14 @@ locally.
 """
 
 import datetime as dt
+from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
 
 from glasshouse.api.app import create_app
 from glasshouse.web.routes import _utc_instant
+from tests.support import fake_binary
 
 DEAD_DB = "postgresql://127.0.0.1:1/nowhere"
 
@@ -27,7 +29,9 @@ def test_root_redirects_to_the_control_room() -> None:
     assert response.headers["location"] == "/ui"
 
 
-@pytest.mark.parametrize("path", ["/ui/blotter", "/ui/positions", "/ui/curves", "/ui/imports"])
+@pytest.mark.parametrize(
+    "path", ["/ui/blotter", "/ui/positions", "/ui/curves", "/ui/imports", "/ui/audit"]
+)
 def test_a_screen_without_an_org_goes_to_the_picker(path: str) -> None:
     # A 303 before any database work: the dead database proves no query
     # ran on the way out.
@@ -35,6 +39,21 @@ def test_a_screen_without_an_org_goes_to_the_picker(path: str) -> None:
         response = client.get(path, follow_redirects=False)
     assert response.status_code == 303
     assert response.headers["location"] == "/ui"
+
+
+def test_a_dead_commit_layer_is_an_html_503_on_the_audit_screen(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    # The audit screen's subject is the ledger, so its client read comes
+    # first; an operationally failing binary is the same honest 503 as a
+    # dead database, in HTML.
+    broken = fake_binary(tmp_path, "", stderr="Error: database unreachable", exit_code=1)
+    monkeypatch.setenv("GLASSHOUSE_MORPHOLOG_BIN", str(broken))
+    with TestClient(create_app()) as client:
+        response = client.get("/ui/audit", params={"org": "acme-energy"})
+    assert response.status_code == 503
+    assert response.headers["content-type"].startswith("text/html")
+    assert "database is unavailable" in response.text
 
 
 def test_a_dead_database_is_an_html_503_on_ui_paths() -> None:
