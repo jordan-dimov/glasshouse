@@ -305,6 +305,17 @@ def imports_commit(
     problem = _checked_import_form(kind, actor)
     if problem:
         return _import_refusal(request, org, 422, "Check the form", problem)
+    # The commit endpoint is directly reachable, so it enforces the same
+    # cap as the upload - on the encoded length, before any decoding
+    # (base64 inflates by 4/3, so this bound is exact for capped text).
+    if len(text_b64) > ((SIZE_CAP + 2) // 3) * 4:
+        return _import_refusal(
+            request,
+            org,
+            413,
+            "File too large",
+            "The upload cap is 512 KiB; import larger files with the CLI.",
+        )
     try:
         text = base64.b64decode(text_b64.encode("ascii"), validate=True).decode("utf-8")
     except (binascii.Error, ValueError, UnicodeDecodeError):

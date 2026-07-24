@@ -4,6 +4,7 @@ a deliberately dead database, so the verdicts hold whatever is running
 locally.
 """
 
+import base64
 import datetime as dt
 from pathlib import Path
 
@@ -125,6 +126,25 @@ def test_a_damaged_preview_payload_is_refused_before_any_backend_work() -> None:
         )
     assert response.status_code == 422
     assert "preview" in response.text
+
+
+def test_the_commit_endpoint_enforces_the_same_cap_as_the_upload() -> None:
+    # The commit endpoint is directly reachable, so an oversized payload
+    # must not bypass the preview's 512 KiB cap - refused on the encoded
+    # length before any decoding, database-free.
+    oversized = base64.b64encode(b"x" * (512 * 1024 + 3)).decode()
+    with TestClient(create_app()) as client:
+        response = client.post(
+            "/ui/imports/commit",
+            data={
+                "org": "acme-energy",
+                "kind": "trades",
+                "actor": "alice",
+                "text_b64": oversized,
+            },
+        )
+    assert response.status_code == 413
+    assert "512 KiB" in response.text
 
 
 def test_datetime_local_values_are_defined_as_utc() -> None:
