@@ -9,6 +9,7 @@ three independent verdicts: is the binary present and speaking, does the
 database answer, and do the two agree through a governed read.
 """
 
+import threading
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
@@ -25,6 +26,7 @@ from glasshouse.commit import MorphologError
 from glasshouse.compute.store import CurveStore
 from glasshouse.config import get_settings
 from glasshouse.logging import configure_logging, get_logger
+from glasshouse.projections.runner import start_projector_thread
 from glasshouse.web import STATIC_DIR
 from glasshouse.web import routes as web
 from glasshouse.web.routes import unavailable_page
@@ -41,13 +43,25 @@ def create_app() -> FastAPI:
         # The engine is built before the try, then disposed in the finally
         # whatever happens after: a client build that failed would
         # otherwise leak the pool on a half-completed startup.
+        projector: tuple[threading.Thread, threading.Event] | None = None
         try:
             app.state.engine = engine
             app.state.client = build_client(settings)
             app.state.store = CurveStore(engine)
+            if settings.environment == "demo":
+                # The DESIGN section 13 demo profile: one process, the
+                # background-thread projector. Dev composes its own run
+                # mode; production runs the separate worker.
+                projector = start_projector_thread(app.state.client, engine)
             log.info("api.startup", environment=settings.environment, version=__version__)
             yield
         finally:
+            if projector is not None:
+                thread, stop = projector
+                stop.set()
+                # Joined BEFORE the engine is disposed: the thread reads
+                # through this pool.
+                thread.join(timeout=5)
             engine.dispose()
             log.info("api.shutdown")
 
