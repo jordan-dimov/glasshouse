@@ -10,7 +10,7 @@ narrowings on top of that. Each row carries its source `transition_id`
 (and, where stored, the `actor`) straight through, so the evidence trail
 is visible in the read rather than stripped at the edge.
 
-A database that cannot answer surfaces as `ReadUnavailable` from the
+A database that cannot answer surfaces as `ReadUnavailableError` from the
 query layer, mapped app-wide to a 503 - an honest "not ready", never a
 500: the projection tables are a cache of the ledger, and their
 unavailability is operational.
