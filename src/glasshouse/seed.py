@@ -23,10 +23,8 @@ from __future__ import annotations
 import datetime as dt
 from dataclasses import dataclass
 from decimal import Decimal
-from pathlib import Path
 
 import sqlalchemy as sa
-from alembic.config import Config
 
 from alembic import command
 from glasshouse.commit import MODEL_FILE, Committed, GlasshouseClient, apply_views, models
@@ -37,14 +35,15 @@ from glasshouse.compute.store import metadata as payload_metadata
 from glasshouse.config import Environment, get_settings
 from glasshouse.projections import rebuild
 from glasshouse.projections.tables import metadata as projection_metadata
+from glasshouse.provision import ALEMBIC_INI, ProvisionError, alembic_config
 from glasshouse.verify import verify
 
 # One session-level advisory lock for the whole seed/reset operation.
 SEED_LOCK_KEY = 423_001
 
-# The migration bundle the reset path replays. Resolved as a constant so
-# the preflight (and its test) name one place.
-_ALEMBIC_INI = Path(__file__).resolve().parents[2] / "alembic.ini"
+# The migration bundle the reset path replays - provision.py's constant,
+# re-bound here because the pure tests monkeypatch this seam.
+_ALEMBIC_INI = ALEMBIC_INI
 
 ORG = "acme-energy"
 MARKET = "de-power"
@@ -134,13 +133,10 @@ def reset_app_state(engine: sa.Engine, database_url: str) -> None:
     Docker image) root - a wheel-only install cannot reset, and the
     preflight refuses BEFORE the first destructive statement, so an
     unsupported install leaves the database untouched."""
-    if not _ALEMBIC_INI.exists():
-        raise SeedError(
-            f"alembic.ini not found at {_ALEMBIC_INI}; seed --reset runs from the "
-            "source checkout or the Docker image, not a wheel-only install"
-        )
-    config = Config(str(_ALEMBIC_INI))
-    config.set_main_option("sqlalchemy.url", engine_url(database_url))
+    try:
+        config = alembic_config(database_url, ini=_ALEMBIC_INI)
+    except ProvisionError as absent:
+        raise SeedError(str(absent)) from absent
     with engine.begin() as connection:
         connection.execute(sa.text("DROP SCHEMA IF EXISTS morpholog CASCADE"))
         connection.execute(sa.text("DROP SCHEMA IF EXISTS morpholog_views CASCADE"))
