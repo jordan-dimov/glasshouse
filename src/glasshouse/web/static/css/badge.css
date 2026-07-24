@@ -1,0 +1,21 @@
+/* Status badges: quiet outlines, text always carries the meaning
+   (never colour alone). One modifier per status token. */
+.badge {
+  display: inline-block;
+  font-size: var(--size-0);
+  font-weight: 600;
+  padding: 0 var(--space-2);
+  border-radius: var(--radius);
+  border: 1px solid currentColor;
+  text-transform: lowercase;
+}
+
+.badge--committed { color: var(--status-committed); }
+.badge--rejected { color: var(--status-rejected); }
+.badge--superseded { color: var(--status-superseded); }
+.badge--official { color: var(--status-official); }
+.badge--draft { color: var(--status-draft); }
+.badge--quarantined { color: var(--status-quarantined); }
+.badge--break { color: var(--status-break); }
+.badge--reconciled { color: var(--status-reconciled); }
+.badge--ok { color: var(--status-committed); }

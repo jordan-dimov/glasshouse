@@ -1,0 +1,18 @@
+{% extends "base.html" %}
+{% from "_macros.html" import empty_state %}
+{% block title %}Organisations - Glasshouse{% endblock %}
+{% block content %}
+<div class="page-header">
+  <h1>Choose an organisation</h1>
+  <p class="page-header__note">Organisations with projected activity in the read model. The organisation is the tenancy boundary: every screen is scoped to exactly one.</p>
+</div>
+{% if orgs %}
+<ul class="org-list">
+  {% for option in orgs %}
+  <li><a href="/ui?org={{ option | urlencode }}">{{ option }}</a></li>
+  {% endfor %}
+</ul>
+{% else %}
+{{ empty_state("No organisations have projected activity yet. Seed the demo dataset with: glasshouse seed --reset") }}
+{% endif %}
+{% endblock %}

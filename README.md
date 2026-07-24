@@ -6,7 +6,7 @@ Glasshouse is an open-source system of record for European power operations: boo
 
 The architecture in one sentence: **a governed operational ledger for power trading, where every write is a proposal, every accepted proposal is a transition, every large artefact is hash-anchored, every operational view is replayable, and every number can be explained.**
 
-> **Status: pre-v0, the vertical needle is built.** One trade, one official curve, one MTM only admissible against the official curve, one correction that supersedes, one as-of query - running end to end through a governed ledger, with CSV imports (quarantine per row, and a dry-run preview that explains refusals in business terms), replayable projections (blotter, hourly positions, valuations), generated per-predicate SQL views as the official inspection model over governed state, `glasshouse verify` (five legs) proving the database still agrees with the ledger, a read API over the projections (blotter, positions, valuations) plus a dry-run `/explain`, and CI that proves all of it live on every PR. Not yet deployable as a product: the HTTP write path and the hosted demo are the next milestones.
+> **Status: pre-v0, the vertical needle is built and the first screens exist.** One trade, one official curve, one MTM only admissible against the official curve, one correction that supersedes, one as-of query - running end to end through a governed ledger, with CSV imports (quarantine per row, and a dry-run preview that explains refusals in business terms), replayable projections (blotter, hourly positions, valuations), generated per-predicate SQL views as the official inspection model over governed state, `glasshouse verify` (six legs) proving the database still agrees with the ledger, a read API over the projections (blotter, positions, valuations, orgs, overview) plus a dry-run `/explain`, three server-rendered read-only screens (Overview, Blotter, Positions & P&L under `/ui` - the first slice of the six-screen demo, readiness L0 stated on screen), a deterministic `glasshouse seed --reset` for the demo dataset, and CI that proves all of it live on every PR. Not yet deployable as a product: the HTTP write path and the hosted demo are the next milestones.
 
 ## Why this exists
 
@@ -41,6 +41,7 @@ uv run uvicorn glasshouse.api.app:app --reload
 The operator CLI exists ahead of the API:
 
 ```bash
+uv run python -m glasshouse.cli seed --reset         # the Monday-morning demo dataset (destructive; refused in production; a plain `seed` refuses any ledger with history)
 uv run python -m glasshouse.cli apply-views          # the SQL inspection model, after `morpholog init`
 uv run python -m glasshouse.cli import-trades trades.csv --org acme --actor alice --project
 uv run python -m glasshouse.cli import-curves curves.csv --org acme --actor carol

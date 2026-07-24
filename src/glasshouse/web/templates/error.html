@@ -1,0 +1,8 @@
+{% extends "base.html" %}
+{% block title %}{{ title | default("Not ready") }} - Glasshouse{% endblock %}
+{% block content %}
+<div class="page-header">
+  <h1>{{ title | default("Not ready") }}</h1>
+</div>
+<p class="error-detail">{{ message | default("The read model cannot answer right now: the database is unavailable. The governed ledger is unaffected; this screen is a cache of it. Try again shortly.") }}</p>
+{% endblock %}

@@ -1,0 +1,63 @@
+/* Element defaults and the numeric discipline. */
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--ink);
+  font-family: var(--font-ui);
+  font-size: var(--size-2);
+  line-height: var(--leading);
+}
+
+h1 {
+  font-size: var(--size-3);
+  font-weight: 600;
+  margin: 0;
+}
+
+h2 {
+  font-size: var(--size-2);
+  font-weight: 600;
+  margin: 0 0 var(--space-3);
+}
+
+a {
+  color: var(--accent);
+}
+
+:focus-visible {
+  outline: var(--focus-ring);
+  outline-offset: 2px;
+}
+
+/* Money and quantity: tabular numerals, right-aligned, exact strings. */
+.numeric {
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
+.neg {
+  color: var(--negative);
+  font-weight: 600;
+}
+
+/* Identifiers are evidence: the mono face marks them apart. */
+.mono {
+  font-family: var(--font-mono);
+  font-size: var(--size-1);
+}
+
+.empty-state {
+  color: var(--ink-muted);
+  border: 1px dashed var(--line);
+  border-radius: var(--radius);
+  padding: var(--space-4);
+  margin: 0;
+}
+
+.error-detail {
+  max-width: 40rem;
+}

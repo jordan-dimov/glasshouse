@@ -1,0 +1,49 @@
+/* The dense data table: sticky header, hairlines, row hover, and
+   horizontal scroll in its own container rather than crushed columns. */
+.table-scroll {
+  overflow-x: auto;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+}
+
+.data-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--size-1);
+  white-space: nowrap;
+}
+
+.data-table th,
+.data-table td {
+  padding: var(--space-2) var(--space-3);
+  border-bottom: 1px solid var(--line);
+  text-align: left;
+}
+
+.data-table thead th {
+  position: sticky;
+  top: 0;
+  background: var(--surface);
+  font-weight: 600;
+  color: var(--ink-muted);
+  font-size: var(--size-0);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  border-bottom: 1px solid var(--ink-muted);
+}
+
+.data-table tbody tr:last-child td {
+  border-bottom: none;
+}
+
+.data-table tbody tr:hover {
+  background: color-mix(in srgb, var(--accent) 4%, var(--surface));
+}
+
+.pager {
+  display: flex;
+  gap: var(--space-4);
+  margin-top: var(--space-3);
+  font-size: var(--size-1);
+}
