@@ -76,10 +76,12 @@ class BookSummary(BaseModel):
 
 
 class ValuationSummary(BaseModel):
-    """The current valuation run in one line: how many trades carry a
-    mark, when the newest was struck, and the total of the *latest* mark
-    per trade - never a sum over valuation history, which would
-    double-count every corrected curve."""
+    """The latest marks in one line: how many trades carry a mark, when
+    the newest was struck, and the total of each trade's *latest* mark -
+    never a sum over valuation history, which would double-count every
+    corrected curve. There is no valuation-run identity yet: the total
+    may span valuation times and curve versions (a corrected curve
+    leaves the old mark newest until revaluation)."""
 
     trade_count: int
     valued_at: datetime | None

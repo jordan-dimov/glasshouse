@@ -144,19 +144,36 @@ def list_valuations(
     *,
     org: str,
     trade: str | None = None,
+    book: str | None = None,
+    market: str | None = None,
     latest: bool = False,
 ) -> list[TradeValuation]:
     """All admitted marks by default (valuation history is a lawful,
-    visible thing); `latest=True` narrows to the current mark per trade -
-    the only rows that may ever be summed as current P&L."""
+    visible thing); `latest=True` narrows to each trade's newest admitted
+    mark - the only rows that may ever be summed as a total, and even
+    then the total may span valuation times and curve versions (a
+    corrected curve leaves the old mark newest until revaluation). The
+    narrowings mirror the blotter's: book directly (a mark carries its
+    book), market via the trades that belong to it."""
     if latest:
         statement = _latest_valuations(org)
-        if trade is not None:
-            statement = statement.where(statement.selected_columns.trade == trade)
+        columns = statement.selected_columns
     else:
         statement = sa.select(trade_valuation).where(trade_valuation.c.org == org)
-        if trade is not None:
-            statement = statement.where(trade_valuation.c.trade == trade)
+        columns = trade_valuation.c
+    if trade is not None:
+        statement = statement.where(columns.trade == trade)
+    if book is not None:
+        statement = statement.where(columns.book == book)
+    if market is not None:
+        statement = statement.where(
+            columns.trade.in_(
+                sa.select(blotter_trade.c.trade).where(
+                    blotter_trade.c.org == org, blotter_trade.c.market == market
+                )
+            )
+        )
+    if not latest:
         statement = statement.order_by(trade_valuation.c.trade, trade_valuation.c.curve_version)
     return [TradeValuation.model_validate(row) for row in _rows(engine, statement)]
 

@@ -42,6 +42,10 @@ from glasshouse.verify import verify
 # One session-level advisory lock for the whole seed/reset operation.
 SEED_LOCK_KEY = 423_001
 
+# The migration bundle the reset path replays. Resolved as a constant so
+# the preflight (and its test) name one place.
+_ALEMBIC_INI = Path(__file__).resolve().parents[2] / "alembic.ini"
+
 ORG = "acme-energy"
 MARKET = "de-power"
 BOOKS = ("spec-de", "hedge-de")
@@ -113,21 +117,22 @@ def reset_app_state(engine: sa.Engine, database_url: str) -> None:
     """The integration tests' clean slate, in product form: drop the
     governed schema, the view surface and every app-schema table, then
     migrate the app schema to head. Needs `alembic.ini` at the repo (or
-    Docker image) root - a wheel-only install cannot reset."""
+    Docker image) root - a wheel-only install cannot reset, and the
+    preflight refuses BEFORE the first destructive statement, so an
+    unsupported install leaves the database untouched."""
+    if not _ALEMBIC_INI.exists():
+        raise SeedError(
+            f"alembic.ini not found at {_ALEMBIC_INI}; seed --reset runs from the "
+            "source checkout or the Docker image, not a wheel-only install"
+        )
+    config = Config(str(_ALEMBIC_INI))
+    config.set_main_option("sqlalchemy.url", engine_url(database_url))
     with engine.begin() as connection:
         connection.execute(sa.text("DROP SCHEMA IF EXISTS morpholog CASCADE"))
         connection.execute(sa.text("DROP SCHEMA IF EXISTS morpholog_views CASCADE"))
         payload_metadata.drop_all(connection)
         projection_metadata.drop_all(connection)
         connection.execute(sa.text("DROP TABLE IF EXISTS alembic_version"))
-    ini = Path(__file__).resolve().parents[2] / "alembic.ini"
-    if not ini.exists():
-        raise SeedError(
-            f"alembic.ini not found at {ini}; seed --reset runs from the source "
-            "checkout or the Docker image, not a wheel-only install"
-        )
-    config = Config(str(ini))
-    config.set_main_option("sqlalchemy.url", engine_url(database_url))
     command.upgrade(config, "head")
 
 
@@ -202,30 +207,40 @@ def run_seed(database_url: str, *, reset: bool) -> SeedReport:
     report only returns - and the CLI only prints it - after all six
     verification legs are green, so a nightly reset that seeded a
     divergent world exits loudly instead of quietly succeeding."""
+    environment = get_settings().environment
+    if environment == "production":
+        # The whole command is demo provisioning, not just the reset: a
+        # fictional portfolio has no business in a production ledger,
+        # empty or not.
+        raise SeedError("the demo seed refuses to run in production")
     if reset:
-        refuse_unsafe_reset(database_url, get_settings().environment)
+        refuse_unsafe_reset(database_url, environment)
     engine = sa.create_engine(engine_url(database_url))
-    # The guard takes a session-level advisory lock on an AUTOCOMMIT
-    # connection: a plain connection would sit "idle in transaction" for
-    # the whole seed, and the blessed audit tail's slow-writer horizon
-    # would (correctly) treat that open transaction as a writer that
-    # started before every commit - making the projector see an empty
-    # tail. Session locks outlive statements, so AUTOCOMMIT loses nothing.
-    with engine.connect().execution_options(isolation_level="AUTOCOMMIT") as guard:
-        locked = guard.execute(
-            sa.text("select pg_try_advisory_lock(:key)"), {"key": SEED_LOCK_KEY}
-        ).scalar()
-        if not locked:
-            raise SeedError("another seed or reset is already running; refusing to overlap")
-        try:
-            if reset:
-                reset_app_state(engine, database_url)
-            client = GlasshouseClient(str(MODEL_FILE), database_url)
-            store = CurveStore(engine)
-            report = seed_demo(client, store, engine)
-            verification = verify(client, engine, store)
-            if not verification.ok:
-                raise SeedError(f"seeded, but verification failed:\n{verification.render()}")
-            return report
-        finally:
-            guard.execute(sa.text("select pg_advisory_unlock(:key)"), {"key": SEED_LOCK_KEY})
+    try:
+        # The guard takes a session-level advisory lock on an AUTOCOMMIT
+        # connection: a plain connection would sit "idle in transaction"
+        # for the whole seed, and the blessed audit tail's slow-writer
+        # horizon would (correctly) treat that open transaction as a
+        # writer that started before every commit - making the projector
+        # see an empty tail. Session locks outlive statements, so
+        # AUTOCOMMIT loses nothing.
+        with engine.connect().execution_options(isolation_level="AUTOCOMMIT") as guard:
+            locked = guard.execute(
+                sa.text("select pg_try_advisory_lock(:key)"), {"key": SEED_LOCK_KEY}
+            ).scalar()
+            if not locked:
+                raise SeedError("another seed or reset is already running; refusing to overlap")
+            try:
+                if reset:
+                    reset_app_state(engine, database_url)
+                client = GlasshouseClient(str(MODEL_FILE), database_url)
+                store = CurveStore(engine)
+                report = seed_demo(client, store, engine)
+                verification = verify(client, engine, store)
+                if not verification.ok:
+                    raise SeedError(f"seeded, but verification failed:\n{verification.render()}")
+                return report
+            finally:
+                guard.execute(sa.text("select pg_advisory_unlock(:key)"), {"key": SEED_LOCK_KEY})
+    finally:
+        engine.dispose()

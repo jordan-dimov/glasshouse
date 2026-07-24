@@ -24,14 +24,14 @@
   </section>
 
   <section class="tile">
-    <h2>Latest valuation run</h2>
+    <h2>Latest marks</h2>
     {% if summary.valuation.trade_count %}
     <dl class="tile-facts">
-      <div><dt>Trades marked</dt><dd class="numeric">{{ summary.valuation.trade_count }}</dd></div>
+      <div><dt>Trades with a mark</dt><dd class="numeric">{{ summary.valuation.trade_count }}</dd></div>
       <div><dt>Newest mark</dt><dd>{{ summary.valuation.valued_at | utc }}</dd></div>
-      <div><dt>Total MtM (EUR)</dt><dd>{{ num(summary.valuation.total_mtm) }}</dd></div>
+      <div><dt>Total of latest marks (EUR)</dt><dd>{{ num(summary.valuation.total_mtm) }}</dd></div>
     </dl>
-    <p class="tile__note">Latest mark per trade; valuation history is never summed.</p>
+    <p class="tile__note">Each trade's newest admitted mark; the total may span valuation times and curve versions (a corrected curve leaves the old mark newest until revaluation), so it is not a valuation-run P&amp;L. History is never summed.</p>
     {% else %}
     {{ empty_state("No valuations admitted yet.") }}
     {% endif %}

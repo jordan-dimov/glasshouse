@@ -93,6 +93,19 @@ def test_positions_show_the_short_hour_and_current_marks(ui: TestClient) -> None
     assert "2026-07-01 10:00Z" not in windowed.text
 
 
+def test_the_positions_filter_bar_narrows_the_marks_too(ui: TestClient) -> None:
+    # One filter bar governs both sections: a book filter must not show
+    # hedge-de positions above marks from the whole organisation.
+    with ui as client:
+        by_book = client.get("/ui/positions", params={"org": ORG, "book": "hedge-de"})
+        by_market = client.get("/ui/positions", params={"org": ORG, "market": "fr-power"})
+    assert "T-003" in by_book.text  # a hedge-de mark stays
+    assert "T-001" not in by_book.text  # every spec-de mark is gone
+    assert by_book.text.count("crv-2026-07-01") == 3  # hedge-de's three marks only
+    assert by_market.text.count("crv-2026-07-01") == 0
+    assert "No marks in this view" in by_market.text
+
+
 def test_a_second_org_is_empty_but_visible(ui: TestClient) -> None:
     with ui as client:
         response = client.get("/ui/blotter", params={"org": "someone-else"})

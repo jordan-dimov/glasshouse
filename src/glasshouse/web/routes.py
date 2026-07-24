@@ -151,6 +151,10 @@ def positions(
         "positions": queries.list_positions(
             engine, org=org, book=book, market=market, start=start_at, end=end_at
         ),
-        "valuations": queries.list_valuations(engine, org=org, latest=True),
+        # The one filter bar governs both sections: the marks narrow by
+        # the same book and market as the positions above them.
+        "valuations": queries.list_valuations(
+            engine, org=org, book=book, market=market, latest=True
+        ),
     }
     return templates.TemplateResponse(request, "positions.html", context)

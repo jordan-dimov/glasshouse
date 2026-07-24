@@ -112,6 +112,28 @@ def seeded() -> sa.Engine:
         value_trade(client, store, actor="risk-engine", org=ORG, book=BOOK, trade="T-001"),
         Committed,
     )
+    # A second correction with NO revaluation: the official curve moves
+    # to crv-v3 while the newest admitted mark stays against crv-v2 -
+    # the boundary the latest-mark surface must not paper over.
+    assert isinstance(
+        correct_curve_version(
+            client,
+            store,
+            actor="carol",
+            org=ORG,
+            market=MARKET,
+            as_of=AS_OF,
+            prior_version="crv-v2",
+            new_version="crv-v3",
+            curve=HourlyCurve(
+                tuple(
+                    (T0 + dt.timedelta(hours=i), p)
+                    for i, p in enumerate(map(Decimal, ["88", "86.5", "86.25"]))
+                )
+            ),
+        ),
+        Committed,
+    )
     rebuild(client, engine)
     return engine
 
@@ -176,12 +198,27 @@ def test_valuations_pin_the_curve_version(api: TestClient) -> None:
 
 
 def test_latest_valuation_is_one_current_mark_per_trade(api: TestClient) -> None:
-    # `latest=true` is the only surface that may be summed as current
-    # P&L: exactly the newest mark per trade, never history.
+    # `latest=true` is the only surface that may ever be summed: exactly
+    # the newest admitted mark per trade, never history. The official
+    # curve is crv-v3 (corrected without revaluation), and the latest
+    # mark honestly stays against crv-v2: latest means newest admitted,
+    # not freshest against officialness - the boundary this test pins.
     with api as client:
         (mark,) = client.get("/valuations", params={"org": ORG, "latest": "true"}).json()
     assert mark["curve_version"] == "crv-v2"
     assert mark["mtm"] == "35.00"
+
+
+def test_valuations_narrow_by_book_and_market(api: TestClient) -> None:
+    with api as client:
+        by_book = client.get("/valuations", params={"org": ORG, "book": BOOK}).json()
+        other_book = client.get("/valuations", params={"org": ORG, "book": "no-such-book"}).json()
+        by_market = client.get("/valuations", params={"org": ORG, "market": MARKET}).json()
+        other_market = client.get("/valuations", params={"org": ORG, "market": "fr-power"}).json()
+    assert len(by_book) == 2  # both of T-001's marks live in the one book
+    assert other_book == []
+    assert len(by_market) == 2
+    assert other_market == []
 
 
 def test_orgs_lists_projected_organisations(api: TestClient) -> None:

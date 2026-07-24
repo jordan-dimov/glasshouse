@@ -73,9 +73,15 @@ def list_positions(
 def list_valuations(
     org: str,
     trade: str | None = None,
+    book: str | None = None,
+    market: str | None = None,
     latest: bool = Query(
-        default=False, description="only the current (newest) mark per trade, never history"
+        default=False,
+        description="only each trade's newest admitted mark, never history "
+        "(the newest mark may still be against a superseded curve)",
     ),
     engine: sa.Engine = Depends(get_engine),
 ) -> list[TradeValuation]:
-    return queries.list_valuations(engine, org=org, trade=trade, latest=latest)
+    return queries.list_valuations(
+        engine, org=org, trade=trade, book=book, market=market, latest=latest
+    )

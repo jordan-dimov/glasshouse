@@ -4,7 +4,7 @@
 {% block content %}
 <div class="page-header">
   <h1>Positions &amp; P&amp;L</h1>
-  <p class="page-header__note">Net MW per UTC delivery hour (buy +, sell -), and the current mark per trade.</p>
+  <p class="page-header__note">Net MW per UTC delivery hour (buy +, sell -), and each trade's latest admitted mark.</p>
 </div>
 
 <form class="filter-bar" method="get" action="/ui/positions">
@@ -49,7 +49,7 @@
 </section>
 
 <section>
-  <h2>Current valuation by trade</h2>
+  <h2>Latest mark by trade</h2>
   {% if valuations %}
   <div class="table-scroll">
     <table class="data-table" aria-label="Current valuation by trade for {{ org }}">
@@ -79,9 +79,9 @@
       </tbody>
     </table>
   </div>
-  <p class="tile__note">The curve version beside each mark is the number's in-place explanation; valuation history stays on the API (`/valuations`) and joins the evidence screens later.</p>
+  <p class="tile__note">The curve version beside each mark is the number's in-place explanation - a mark against a superseded curve stays the latest until the trade is revalued. Valuation history stays on the API (`/valuations`) and joins the evidence screens later.</p>
   {% else %}
-  {{ empty_state("No current valuations.") }}
+  {{ empty_state("No marks in this view.") }}
   {% endif %}
 </section>
 {% endblock %}
