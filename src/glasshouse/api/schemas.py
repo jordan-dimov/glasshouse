@@ -14,7 +14,7 @@ numbers: a float on the way out would betray law 8 at the last step. The
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import date, datetime
 from decimal import Decimal
 from typing import Annotated, Literal
 
@@ -103,6 +103,82 @@ class OverviewSummary(BaseModel):
     books: list[BookSummary]
     valuation: ValuationSummary
     projection: ProjectionCursor
+
+
+class CurveVersion(BaseModel):
+    """One registered curve version: its status against the official
+    pointer and the supersession lineage, the admitted payload hash
+    beside a live re-hash verdict, and which marks were struck on it."""
+
+    version: str
+    as_of: date
+    status: Literal["official", "superseded", "registered"]
+    payload_hash: str
+    payload: Literal["ok", "mismatch", "missing"]  # the live re-hash verdict
+    supersedes: str | None
+    superseded_by: str | None
+    mark_count: int
+    books: list[str]
+
+
+class CurveDiffPeriod(BaseModel):
+    """One delivery hour of a two-version comparison; a period absent
+    from one side carries no delta."""
+
+    period_start: datetime
+    base_price: ExactDecimal | None
+    compare_price: ExactDecimal | None
+    delta: ExactDecimal | None
+
+
+class VersionMark(BaseModel):
+    """One admitted mark, as evidence of which trades a version touched."""
+
+    trade: str
+    book: str
+    mtm: ExactDecimal
+
+
+class CurveDiff(BaseModel):
+    """What changed between two versions, and whose marks each carries."""
+
+    org: str
+    market: str
+    base: str
+    compare: str
+    periods: list[CurveDiffPeriod]
+    base_marks: list[VersionMark]
+    compare_marks: list[VersionMark]
+
+
+class AuditClaim(BaseModel):
+    """A claim as a transition asserted or retracted it, field-keyed,
+    values as the wire-true strings the named read returns."""
+
+    predicate: str
+    args: dict[str, str]
+
+
+class AttestationInfo(BaseModel):
+    """How the actor identity on a transition was established - who
+    asserted it, recorded by the runtime inside the Merkle leaf."""
+
+    mode: str
+    authenticated_by: str
+
+
+class AuditEntry(BaseModel):
+    """One committed transition, display-shaped from the named tail."""
+
+    transition_id: str
+    committed_at: datetime
+    transformation: str
+    actor: str
+    attestation: AttestationInfo | None
+    asserted: list[AuditClaim]
+    retracted: list[AuditClaim]
+    invariants_checked: int
+    intents: int
 
 
 class ExplainRequest(BaseModel):

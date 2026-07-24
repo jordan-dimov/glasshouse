@@ -20,7 +20,9 @@ from glasshouse import __version__
 from glasshouse.api import health
 from glasshouse.api.deps import build_client, build_engine
 from glasshouse.api.queries import ReadUnavailableError
-from glasshouse.api.routers import explain, reads
+from glasshouse.api.routers import audit, curves, explain, reads
+from glasshouse.commit import MorphologError
+from glasshouse.compute.store import CurveStore
 from glasshouse.config import get_settings
 from glasshouse.logging import configure_logging, get_logger
 from glasshouse.web import STATIC_DIR
@@ -42,6 +44,7 @@ def create_app() -> FastAPI:
         try:
             app.state.engine = engine
             app.state.client = build_client(settings)
+            app.state.store = CurveStore(engine)
             log.info("api.startup", environment=settings.environment, version=__version__)
             yield
         finally:
@@ -57,6 +60,8 @@ def create_app() -> FastAPI:
 
     app.include_router(reads.router)
     app.include_router(explain.router)
+    app.include_router(curves.router)
+    app.include_router(audit.router)
     app.include_router(web.router)
     app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
@@ -69,6 +74,18 @@ def create_app() -> FastAPI:
         if path == "/ui" or path.startswith("/ui/"):
             return unavailable_page(request)
         return JSONResponse({"detail": "database unavailable"}, status_code=503)
+
+    @app.exception_handler(MorphologError)
+    async def commit_layer_unavailable(request: Request, _exc: MorphologError) -> Response:
+        # The ledger query layer's twin of the handler above: a binary
+        # that cannot answer is the same operational verdict as a dead
+        # database, never a 500. Routers that handle MorphologError
+        # themselves (the explain endpoint's 502) are untouched - this
+        # only catches what nothing else did. Body pinned by pure tests.
+        path = request.url.path
+        if path == "/ui" or path.startswith("/ui/"):
+            return unavailable_page(request)
+        return JSONResponse({"detail": "commit layer unavailable"}, status_code=503)
 
     @app.get("/healthz")
     def healthz() -> dict[str, str]:

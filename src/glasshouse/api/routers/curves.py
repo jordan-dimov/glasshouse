@@ -1,0 +1,49 @@
+"""The curve read endpoints: versions, markets, and the two-version
+diff - the JSON twins of the Curves screen (UI law 4). Backed by the
+pinned typed ledger surface via `glasshouse.api.curves`, never a
+projection table (none exists for curves) and never raw JSONB.
+"""
+
+from __future__ import annotations
+
+from fastapi import APIRouter, Depends, HTTPException
+
+from glasshouse.api import curves as curve_queries
+from glasshouse.api.deps import get_client, get_store
+from glasshouse.api.schemas import CurveDiff, CurveVersion
+from glasshouse.commit import GlasshouseClient
+from glasshouse.compute.store import CurveStore
+
+router = APIRouter(tags=["curves"])
+
+
+@router.get("/markets")
+def list_markets(org: str, client: GlasshouseClient = Depends(get_client)) -> list[str]:
+    return curve_queries.list_markets(client, org=org)
+
+
+@router.get("/curves")
+def list_curves(
+    org: str,
+    market: str,
+    client: GlasshouseClient = Depends(get_client),
+    store: CurveStore = Depends(get_store),
+) -> list[CurveVersion]:
+    return curve_queries.list_curve_versions(client, store, org=org, market=market)
+
+
+@router.get("/curves/diff")
+def diff_curves(
+    org: str,
+    market: str,
+    base: str,
+    compare: str,
+    client: GlasshouseClient = Depends(get_client),
+    store: CurveStore = Depends(get_store),
+) -> CurveDiff:
+    try:
+        return curve_queries.curve_diff(
+            client, store, org=org, market=market, base=base, compare=compare
+        )
+    except curve_queries.UnknownCurveVersionError as unknown:
+        raise HTTPException(status_code=404, detail=str(unknown)) from unknown

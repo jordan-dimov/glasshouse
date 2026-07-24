@@ -16,7 +16,7 @@ import sqlalchemy as sa
 from fastapi import Request
 
 from glasshouse.commit import MODEL_FILE, GlasshouseClient
-from glasshouse.compute.store import engine_url
+from glasshouse.compute.store import CurveStore, engine_url
 from glasshouse.config import Settings
 
 
@@ -45,3 +45,8 @@ def get_engine(request: Request) -> sa.Engine:
 def get_client(request: Request) -> GlasshouseClient:
     client: GlasshouseClient = request.app.state.client
     return client
+
+
+def get_store(request: Request) -> CurveStore:
+    store: CurveStore = request.app.state.store
+    return store
