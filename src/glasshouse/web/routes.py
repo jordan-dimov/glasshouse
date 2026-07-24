@@ -13,11 +13,13 @@ JavaScript off.
 
 from __future__ import annotations
 
+import base64
+import binascii
 import datetime as dt
 from typing import Any
 
 import sqlalchemy as sa
-from fastapi import APIRouter, Depends, Query, Request, Response
+from fastapi import APIRouter, Depends, File, Form, Query, Request, Response, UploadFile
 from fastapi.responses import RedirectResponse
 
 from glasshouse.api import curves as curve_queries
@@ -28,6 +30,14 @@ from glasshouse.api.schemas import CurveVersion
 from glasshouse.commit import GlasshouseClient
 from glasshouse.compute.store import CurveStore
 from glasshouse.config import get_settings
+from glasshouse.imports import (
+    ImportFormatError,
+    import_curves,
+    import_trades,
+    preview_curves,
+    preview_trades,
+)
+from glasshouse.projections import catch_up
 from glasshouse.web.templating import templates
 
 router = APIRouter(include_in_schema=False)
@@ -180,6 +190,144 @@ def curves(
         "diff": diff,
     }
     return templates.TemplateResponse(request, "curves.html", context)
+
+
+# The upload cap: bounded state between preview and commit, and a
+# bounded parse. Demo-scale honest; a real book arrives via the CLI.
+SIZE_CAP = 512 * 1024
+
+IMPORT_KINDS = ("trades", "curves")
+
+
+def _import_refusal(
+    request: Request, org: str, status_code: int, title: str, message: str
+) -> Response:
+    # Database-free by construction: a malformed upload is refused on
+    # its own evidence, whatever state the read model is in.
+    context: dict[str, Any] = {
+        "org": org,
+        "active": "imports",
+        "title": title,
+        "message": message,
+    }
+    return templates.TemplateResponse(request, "error.html", context, status_code=status_code)
+
+
+def _read_upload(file: UploadFile) -> str:
+    raw = file.file.read(SIZE_CAP + 1)
+    if len(raw) > SIZE_CAP:
+        raise _UploadRefusedError(
+            413, "File too large", "The upload cap is 512 KiB; import larger files with the CLI."
+        )
+    try:
+        return raw.decode("utf-8")
+    except UnicodeDecodeError as undecodable:
+        raise _UploadRefusedError(
+            422, "Not a text file", "The file is not UTF-8 encoded CSV."
+        ) from undecodable
+
+
+class _UploadRefusedError(Exception):
+    def __init__(self, status_code: int, title: str, message: str) -> None:
+        super().__init__(message)
+        self.status_code, self.title, self.message = status_code, title, message
+
+
+def _checked_import_form(kind: str, actor: str) -> str | None:
+    if kind not in IMPORT_KINDS:
+        return "The kind must be trades or curves."
+    if not actor.strip():
+        return "An actor is required: the ledger records who asserted every import."
+    return None
+
+
+@router.get("/ui/imports")
+def imports_home(
+    request: Request,
+    org: str | None = None,
+    engine: sa.Engine = Depends(get_engine),
+) -> Response:
+    if not org:
+        return RedirectResponse("/ui", status_code=303)
+    return templates.TemplateResponse(request, "imports.html", _chrome(engine, org, "imports"))
+
+
+@router.post("/ui/imports/preview")
+def imports_preview(
+    request: Request,
+    org: str = Form(),
+    kind: str = Form(),
+    actor: str = Form(),
+    file: UploadFile = File(),
+    engine: sa.Engine = Depends(get_engine),
+    client: GlasshouseClient = Depends(get_client),
+) -> Response:
+    problem = _checked_import_form(kind, actor)
+    if problem:
+        return _import_refusal(request, org, 422, "Check the form", problem)
+    try:
+        text = _read_upload(file)
+    except _UploadRefusedError as refused:
+        return _import_refusal(request, org, refused.status_code, refused.title, refused.message)
+    try:
+        preview = preview_trades if kind == "trades" else preview_curves
+        report = preview(client, text, org=org, actor=actor)
+    except ImportFormatError as refusal:
+        return _import_refusal(request, org, 422, "The file was refused whole", str(refusal))
+    context = _chrome(engine, org, "imports") | {
+        "kind": kind,
+        "actor": actor,
+        "filename": file.filename,
+        "report": report,
+        # The commit step re-processes byte-for-byte what was previewed:
+        # base64 survives the form round trip exactly (raw hidden fields
+        # would suffer browser newline normalisation).
+        "text_b64": base64.b64encode(text.encode("utf-8")).decode("ascii"),
+    }
+    return templates.TemplateResponse(request, "import_preview.html", context)
+
+
+@router.post("/ui/imports/commit")
+def imports_commit(
+    request: Request,
+    org: str = Form(),
+    kind: str = Form(),
+    actor: str = Form(),
+    text_b64: str = Form(),
+    engine: sa.Engine = Depends(get_engine),
+    client: GlasshouseClient = Depends(get_client),
+    store: CurveStore = Depends(get_store),
+) -> Response:
+    problem = _checked_import_form(kind, actor)
+    if problem:
+        return _import_refusal(request, org, 422, "Check the form", problem)
+    try:
+        text = base64.b64decode(text_b64.encode("ascii"), validate=True).decode("utf-8")
+    except (binascii.Error, ValueError, UnicodeDecodeError):
+        return _import_refusal(
+            request,
+            org,
+            422,
+            "The preview payload is damaged",
+            "Upload and preview the file again.",
+        )
+    try:
+        if kind == "trades":
+            report = import_trades(client, text, org=org, actor=actor)
+        else:
+            report = import_curves(client, store, text, org=org, actor=actor)
+    except ImportFormatError as refusal:
+        return _import_refusal(request, org, 422, "The file was refused whole", str(refusal))
+    # The inline projector mode: the screens read projections, so the
+    # commit catches them up before showing receipts.
+    applied = catch_up(client, engine)
+    context = _chrome(engine, org, "imports") | {
+        "kind": kind,
+        "actor": actor,
+        "report": report,
+        "applied": applied,
+    }
+    return templates.TemplateResponse(request, "imports_result.html", context)
 
 
 @router.get("/ui/positions")

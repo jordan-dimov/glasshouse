@@ -1,0 +1,41 @@
+{% extends "base.html" %}
+{% block title %}Imports - {{ org }} - Glasshouse{% endblock %}
+{% block content %}
+<div class="page-header">
+  <h1>Imports</h1>
+  <p class="page-header__note">Upload a CSV, preview the ledger's verdict on every row, then commit the good ones. Nothing is committed until you say so.</p>
+</div>
+
+<div class="tiles">
+  <section class="tile">
+    <h2>Upload and preview</h2>
+    <form method="post" action="/ui/imports/preview" enctype="multipart/form-data" class="upload-form">
+      <input type="hidden" name="org" value="{{ org }}">
+      <label>File <input type="file" name="file" accept=".csv,text/csv" required></label>
+      <label>Kind
+        <select name="kind">
+          <option value="trades">trades</option>
+          <option value="curves">curves</option>
+        </select>
+      </label>
+      <label>Actor <input type="text" name="actor" placeholder="who is importing" required></label>
+      <button type="submit">Preview</button>
+    </form>
+    <p class="tile__note">Identity is asserted, not authenticated, at readiness L0; the ledger records who asserted every import.</p>
+  </section>
+
+  <section class="tile">
+    <h2>Column contracts</h2>
+    {# The canonical column order is presentation; the source of truth is
+       the frozenset contract in glasshouse.imports (kept in step by the
+       template tests). #}
+    <p class="tile__note">trades</p>
+    <p class="mono">book,trade,counterparty,market,direction,quantity,price,delivery_start,delivery_end</p>
+    <p class="tile__note">curves</p>
+    <p class="mono">market,as_of,version,period_start,price</p>
+    <p class="tile__note">A file whose header does not match its contract is refused whole; rows that fail their own checks are quarantined with the reason, never silently coerced.</p>
+  </section>
+</div>
+
+<p class="omissions">Recent refusals across sessions will appear here once the substrate's rejection-log surface is pinned (morpholog#204).</p>
+{% endblock %}

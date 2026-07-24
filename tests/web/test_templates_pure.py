@@ -21,6 +21,9 @@ from glasshouse.api.schemas import (
     ValuationSummary,
     VersionMark,
 )
+from glasshouse.imports import ImportReport, RowOutcome
+from glasshouse.imports.curves import COLUMNS as CURVE_COLUMNS
+from glasshouse.imports.trades import COLUMNS as TRADE_COLUMNS
 from glasshouse.web.templating import templates
 
 T0 = dt.datetime(2026, 7, 1, tzinfo=dt.UTC)
@@ -212,6 +215,76 @@ def test_curves_render_status_lineage_and_the_diff() -> None:
     assert 'class="numeric neg">-2.5' in html  # a price drop is loud
     assert 'class="numeric neg">-220' in html  # the mark struck on the base version
     assert "Marks struck on" in html
+
+
+def test_the_imports_page_states_the_contracts_truthfully() -> None:
+    html = _render("imports.html", org="acme-energy", org_options=["acme-energy"], active="imports")
+    # The rendered header lines carry exactly the column contracts the
+    # import layer enforces - the template's canonical order is display,
+    # this test keeps it honest against the frozensets.
+    trades_line = (
+        "book,trade,counterparty,market,direction,quantity,price,delivery_start,delivery_end"
+    )
+    curves_line = "market,as_of,version,period_start,price"
+    assert trades_line in html
+    assert curves_line in html
+    assert set(trades_line.split(",")) == TRADE_COLUMNS
+    assert set(curves_line.split(",")) == CURVE_COLUMNS
+    assert "morpholog#204" in html  # the honest rejections-panel omission
+    assert "asserted, not authenticated" in html
+
+
+def test_the_preview_page_commits_nothing_and_says_so() -> None:
+    report = ImportReport(
+        (
+            RowOutcome(ref="line 2", status="admissible", detail="admissible"),
+            RowOutcome(ref="line 3", status="refused", detail="missing MayCaptureTrade(...)"),
+            RowOutcome(ref="line 4", status="quarantined", detail="quantity: not a decimal"),
+        )
+    )
+    html = _render(
+        "import_preview.html",
+        org="acme-energy",
+        org_options=["acme-energy"],
+        active="imports",
+        kind="trades",
+        actor="alice",
+        filename="monday.csv",
+        report=report,
+        text_b64="Ym9vaw==",
+    )
+    assert "Nothing has been committed" in html
+    assert "badge--admissible" in html
+    assert "badge--refused" in html
+    assert "badge--quarantined" in html
+    assert "missing MayCaptureTrade" in html  # the why rides the row
+    assert 'name="text_b64" value="Ym9vaw=="' in html
+
+
+def test_the_receipts_page_accounts_for_every_row() -> None:
+    report = ImportReport(
+        (
+            RowOutcome(ref="line 2", status="committed", detail="transition txn-1"),
+            RowOutcome(ref="line 3", status="rejected", detail="would break invariant x"),
+            RowOutcome(ref="line 4", status="error", detail="payload already stored"),
+        )
+    )
+    html = _render(
+        "imports_result.html",
+        org="acme-energy",
+        org_options=["acme-energy"],
+        active="imports",
+        kind="trades",
+        actor="alice",
+        report=report,
+        applied=2,
+    )
+    assert "1 committed, 1 rejected, 1 errored, 0 quarantined" in html
+    assert "projected: 2 transition(s) applied" in html
+    assert "badge--committed" in html
+    assert "badge--rejected" in html
+    assert "badge--error" in html
+    assert "safe by construction" in html  # the double-submit story, stated
 
 
 def test_the_error_page_needs_no_context() -> None:
