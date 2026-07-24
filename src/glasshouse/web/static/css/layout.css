@@ -1,0 +1,171 @@
+/* Topbar, page frame, tiles, footer. */
+.topbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+  padding: var(--space-3) var(--space-5);
+  background: var(--surface);
+  border-bottom: 1px solid var(--line);
+}
+
+.topbar__identity {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-5);
+}
+
+.brand {
+  font-weight: 700;
+  color: var(--ink);
+  text-decoration: none;
+  letter-spacing: 0.01em;
+}
+
+.topbar__nav {
+  display: flex;
+  gap: var(--space-4);
+}
+
+.topbar__nav a {
+  color: var(--ink-muted);
+  text-decoration: none;
+  font-size: var(--size-1);
+  padding-bottom: 2px;
+}
+
+.topbar__nav a[aria-current="page"] {
+  color: var(--ink);
+  border-bottom: 2px solid var(--accent);
+}
+
+.topbar__state {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+}
+
+/* The signature element: as-of mode is global and visible (UI law 1).
+   The one filled-accent thing in the chrome. */
+.as-of-pill {
+  background: var(--accent);
+  color: var(--accent-ink);
+  font-size: var(--size-0);
+  font-weight: 600;
+  padding: var(--space-1) var(--space-3);
+  border-radius: 999px;
+  white-space: nowrap;
+}
+
+.l0-badge {
+  color: var(--ink-muted);
+  border: 1px solid var(--line);
+  font-size: var(--size-0);
+  padding: var(--space-1) var(--space-2);
+  border-radius: var(--radius);
+  white-space: nowrap;
+}
+
+.page {
+  padding: var(--space-5);
+  max-width: 90rem;
+  margin: 0 auto;
+}
+
+.page-header {
+  margin-bottom: var(--space-5);
+}
+
+.page-header__note {
+  color: var(--ink-muted);
+  font-size: var(--size-1);
+  margin: var(--space-1) 0 0;
+}
+
+.tiles {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(16rem, 1fr));
+  gap: var(--space-4);
+}
+
+.tile {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: var(--space-4);
+}
+
+.tile-facts {
+  margin: 0;
+}
+
+.tile-facts div {
+  display: flex;
+  justify-content: space-between;
+  gap: var(--space-3);
+  padding: var(--space-1) 0;
+}
+
+.tile-facts dt {
+  color: var(--ink-muted);
+  font-size: var(--size-1);
+}
+
+.tile-facts dd {
+  margin: 0;
+  font-size: var(--size-1);
+}
+
+.tile-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--size-1);
+}
+
+.tile-table th {
+  text-align: left;
+  font-weight: 400;
+}
+
+.tile__note,
+.omissions {
+  color: var(--ink-muted);
+  font-size: var(--size-0);
+  margin-top: var(--space-3);
+}
+
+.org-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: grid;
+  gap: var(--space-2);
+  max-width: 24rem;
+}
+
+.org-list a {
+  display: block;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: var(--space-3) var(--space-4);
+  text-decoration: none;
+  font-weight: 600;
+}
+
+section + section {
+  margin-top: var(--space-6);
+}
+
+.footer {
+  display: flex;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  color: var(--ink-muted);
+  font-size: var(--size-0);
+  padding: var(--space-4) var(--space-5);
+  border-top: 1px solid var(--line);
+  margin-top: var(--space-6);
+}

@@ -44,6 +44,7 @@ from glasshouse.imports import (
 )
 from glasshouse.logging import configure_logging, get_logger
 from glasshouse.projections import catch_up, follow
+from glasshouse.seed import SeedError, run_seed
 from glasshouse.verify import verify
 
 log = get_logger("glasshouse.cli")
@@ -133,6 +134,25 @@ def import_curves_command(
         preview=preview,
         db=_db(database_url),
     )
+
+
+@app.command(
+    "seed",
+    help="Seed the Monday-morning demo dataset (org acme-energy): grants, six trades, an "
+    "official curve, valuations, projections - then verify all six legs before reporting.",
+)
+def seed_command(
+    reset: Annotated[
+        bool,
+        typer.Option(
+            "--reset",
+            help="drop and re-provision the database first (destructive; refused in "
+            "production, and in dev refused for non-local databases)",
+        ),
+    ] = False,
+    database_url: DatabaseUrl = "",
+) -> None:
+    print(run_seed(_db(database_url), reset=reset).render())
 
 
 @app.command("verify", help="Prove the operational database still agrees with the governed ledger.")
@@ -246,7 +266,7 @@ def main(argv: list[str] | None = None) -> int:
         get_command(app).main(args=effective)
     except SystemExit as exit_:
         return int(exit_.code) if isinstance(exit_.code, int) else 0
-    except (ImportFormatError, MorphologError, OSError) as failure:
+    except (ImportFormatError, MorphologError, SeedError, OSError) as failure:
         log.warning(
             "cli.command_failed",
             command=effective[0] if effective else "?",

@@ -68,6 +68,41 @@ class TradeValuation(BaseModel):
     actor: str  # who admitted it
 
 
+class BookSummary(BaseModel):
+    """One book's presence on the overview: how many trades it carries."""
+
+    book: str
+    trade_count: int
+
+
+class ValuationSummary(BaseModel):
+    """The current valuation run in one line: how many trades carry a
+    mark, when the newest was struck, and the total of the *latest* mark
+    per trade - never a sum over valuation history, which would
+    double-count every corrected curve."""
+
+    trade_count: int
+    valued_at: datetime | None
+    total_mtm: ExactDecimal | None
+
+
+class ProjectionCursor(BaseModel):
+    """How fresh the read model is: the transition the projector last
+    applied. Both fields `None` when nothing has ever been projected."""
+
+    committed_at: datetime | None
+    transition_id: str | None
+
+
+class OverviewSummary(BaseModel):
+    """The operational landing page's tiles, one coherent snapshot."""
+
+    org: str
+    books: list[BookSummary]
+    valuation: ValuationSummary
+    projection: ProjectionCursor
+
+
 class ExplainRequest(BaseModel):
     """A dry-run question: would this transformation be admissible for
     the calling actor (the `X-Actor` header), and if not, what is

@@ -1,0 +1,24 @@
+{# The small rendering vocabulary every screen shares. Numbers pass
+   through as exact decimal strings (Jinja calls str() on the Decimal,
+   law 8); negatives get the loud class; identifiers render in the
+   evidence face with the full value one hover away. #}
+
+{% macro num(value) -%}
+<span class="numeric{% if value < 0 %} neg{% endif %}">{{ value }}</span>
+{%- endmacro %}
+
+{% macro num_cell(value) -%}
+<td class="numeric{% if value < 0 %} neg{% endif %}">{{ value }}</td>
+{%- endmacro %}
+
+{% macro evidence(identifier, length=12) -%}
+<span class="mono" title="{{ identifier }}">{{ identifier[:length] }}</span>
+{%- endmacro %}
+
+{% macro badge(status, label=none) -%}
+<span class="badge badge--{{ status }}">{{ label or status }}</span>
+{%- endmacro %}
+
+{% macro empty_state(text) -%}
+<p class="empty-state">{{ text }}</p>
+{%- endmacro %}

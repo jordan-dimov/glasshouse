@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="en-GB">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}Glasshouse{% endblock %}</title>
+  <link rel="stylesheet" href="/static/css/tokens.css">
+  <link rel="stylesheet" href="/static/css/base.css">
+  <link rel="stylesheet" href="/static/css/layout.css">
+  <link rel="stylesheet" href="/static/css/table.css">
+  <link rel="stylesheet" href="/static/css/badge.css">
+  <link rel="stylesheet" href="/static/css/forms.css">
+  <script src="/static/vendor/htmx.min.js" defer></script>
+</head>
+<body>
+<header class="topbar">
+  <div class="topbar__identity">
+    <a class="brand" href="/ui">Glasshouse</a>
+    <nav class="topbar__nav" aria-label="Screens">
+      {% set org_query = ("?org=" ~ (org | urlencode)) if org else "" %}
+      <a href="/ui{{ org_query }}" {% if active == "overview" %}aria-current="page"{% endif %}>Overview</a>
+      <a href="/ui/blotter{{ org_query }}" {% if active == "blotter" %}aria-current="page"{% endif %}>Blotter</a>
+      <a href="/ui/positions{{ org_query }}" {% if active == "positions" %}aria-current="page"{% endif %}>Positions &amp; P&amp;L</a>
+    </nav>
+  </div>
+  <div class="topbar__state">
+    {% if org_options %}
+    <form class="org-form" method="get" action="{{ request.url.path }}">
+      <label class="org-form__label" for="org-select">Organisation</label>
+      <select id="org-select" name="org" onchange="this.form.submit()">
+        {% for option in org_options %}
+        <option value="{{ option }}" {% if option == org %}selected{% endif %}>{{ option }}</option>
+        {% endfor %}
+      </select>
+      <button type="submit">Switch</button>
+    </form>
+    {% endif %}
+    <span class="as-of-pill" title="Historical (as-of) viewing is not available yet">Viewing: Current</span>
+    <span class="l0-badge" title="Local dev and evaluation readiness; no production claims">Demo - readiness L0</span>
+  </div>
+</header>
+<main class="page">
+{% block content %}{% endblock %}
+</main>
+<footer class="footer">
+  <span>Glasshouse {{ version }}</span>
+  <span>Every number on these screens is a rendering of a public API query.</span>
+</footer>
+</body>
+</html>

@@ -34,6 +34,12 @@ services:
     name: glasshouse-seed-reset
     runtime: docker
     schedule: "30 2 * * *"
+    # First-time provisioning: trigger this cron manually once after the
+    # Blueprint is created (the reset path inits the governed schema,
+    # migrates the app schema and applies the views before seeding).
+    # Still deferred to a deploy-hardening pass: a pre-deploy
+    # init/apply-views step for the web service, the in-process
+    # projector, demo login, and as-of mode.
     dockerCommand: uv run python -m glasshouse.cli seed --reset
     envVars:
       - key: GLASSHOUSE_ENVIRONMENT
