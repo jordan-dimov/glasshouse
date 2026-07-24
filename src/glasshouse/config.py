@@ -22,7 +22,12 @@ class Settings(BaseSettings):
 
     database_url: str = "postgresql://glasshouse:glasshouse@localhost:5432/glasshouse"
     morpholog_bin: str = "morpholog"
-    morpholog_timeout_seconds: float = 10.0  # API-boundary operations; imports run unbounded
+    morpholog_timeout_seconds: float = 10.0
+    # The shared demo login (HTTP Basic, username "demo"). None = no
+    # gate: local dev and the pure tests run open. Set = everything but
+    # the deployment probes requires it, and in the demo environment
+    # browser writes refuse to run without it.
+    demo_password: str | None = None  # API-boundary operations; imports run unbounded
     environment: Environment = "dev"
 
 

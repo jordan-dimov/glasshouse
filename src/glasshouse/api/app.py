@@ -19,6 +19,7 @@ from fastapi.staticfiles import StaticFiles
 
 from glasshouse import __version__
 from glasshouse.api import health
+from glasshouse.api.auth import DEMO_USERNAME, DemoAuthMiddleware
 from glasshouse.api.deps import build_client, build_engine
 from glasshouse.api.queries import ReadUnavailableError
 from glasshouse.api.routers import audit, curves, explain, reads
@@ -78,6 +79,15 @@ def create_app() -> FastAPI:
     app.include_router(audit.router)
     app.include_router(web.router)
     app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
+
+    if settings.demo_password is not None:
+        # The shared demo login: one gate in front of everything except
+        # the deployment probes. Added last = outermost, so it answers
+        # before routing and the 503 faces below see only authenticated
+        # traffic.
+        app.add_middleware(
+            DemoAuthMiddleware, username=DEMO_USERNAME, password=settings.demo_password
+        )
 
     @app.exception_handler(ReadUnavailableError)
     async def read_unavailable(request: Request, _exc: ReadUnavailableError) -> Response:
