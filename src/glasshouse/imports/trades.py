@@ -143,12 +143,20 @@ def _receipt_outcome(ref: str, outcome: object) -> RowOutcome:
 
 
 def import_trades(
-    client: GlasshouseClient, text: str, *, org: str, actor: str, explain: bool = True
+    client: GlasshouseClient,
+    text: str,
+    *,
+    org: str,
+    actor: str,
+    explain: bool = True,
+    timeout: float | None = None,
 ) -> ImportReport:
     """Import one trades CSV: quarantine locally, batch the rest, and
     report every row's fate in file order. With `explain` (the default -
     the report is for humans), a rejected row's detail carries the
-    same-snapshot why."""
+    same-snapshot why. `timeout` bounds the batch invocation (the batch
+    deliberately ignores the client-wide timeout: a book-sized CLI
+    import runs as long as it takes; a browser import passes a bound)."""
     accepted, quarantined = parse_trades(text, org=org)
     outcomes = list(quarantined)
     if accepted:
@@ -160,7 +168,7 @@ def import_trades(
             }
             for _, req in accepted
         ]
-        for receipt in client.propose_batch(rows, explain_on_reject=explain):
+        for receipt in client.propose_batch(rows, timeout=timeout, explain_on_reject=explain):
             # receipt.row indexes the batch, which excludes quarantined
             # CSV rows; map it back to the file's own line number.
             line, _ = accepted[receipt.row - 1]

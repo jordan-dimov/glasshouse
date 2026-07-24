@@ -85,6 +85,23 @@ class CurveStore:
                 ],
             )
 
+    def discard(self, *, org: str, version: str) -> None:
+        """Remove an orphaned payload no claim anchors. This exists for
+        exactly one caller: the marking flows, cleaning up a payload they
+        stored moments ago for a proposal the ledger then lawfully
+        rejected - otherwise the rejected version id would be consumed
+        forever (save refuses overwrites) and a later legitimate
+        correction could never use it. Never call it for a version any
+        claim anchors; `glasshouse verify`'s payload leg reports such a
+        deletion as divergence."""
+        with self.engine.begin() as connection:
+            connection.execute(
+                sa.delete(curve_payload_period).where(
+                    curve_payload_period.c.org == org,
+                    curve_payload_period.c.curve_version == version,
+                )
+            )
+
     def load(self, *, org: str, version: str) -> HourlyCurve:
         with self.engine.connect() as connection:
             rows = connection.execute(

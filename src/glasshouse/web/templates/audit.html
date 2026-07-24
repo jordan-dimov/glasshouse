@@ -1,0 +1,88 @@
+{% extends "base.html" %}
+{% from "_macros.html" import evidence, empty_state %}
+{% block title %}Audit - Glasshouse{% endblock %}
+{% block content %}
+<div class="page-header">
+  <h1>Audit &amp; Evidence</h1>
+  {% if scope == "ledger" %}
+  <p class="page-header__note">The whole ledger - the auditor view: transitions from every tenant. Rows that mention {{ org }} are highlighted. <a href="/ui/audit?org={{ org | urlencode }}">Back to the {{ org }} view</a>.</p>
+  {% else %}
+  <p class="page-header__note">Transitions relevant to {{ org }} - a scoped view of the wider ledger ({{ total }} of {{ ledger_total }}). <a href="/ui/audit?org={{ org | urlencode }}&scope=ledger">Show the whole ledger (auditor view)</a>.</p>
+  {% endif %}
+</div>
+
+<div class="tiles">
+  <section class="tile">
+    <h2>Prove it</h2>
+    <form method="post" action="/ui/audit/verify"
+          hx-post="/ui/audit/verify" hx-target="#verify-results" hx-swap="innerHTML">
+      <input type="hidden" name="org" value="{{ org }}">
+      <button type="submit">Run glasshouse verify</button>
+    </form>
+    <p class="tile__note">Six independent read-only legs: model, ledger replay, history tree, projections, payloads, views. Safe to run any time.</p>
+  </section>
+  <section class="tile">
+    <h2>Take the evidence with you</h2>
+    <p><a href="/ui/audit/evidence-pack">Download the evidence pack</a></p>
+    <form method="post" action="/ui/audit/checkpoint">
+      <button type="submit">Record and download a checkpoint anchor</button>
+    </form>
+    <p class="tile__note">Verify offline, no database access: <span class="mono">glasshouse evidence-verify glasshouse-evidence-pack.json --anchor glasshouse-checkpoint-anchor.json</span></p>
+    <p class="tile__note">The pack covers the whole ledger prefix, every tenant included - it is the tamper-evidence surface, not a disclosure one. Per-organisation selective packs wait for their forcing case.</p>
+  </section>
+</div>
+
+<div id="verify-results">
+{% if report %}{% include "partials/verify_report.html" %}{% endif %}
+</div>
+
+<section>
+  <h2>Transitions ({{ total }})</h2>
+  {% if rows %}
+  <div class="table-scroll">
+    <table class="data-table" aria-label="The ledger's transition log, newest first">
+      <thead>
+        <tr>
+          <th scope="col">Committed at</th>
+          <th scope="col">Transformation</th>
+          <th scope="col">Actor</th>
+          <th scope="col">Identity asserted by</th>
+          <th scope="col" class="numeric">Invariants</th>
+          <th scope="col">Claims</th>
+          <th scope="col">Transition</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for entry, ours in rows %}
+        <tr {% if ours %}class="audit-row--org"{% endif %}>
+          <td>{{ entry.committed_at | utc }}</td>
+          <td>{{ entry.transformation }}</td>
+          <td>{{ entry.actor }}</td>
+          <td>{% if entry.attestation %}{{ entry.attestation.mode }} via <span class="mono">{{ entry.attestation.authenticated_by }}</span>{% else %}not recorded{% endif %}</td>
+          <td class="numeric">{{ entry.invariants_checked }}</td>
+          <td>
+            <details>
+              <summary>{{ entry.asserted | length }} asserted{% if entry.retracted %}, {{ entry.retracted | length }} retracted{% endif %}</summary>
+              {% for claim in entry.asserted %}
+              <p class="claim-line">+ {{ claim.predicate }}({% for field, value in claim.args.items() %}{{ field }}={{ value }}{% if not loop.last %}, {% endif %}{% endfor %})</p>
+              {% endfor %}
+              {% for claim in entry.retracted %}
+              <p class="claim-line">- {{ claim.predicate }}({% for field, value in claim.args.items() %}{{ field }}={{ value }}{% if not loop.last %}, {% endif %}{% endfor %})</p>
+              {% endfor %}
+            </details>
+          </td>
+          <td>{{ evidence(entry.transition_id) }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  <nav class="pager" aria-label="Audit pages">
+    {% if offset > 0 %}<a href="/ui/audit?org={{ org | urlencode }}&scope={{ scope }}&offset={{ prev_offset }}">Newer</a>{% endif %}
+    {% if has_more %}<a href="/ui/audit?org={{ org | urlencode }}&scope={{ scope }}&offset={{ next_offset }}">Older</a>{% endif %}
+  </nav>
+  {% else %}
+  {{ empty_state("The ledger has no transitions yet.") }}
+  {% endif %}
+</section>
+{% endblock %}

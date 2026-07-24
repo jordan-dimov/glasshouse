@@ -1,0 +1,23 @@
+{% extends "base.html" %}
+{% from "_macros.html" import outcome_table, empty_state %}
+{% block title %}Import receipts - {{ org }} - Glasshouse{% endblock %}
+{% block content %}
+<div class="page-header">
+  <h1>Import receipts</h1>
+  <p class="page-header__note">Every write ended one of three ways: committed, rejected by the rules (lawful, with the reason), or failed operationally. Every input row is accounted for.</p>
+</div>
+
+<p>{{ report.committed }} committed, {{ report.rejected }} rejected, {{ report.errored }} errored, {{ report.quarantined }} quarantined{% if applied is not none %}; projected: {{ applied }} transition(s) applied{% endif %}.</p>
+{% if applied is none %}
+<p class="empty-state">The writes above are committed, but the projection catch-up failed - the screens will lag until it runs. Run <span class="mono">glasshouse project</span> or reload shortly; the receipts above are complete and the ledger holds every committed row.</p>
+{% endif %}
+
+{% if report.outcomes %}
+{{ outcome_table(report.outcomes, "Import receipts") }}
+{% else %}
+{{ empty_state("The file contains no data rows.") }}
+{% endif %}
+
+<p class="tile__note">Committing the same file again is safe by construction: duplicate trades come back as lawful rejections, and a re-imported curve version stops at the immutable payload store. No hidden idempotency machinery - the ledger's own rules are the guard.</p>
+<p><a href="/ui/blotter?org={{ org | urlencode }}">See the blotter</a> or <a href="/ui/curves?org={{ org | urlencode }}">the curves</a> this import touched.</p>
+{% endblock %}

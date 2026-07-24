@@ -47,7 +47,7 @@ def test_seed_reset_seeds_verifies_and_repeats(capsys: pytest.CaptureFixture[str
             sa.select(sa.func.count()).where(trade_valuation.c.mtm < 0)
         ).scalar()
         marks = connection.execute(sa.select(sa.func.count()).select_from(trade_valuation))
-        assert marks.scalar() == 6
+        assert marks.scalar() == 12  # two marks per trade: v1 and the corrected v2
 
     # Plain seed is idempotent by refusal: any ledger history refuses.
     assert cli.main(["seed", "--database-url", DB]) == 1

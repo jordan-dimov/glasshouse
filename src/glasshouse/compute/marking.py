@@ -2,8 +2,13 @@
 
 `register_curve_version` and `correct_curve_version` store the payload
 first and propose the identity claim second, so a committed claim never
-anchors missing content (an orphaned payload from a rejected proposal
-is detectable garbage; a claim without its payload would be a lie).
+anchors missing content. When the ledger then lawfully REJECTS the
+proposal, the payload this call just stored is discarded again -
+otherwise the rejected version id would be consumed forever (the store
+refuses overwrites) and a later legitimate correction could never reuse
+it. A payload orphaned by a crash between store and proposal remains
+detectable garbage for `glasshouse verify`; a claim without its payload
+would be a lie.
 
 `value_trade` is the killer query's write side: read the trade and the
 official curve back from governed state, load the anchored payload,
@@ -22,7 +27,7 @@ from __future__ import annotations
 
 import datetime as dt
 
-from glasshouse.commit import GlasshouseClient, Outcome
+from glasshouse.commit import Committed, GlasshouseClient, Outcome
 from glasshouse.commit.morpholog_client.models import (
     AdmitValuationRequest,
     CorrectCurveRequest,
@@ -54,12 +59,17 @@ def register_curve_version(
     curve: HourlyCurve,
 ) -> Outcome:
     store.save(org=org, version=version, curve=curve)
-    return morpholog.submit(
+    outcome = morpholog.submit(
         RegisterCurveRequest(
             org=org, market=market, as_of=as_of, version=version, payload_hash=curve.payload_hash()
         ),
         actor=actor,
     )
+    if not isinstance(outcome, Committed):
+        # A decided rejection: give the version id back (this call
+        # stored the payload, so this call may discard it).
+        store.discard(org=org, version=version)
+    return outcome
 
 
 def correct_curve_version(
@@ -75,7 +85,7 @@ def correct_curve_version(
     curve: HourlyCurve,
 ) -> Outcome:
     store.save(org=org, version=new_version, curve=curve)
-    return morpholog.submit(
+    outcome = morpholog.submit(
         CorrectCurveRequest(
             org=org,
             market=market,
@@ -86,6 +96,9 @@ def correct_curve_version(
         ),
         actor=actor,
     )
+    if not isinstance(outcome, Committed):
+        store.discard(org=org, version=new_version)
+    return outcome
 
 
 def value_trade(
@@ -112,14 +125,24 @@ def value_trade(
         [t for t in morpholog.read(TradeTermsClaim) if t.org == org and t.trade == trade],
         f"terms for trade {trade!r}",
     )
-    official = _one(
-        [
-            o
-            for o in morpholog.read(OfficialCurveClaim)
-            if o.org == org and o.market == captured.market
-        ],
-        f"official curve for {org}/{captured.market}",
-    )
+    officials = [
+        o
+        for o in morpholog.read(OfficialCurveClaim)
+        if o.org == org and o.market == captured.market
+    ]
+    if len(officials) > 1:
+        # Lawful state the compute path cannot yet consume: one official
+        # curve may stand per (org, market, AS-OF DATE), so several dates
+        # can carry one at once. Selecting between them needs the
+        # governed business date (glasshouse#44); until it exists this is
+        # a named refusal, never a guess.
+        dates = ", ".join(sorted(o.as_of.isoformat() for o in officials))
+        raise MarkingError(
+            f"{len(officials)} official curves stand for {org}/{captured.market} "
+            f"(as-of dates: {dates}); choosing between business dates is not yet "
+            "modelled - see glasshouse#44"
+        )
+    official = _one(officials, f"official curve for {org}/{captured.market}")
     registered = _one(
         [
             r

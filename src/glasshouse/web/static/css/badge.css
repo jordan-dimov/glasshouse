@@ -19,3 +19,7 @@
 .badge--break { color: var(--status-break); }
 .badge--reconciled { color: var(--status-reconciled); }
 .badge--ok { color: var(--status-committed); }
+.badge--registered { color: var(--status-draft); }
+.badge--error { color: var(--status-error); }
+.badge--admissible { color: var(--status-admissible); }
+.badge--refused { color: var(--status-refused); }

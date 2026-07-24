@@ -9,14 +9,25 @@ from decimal import Decimal
 from types import SimpleNamespace
 
 from glasshouse.api.schemas import (
+    AttestationInfo,
+    AuditClaim,
+    AuditEntry,
     BlotterTrade,
     BookSummary,
+    CurveDiff,
+    CurveDiffPeriod,
+    CurveVersion,
     OverviewSummary,
     PositionHour,
     ProjectionCursor,
     TradeValuation,
     ValuationSummary,
+    VersionMark,
 )
+from glasshouse.imports import ImportReport, RowOutcome
+from glasshouse.imports.curves import COLUMNS as CURVE_COLUMNS
+from glasshouse.imports.trades import COLUMNS as TRADE_COLUMNS
+from glasshouse.verify import Leg, VerifyReport
 from glasshouse.web.templating import templates
 
 T0 = dt.datetime(2026, 7, 1, tzinfo=dt.UTC)
@@ -145,6 +156,232 @@ def test_overview_renders_the_tiles_and_health() -> None:
     assert "badge--ok" in html
     assert "badge--break" in html
     assert "error" in html  # the verdict is text, never colour alone
+
+
+def test_curves_render_status_lineage_and_the_diff() -> None:
+    versions = [
+        CurveVersion(
+            version="crv-a-v1",
+            as_of=dt.date(2026, 7, 1),
+            status="superseded",
+            payload_hash="sha256:aa11",
+            payload="ok",
+            supersedes=None,
+            superseded_by="crv-a-v2",
+            mark_count=1,
+            books=["spec-de"],
+        ),
+        CurveVersion(
+            version="crv-a-v2",
+            as_of=dt.date(2026, 7, 1),
+            status="official",
+            payload_hash="sha256:bb22",
+            payload="mismatch",
+            supersedes="crv-a-v1",
+            superseded_by=None,
+            mark_count=0,
+            books=[],
+        ),
+    ]
+    diff = CurveDiff(
+        org="acme-energy",
+        market="de-power",
+        base="crv-a-v1",
+        compare="crv-a-v2",
+        periods=[
+            CurveDiffPeriod(
+                period_start=T0,
+                base_price=Decimal("78"),
+                compare_price=Decimal("75.5"),
+                delta=Decimal("-2.5"),
+            )
+        ],
+        base_marks=[VersionMark(trade="T-001", book="spec-de", mtm=Decimal("-220"))],
+        compare_marks=[],
+    )
+    html = _render(
+        "curves.html",
+        org="acme-energy",
+        org_options=["acme-energy"],
+        active="curves",
+        markets=["de-power"],
+        market="de-power",
+        versions=versions,
+        chains=[["crv-a-v2", "crv-a-v1"]],
+        base="crv-a-v1",
+        compare="crv-a-v2",
+        diff=diff,
+    )
+    assert "badge--official" in html
+    assert "badge--superseded" in html
+    assert ">mismatch<" in html  # the verdict is text, never colour alone
+    assert "crv-a-v2</span> supersedes <span" in html  # the lineage line
+    assert 'class="numeric neg">-2.5' in html  # a price drop is loud
+    assert 'class="numeric neg">-220' in html  # the mark struck on the base version
+    assert "Marks struck on" in html
+
+
+def test_the_imports_page_states_the_contracts_truthfully() -> None:
+    html = _render("imports.html", org="acme-energy", org_options=["acme-energy"], active="imports")
+    # The rendered header lines carry exactly the column contracts the
+    # import layer enforces - the template's canonical order is display,
+    # this test keeps it honest against the frozensets.
+    trades_line = (
+        "book,trade,counterparty,market,direction,quantity,price,delivery_start,delivery_end"
+    )
+    curves_line = "market,as_of,version,period_start,price"
+    assert trades_line in html
+    assert curves_line in html
+    assert set(trades_line.split(",")) == TRADE_COLUMNS
+    assert set(curves_line.split(",")) == CURVE_COLUMNS
+    assert "morpholog#204" in html  # the honest rejections-panel omission
+    assert "asserted, not authenticated" in html
+
+
+def test_the_preview_page_commits_nothing_and_says_so() -> None:
+    report = ImportReport(
+        (
+            RowOutcome(ref="line 2", status="admissible", detail="admissible"),
+            RowOutcome(ref="line 3", status="refused", detail="missing MayCaptureTrade(...)"),
+            RowOutcome(ref="line 4", status="quarantined", detail="quantity: not a decimal"),
+        )
+    )
+    html = _render(
+        "import_preview.html",
+        org="acme-energy",
+        org_options=["acme-energy"],
+        active="imports",
+        kind="trades",
+        actor="alice",
+        filename="monday.csv",
+        report=report,
+        text_b64="Ym9vaw==",
+    )
+    assert "Nothing has been committed" in html
+    assert "badge--admissible" in html
+    assert "badge--refused" in html
+    assert "badge--quarantined" in html
+    assert "missing MayCaptureTrade" in html  # the why rides the row
+    assert 'name="text_b64" value="Ym9vaw=="' in html
+
+
+def test_the_receipts_page_accounts_for_every_row() -> None:
+    report = ImportReport(
+        (
+            RowOutcome(ref="line 2", status="committed", detail="transition txn-1"),
+            RowOutcome(ref="line 3", status="rejected", detail="would break invariant x"),
+            RowOutcome(ref="line 4", status="error", detail="payload already stored"),
+        )
+    )
+    html = _render(
+        "imports_result.html",
+        org="acme-energy",
+        org_options=["acme-energy"],
+        active="imports",
+        kind="trades",
+        actor="alice",
+        report=report,
+        applied=2,
+    )
+    assert "1 committed, 1 rejected, 1 errored, 0 quarantined" in html
+    assert "projected: 2 transition(s) applied" in html
+    # A failed catch-up never costs the operator their receipts: the
+    # committed writes are stated, the lag is stated, nothing is lost.
+    lagged = _render(
+        "imports_result.html",
+        org="acme-energy",
+        org_options=["acme-energy"],
+        active="imports",
+        kind="trades",
+        actor="alice",
+        report=report,
+        applied=None,
+    )
+    assert "projection catch-up failed" in lagged
+    assert "receipts above are complete" in lagged
+    assert "1 committed" in lagged
+    assert "badge--committed" in html
+    assert "badge--rejected" in html
+    assert "badge--error" in html
+    assert "safe by construction" in html  # the double-submit story, stated
+
+
+def _audit_entry(attested: bool) -> AuditEntry:
+    return AuditEntry(
+        transition_id="txn-9f8e7d6c5b4a",
+        committed_at=T0,
+        transformation="capture_trade",
+        actor="alice",
+        attestation=(
+            AttestationInfo(mode="gateway", authenticated_by="glasshouse_web") if attested else None
+        ),
+        asserted=[
+            AuditClaim(predicate="TradeCaptured", args={"org": "acme-energy", "trade": "T-001"})
+        ],
+        retracted=[],
+        invariants_checked=4,
+        intents=0,
+    )
+
+
+def test_the_audit_page_is_scoped_by_default_and_says_so() -> None:
+    html = _render(
+        "audit.html",
+        org="acme-energy",
+        org_options=["acme-energy"],
+        active="audit",
+        rows=[(_audit_entry(attested=True), True), (_audit_entry(attested=False), True)],
+        scope="org",
+        total=2,
+        ledger_total=5,
+        offset=0,
+        prev_offset=0,
+        next_offset=50,
+        has_more=False,
+        report=None,
+    )
+    assert "a scoped view of the wider ledger (2 of 5)" in html
+    assert "auditor view" in html  # the whole ledger is an explicit step
+    assert "gateway via" in html  # attestation beside the actor
+    assert "not recorded" in html  # pre-attestation rows render gracefully
+    assert "TradeCaptured(org=acme-energy" in html
+    assert "glasshouse evidence-verify" in html  # the offline pointer
+    assert "whole ledger prefix, every tenant included" in html  # the pack is honest
+
+
+def test_the_audit_pages_ledger_scope_labels_itself() -> None:
+    html = _render(
+        "audit.html",
+        org="acme-energy",
+        org_options=["acme-energy"],
+        active="audit",
+        rows=[(_audit_entry(attested=True), False)],
+        scope="ledger",
+        total=5,
+        ledger_total=5,
+        offset=0,
+        prev_offset=0,
+        next_offset=50,
+        has_more=False,
+        report=None,
+    )
+    assert "every tenant" in html
+    assert "auditor view" in html
+
+
+def test_the_verify_report_fragment_is_a_fragment_with_loud_failures() -> None:
+    report = VerifyReport(
+        (
+            Leg("model", True, "binary and committed client agree"),
+            Leg("projections", False, "blotter_trade: 1 missing, 0 unexpected"),
+        )
+    )
+    html = templates.env.get_template("partials/verify_report.html").render(report=report)
+    assert "<html" not in html
+    assert "DIVERGENT" in html
+    assert ">FAIL<" in html
+    assert ">ok<" in html
+    assert "1 missing" in html
 
 
 def test_the_error_page_needs_no_context() -> None:

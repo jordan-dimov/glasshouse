@@ -158,6 +158,19 @@ section + section {
   margin-top: var(--space-6);
 }
 
+.chain-line {
+  color: var(--ink-muted);
+  font-size: var(--size-1);
+  margin: 0 0 var(--space-3);
+}
+
+.marks-pair {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(20rem, 1fr));
+  gap: var(--space-4);
+  margin-top: var(--space-5);
+}
+
 .footer {
   display: flex;
   justify-content: space-between;

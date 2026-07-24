@@ -47,3 +47,22 @@
   margin-top: var(--space-3);
   font-size: var(--size-1);
 }
+
+/* The audit log is ledger-wide; rows mentioning the viewed org get a
+   soft edge, never a filter. */
+.audit-row--org td:first-child {
+  box-shadow: inset 3px 0 0 var(--accent);
+}
+
+.claim-line {
+  margin: var(--space-1) 0 0;
+  font-family: var(--font-mono);
+  font-size: var(--size-0);
+  white-space: normal;
+}
+
+.data-table details summary {
+  cursor: pointer;
+  color: var(--ink-muted);
+  font-size: var(--size-0);
+}

@@ -31,7 +31,7 @@ from alembic.config import Config
 from alembic import command
 from glasshouse.commit import MODEL_FILE, Committed, GlasshouseClient, apply_views, models
 from glasshouse.compute.curves import HourlyCurve
-from glasshouse.compute.marking import register_curve_version, value_trade
+from glasshouse.compute.marking import correct_curve_version, register_curve_version, value_trade
 from glasshouse.compute.store import CurveStore, engine_url
 from glasshouse.compute.store import metadata as payload_metadata
 from glasshouse.config import Environment, get_settings
@@ -49,7 +49,10 @@ _ALEMBIC_INI = Path(__file__).resolve().parents[2] / "alembic.ini"
 ORG = "acme-energy"
 MARKET = "de-power"
 BOOKS = ("spec-de", "hedge-de")
-CURVE_VERSION = "crv-2026-07-01"
+# Two versions, deliberately non-overlapping ids (neither is a substring
+# of the other, so tests may count occurrences without aliasing).
+CURVE_V1 = "crv-2026-07-01-v1"
+CURVE_V2 = "crv-2026-07-01-v2"
 AS_OF = dt.date(2026, 7, 1)
 DAY = dt.datetime(2026, 7, 1, tzinfo=dt.UTC)
 
@@ -57,6 +60,17 @@ DAY = dt.datetime(2026, 7, 1, tzinfo=dt.UTC)
 # one each hour - dull on purpose, so every mark is checkable by eye.
 CURVE = HourlyCurve(
     tuple((DAY + dt.timedelta(hours=hour), Decimal(str(70 + hour))) for hour in range(24))
+)
+
+# The Tuesday correction: hours 08-11 revised up by 3 EUR, every other
+# hour identical - so the two-version diff shows exactly four changed
+# rows, and T-001's mark moves from -220 to -100 (still negative: the
+# screens keep a loud number to show).
+CORRECTED_CURVE = HourlyCurve(
+    tuple(
+        (DAY + dt.timedelta(hours=hour), Decimal(str(70 + hour + (3 if 8 <= hour < 12 else 0))))
+        for hour in range(24)
+    )
 )
 
 # Six trades: both books, both directions, two counterparties, at least
@@ -184,8 +198,28 @@ def seed_demo(client: GlasshouseClient, store: CurveStore, engine: sa.Engine) ->
             org=ORG,
             market=MARKET,
             as_of=AS_OF,
-            version=CURVE_VERSION,
+            version=CURVE_V1,
             curve=CURVE,
+        )
+    )
+    for trade, book, *_ in _TRADES:
+        _committed(value_trade(client, store, actor="risk-engine", org=ORG, book=book, trade=trade))
+
+    # The Tuesday correction: v2 supersedes v1 (lineage linked, the old
+    # version and its marks stay on the record) and every trade is
+    # re-marked against it - so the demo carries a supersession chain,
+    # valuation history, and a well-defined current mark per trade.
+    _committed(
+        correct_curve_version(
+            client,
+            store,
+            actor="carol",
+            org=ORG,
+            market=MARKET,
+            as_of=AS_OF,
+            prior_version=CURVE_V1,
+            new_version=CURVE_V2,
+            curve=CORRECTED_CURVE,
         )
     )
     for trade, book, *_ in _TRADES:
@@ -193,7 +227,7 @@ def seed_demo(client: GlasshouseClient, store: CurveStore, engine: sa.Engine) ->
 
     rebuild(client, engine)
     return SeedReport(
-        org=ORG, books=len(BOOKS), trades=len(_TRADES), curves=1, valuations=len(_TRADES)
+        org=ORG, books=len(BOOKS), trades=len(_TRADES), curves=2, valuations=2 * len(_TRADES)
     )
 
 

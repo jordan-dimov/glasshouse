@@ -4,13 +4,16 @@ a deliberately dead database, so the verdicts hold whatever is running
 locally.
 """
 
+import base64
 import datetime as dt
+from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
 
 from glasshouse.api.app import create_app
 from glasshouse.web.routes import _utc_instant
+from tests.support import fake_binary
 
 DEAD_DB = "postgresql://127.0.0.1:1/nowhere"
 
@@ -27,7 +30,9 @@ def test_root_redirects_to_the_control_room() -> None:
     assert response.headers["location"] == "/ui"
 
 
-@pytest.mark.parametrize("path", ["/ui/blotter", "/ui/positions"])
+@pytest.mark.parametrize(
+    "path", ["/ui/blotter", "/ui/positions", "/ui/curves", "/ui/imports", "/ui/audit"]
+)
 def test_a_screen_without_an_org_goes_to_the_picker(path: str) -> None:
     # A 303 before any database work: the dead database proves no query
     # ran on the way out.
@@ -35,6 +40,21 @@ def test_a_screen_without_an_org_goes_to_the_picker(path: str) -> None:
         response = client.get(path, follow_redirects=False)
     assert response.status_code == 303
     assert response.headers["location"] == "/ui"
+
+
+def test_a_dead_commit_layer_is_an_html_503_on_the_audit_screen(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    # The audit screen's subject is the ledger, so its client read comes
+    # first; an operationally failing binary is the same honest 503 as a
+    # dead database, in HTML.
+    broken = fake_binary(tmp_path, "", stderr="Error: database unreachable", exit_code=1)
+    monkeypatch.setenv("GLASSHOUSE_MORPHOLOG_BIN", str(broken))
+    with TestClient(create_app()) as client:
+        response = client.get("/ui/audit", params={"org": "acme-energy"})
+    assert response.status_code == 503
+    assert response.headers["content-type"].startswith("text/html")
+    assert "database is unavailable" in response.text
 
 
 def test_a_dead_database_is_an_html_503_on_ui_paths() -> None:
@@ -68,6 +88,93 @@ def test_a_malformed_time_window_is_a_422_not_a_503() -> None:
         )
     assert response.status_code == 422
     assert "UTC" in response.text
+
+
+def _preview(client, **overrides: object):  # type: ignore[no-untyped-def]
+    form = {"org": "acme-energy", "kind": "trades", "actor": "alice"}
+    files = {"file": ("trades.csv", overrides.pop("data", b"book,trade\n1,2\n"), "text/csv")}
+    form.update({k: str(v) for k, v in overrides.items()})
+    return client.post("/ui/imports/preview", data=form, files=files)
+
+
+def test_upload_guards_refuse_before_any_backend_work() -> None:
+    # All four refusals are decided on the upload's own evidence: the
+    # dead database proves neither the ledger nor the read model was
+    # consulted on the way out.
+    with TestClient(create_app()) as client:
+        oversized = _preview(client, data=b"x" * (512 * 1024 + 1))
+        not_text = _preview(client, data="café".encode("utf-16"))
+        bad_header = _preview(client, data=b"not,the,contract\n1,2,3\n")
+        bad_kind = _preview(client, kind="spreadsheets")
+    assert oversized.status_code == 413
+    assert "512 KiB" in oversized.text
+    assert not_text.status_code == 422
+    assert bad_header.status_code == 422
+    assert bad_kind.status_code == 422
+
+
+def test_a_damaged_preview_payload_is_refused_before_any_backend_work() -> None:
+    with TestClient(create_app()) as client:
+        response = client.post(
+            "/ui/imports/commit",
+            data={
+                "org": "acme-energy",
+                "kind": "trades",
+                "actor": "alice",
+                "text_b64": "not!!!base64",
+            },
+        )
+    assert response.status_code == 422
+    assert "preview" in response.text
+
+
+def test_browser_writes_are_fenced_off_in_production(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Typed-actor identity is an L0 convenience; production refuses the
+    # browser write path entirely until authenticated identity lands.
+    monkeypatch.setenv("GLASSHOUSE_ENVIRONMENT", "production")
+    with TestClient(create_app()) as client:
+        preview = _preview(client)
+        commit = client.post(
+            "/ui/imports/commit",
+            data={"org": "acme-energy", "kind": "trades", "actor": "alice", "text_b64": "Ym9vaw=="},
+        )
+    assert preview.status_code == 403
+    assert commit.status_code == 403
+    assert "fenced off in production" in preview.text
+
+
+def test_the_browser_row_cap_points_at_the_cli() -> None:
+    # 2001 data rows is small in bytes but long in subprocess work (one
+    # explain per row on preview, one batch on commit): the browser path
+    # refuses and names the CLI, database-free.
+    many_rows = (
+        "book,trade,counterparty,market,direction,quantity,price,delivery_start,delivery_end\n"
+        + "b,t,c,m,buy,1,1,x,y\n" * 2001
+    )
+    with TestClient(create_app()) as client:
+        response = _preview(client, data=many_rows.encode())
+    assert response.status_code == 413
+    assert "Too many rows" in response.text
+    assert "CLI" in response.text
+
+
+def test_the_commit_endpoint_enforces_the_same_cap_as_the_upload() -> None:
+    # The commit endpoint is directly reachable, so an oversized payload
+    # must not bypass the preview's 512 KiB cap - refused on the encoded
+    # length before any decoding, database-free.
+    oversized = base64.b64encode(b"x" * (512 * 1024 + 3)).decode()
+    with TestClient(create_app()) as client:
+        response = client.post(
+            "/ui/imports/commit",
+            data={
+                "org": "acme-energy",
+                "kind": "trades",
+                "actor": "alice",
+                "text_b64": oversized,
+            },
+        )
+    assert response.status_code == 413
+    assert "512 KiB" in response.text
 
 
 def test_datetime_local_values_are_defined_as_utc() -> None:

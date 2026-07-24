@@ -22,3 +22,26 @@
 {% macro empty_state(text) -%}
 <p class="empty-state">{{ text }}</p>
 {%- endmacro %}
+
+{% macro outcome_table(outcomes, label) -%}
+<div class="table-scroll">
+  <table class="data-table" aria-label="{{ label }}">
+    <thead>
+      <tr>
+        <th scope="col">Row</th>
+        <th scope="col">Outcome</th>
+        <th scope="col">Why</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for outcome in outcomes %}
+      <tr>
+        <td class="mono">{{ outcome.ref }}</td>
+        <td>{{ badge(outcome.status) }}</td>
+        <td>{{ outcome.detail }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{%- endmacro %}

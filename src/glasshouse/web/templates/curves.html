@@ -1,0 +1,122 @@
+{% extends "base.html" %}
+{% from "_macros.html" import num_cell, evidence, badge, empty_state %}
+{% block title %}Curves - {{ org }} - Glasshouse{% endblock %}
+{% block content %}
+<div class="page-header">
+  <h1>Curves</h1>
+  <p class="page-header__note">Every registered version, its officialness and lineage, and its payload checked live against the hash the ledger admitted.</p>
+</div>
+
+{% if markets %}
+<form class="filter-bar" method="get" action="/ui/curves">
+  <input type="hidden" name="org" value="{{ org }}">
+  <label>Market
+    <select name="market" onchange="this.form.submit()">
+      {% for option in markets %}
+      <option value="{{ option }}" {% if option == market %}selected{% endif %}>{{ option }}</option>
+      {% endfor %}
+    </select>
+  </label>
+  <button type="submit">Show</button>
+</form>
+{% endif %}
+
+{% if versions %}
+{% for chain in chains %}
+<p class="chain-line">Lineage: {% for version in chain %}<span class="mono">{{ version }}</span>{% if not loop.last %} supersedes {% endif %}{% endfor %}</p>
+{% endfor %}
+<form method="get" action="/ui/curves">
+  <input type="hidden" name="org" value="{{ org }}">
+  <input type="hidden" name="market" value="{{ market }}">
+  <div class="table-scroll">
+    <table class="data-table" aria-label="Curve versions for {{ org }}/{{ market }}">
+      <thead>
+        <tr>
+          <th scope="col">Version</th>
+          <th scope="col">As of</th>
+          <th scope="col">Status</th>
+          <th scope="col">Payload hash</th>
+          <th scope="col">Payload</th>
+          <th scope="col">Supersedes</th>
+          <th scope="col" class="numeric">Marks</th>
+          <th scope="col">Books</th>
+          <th scope="col">Base</th>
+          <th scope="col">Compare</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for version in versions %}
+        <tr>
+          <td class="mono">{{ version.version }}</td>
+          <td>{{ version.as_of.isoformat() }}</td>
+          <td>{{ badge(version.status) }}</td>
+          <td>{{ evidence(version.payload_hash, 19) }}</td>
+          <td>{{ badge("ok" if version.payload == "ok" else "break", version.payload) }}</td>
+          <td>{% if version.supersedes %}<span class="mono">{{ version.supersedes }}</span>{% endif %}</td>
+          <td class="numeric">{{ version.mark_count }}</td>
+          <td>{{ version.books | join(", ") }}</td>
+          <td><input type="radio" name="base" value="{{ version.version }}" {% if version.version == base %}checked{% endif %} aria-label="diff base {{ version.version }}"></td>
+          <td><input type="radio" name="compare" value="{{ version.version }}" {% if version.version == compare %}checked{% endif %} aria-label="diff compare {{ version.version }}"></td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  <p class="tile__note"><button type="submit">Compare selected versions</button> - pick a base and a compare version to see what changed and which marks each carries.</p>
+</form>
+{% else %}
+{{ empty_state("No curve versions registered for this organisation yet. Import curves or run glasshouse seed --reset.") }}
+{% endif %}
+
+{% if diff %}
+<section>
+  <h2>{{ diff.compare }} against {{ diff.base }}</h2>
+  <div class="table-scroll">
+    <table class="data-table" aria-label="Price changes from {{ diff.base }} to {{ diff.compare }}">
+      <thead>
+        <tr>
+          <th scope="col">Delivery hour (UTC)</th>
+          <th scope="col" class="numeric">{{ diff.base }}</th>
+          <th scope="col" class="numeric">{{ diff.compare }}</th>
+          <th scope="col" class="numeric">Delta (EUR/MWh)</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for period in diff.periods %}
+        <tr>
+          <td>{{ period.period_start | utc }}</td>
+          {% if period.base_price is not none %}{{ num_cell(period.base_price) }}{% else %}<td></td>{% endif %}
+          {% if period.compare_price is not none %}{{ num_cell(period.compare_price) }}{% else %}<td></td>{% endif %}
+          {% if period.delta is not none %}{{ num_cell(period.delta) }}{% else %}<td></td>{% endif %}
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+
+  <div class="marks-pair">
+    {% for side, marks in (("base", diff.base_marks), ("compare", diff.compare_marks)) %}
+    <section>
+      <h2>Marks struck on {{ diff.base if side == "base" else diff.compare }}</h2>
+      {% if marks %}
+      <div class="table-scroll">
+        <table class="data-table" aria-label="Marks struck on {{ diff.base if side == 'base' else diff.compare }}">
+          <thead>
+            <tr><th scope="col">Trade</th><th scope="col">Book</th><th scope="col" class="numeric">MtM (EUR)</th></tr>
+          </thead>
+          <tbody>
+            {% for mark in marks %}
+            <tr><td class="mono">{{ mark.trade }}</td><td>{{ mark.book }}</td>{{ num_cell(mark.mtm) }}</tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+      {% else %}
+      {{ empty_state("No marks were struck on this version.") }}
+      {% endif %}
+    </section>
+    {% endfor %}
+  </div>
+</section>
+{% endif %}
+{% endblock %}
