@@ -128,6 +128,36 @@ def test_a_damaged_preview_payload_is_refused_before_any_backend_work() -> None:
     assert "preview" in response.text
 
 
+def test_browser_writes_are_fenced_off_in_production(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Typed-actor identity is an L0 convenience; production refuses the
+    # browser write path entirely until authenticated identity lands.
+    monkeypatch.setenv("GLASSHOUSE_ENVIRONMENT", "production")
+    with TestClient(create_app()) as client:
+        preview = _preview(client)
+        commit = client.post(
+            "/ui/imports/commit",
+            data={"org": "acme-energy", "kind": "trades", "actor": "alice", "text_b64": "Ym9vaw=="},
+        )
+    assert preview.status_code == 403
+    assert commit.status_code == 403
+    assert "fenced off in production" in preview.text
+
+
+def test_the_browser_row_cap_points_at_the_cli() -> None:
+    # 2001 data rows is small in bytes but long in subprocess work (one
+    # explain per row on preview, one batch on commit): the browser path
+    # refuses and names the CLI, database-free.
+    many_rows = (
+        "book,trade,counterparty,market,direction,quantity,price,delivery_start,delivery_end\n"
+        + "b,t,c,m,buy,1,1,x,y\n" * 2001
+    )
+    with TestClient(create_app()) as client:
+        response = _preview(client, data=many_rows.encode())
+    assert response.status_code == 413
+    assert "Too many rows" in response.text
+    assert "CLI" in response.text
+
+
 def test_the_commit_endpoint_enforces_the_same_cap_as_the_upload() -> None:
     # The commit endpoint is directly reachable, so an oversized payload
     # must not bypass the preview's 512 KiB cap - refused on the encoded

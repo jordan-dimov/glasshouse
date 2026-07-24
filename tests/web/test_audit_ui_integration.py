@@ -34,21 +34,38 @@ def ui(seeded: sa.Engine, monkeypatch: pytest.MonkeyPatch) -> TestClient:
     return TestClient(create_app())
 
 
-def test_the_log_is_newest_first_with_attestation(ui: TestClient) -> None:
+def test_the_log_is_newest_first_scoped_by_default_with_attestation(ui: TestClient) -> None:
     with ui as client:
         page = client.get("/ui/audit", params={"org": ORG})
-        entries = client.get("/audit").json()
+        scoped = client.get("/audit", params={"org": ORG}).json()
+        ledger = client.get("/audit", params={"org": ORG, "scope": "ledger"}).json()
     assert page.status_code == 200
-    # The seed ends with valuations, so the newest transformation on the
-    # first page is admit_valuation, and the earliest (a grant) is not.
+    # The default view is scoped to the org and says so; the whole
+    # ledger is an explicit auditor-view step.
+    assert "a scoped view of the wider ledger" in page.text
+    assert "auditor view" in page.text
+    assert len(scoped) <= len(ledger)
+    assert all(
+        any(c["args"].get("org") == ORG for c in (*e["asserted"], *e["retracted"])) for e in scoped
+    )
+    # The seed ends with valuations, so the newest transformation is
+    # admit_valuation, in both scopes.
     assert "admit_valuation" in page.text
-    assert entries[0]["transformation"] == "admit_valuation"
-    committed = [e["committed_at"] for e in entries]
+    assert scoped[0]["transformation"] == "admit_valuation"
+    committed = [e["committed_at"] for e in ledger]
     assert committed == sorted(committed, reverse=True)
     # Every row written by the current binary carries its attestation.
     assert "gateway via" in page.text
-    assert all(e["attestation"]["mode"] == "gateway" for e in entries)
+    assert all(e["attestation"]["mode"] == "gateway" for e in ledger)
     assert "audit-row--org" in page.text
+
+
+def test_the_ledger_scope_shows_every_tenant_and_labels_itself(ui: TestClient) -> None:
+    with ui as client:
+        page = client.get("/ui/audit", params={"org": ORG, "scope": "ledger"})
+    assert page.status_code == 200
+    assert "every tenant" in page.text
+    assert "auditor view" in page.text
 
 
 def test_the_verify_panel_renders_six_green_legs(ui: TestClient) -> None:

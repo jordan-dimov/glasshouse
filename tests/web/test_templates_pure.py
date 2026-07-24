@@ -285,6 +285,21 @@ def test_the_receipts_page_accounts_for_every_row() -> None:
     )
     assert "1 committed, 1 rejected, 1 errored, 0 quarantined" in html
     assert "projected: 2 transition(s) applied" in html
+    # A failed catch-up never costs the operator their receipts: the
+    # committed writes are stated, the lag is stated, nothing is lost.
+    lagged = _render(
+        "imports_result.html",
+        org="acme-energy",
+        org_options=["acme-energy"],
+        active="imports",
+        kind="trades",
+        actor="alice",
+        report=report,
+        applied=None,
+    )
+    assert "projection catch-up failed" in lagged
+    assert "receipts above are complete" in lagged
+    assert "1 committed" in lagged
     assert "badge--committed" in html
     assert "badge--rejected" in html
     assert "badge--error" in html
@@ -309,26 +324,49 @@ def _audit_entry(attested: bool) -> AuditEntry:
     )
 
 
-def test_the_audit_page_shows_the_whole_ledger_honestly() -> None:
+def test_the_audit_page_is_scoped_by_default_and_says_so() -> None:
     html = _render(
         "audit.html",
         org="acme-energy",
         org_options=["acme-energy"],
         active="audit",
-        rows=[(_audit_entry(attested=True), True), (_audit_entry(attested=False), False)],
+        rows=[(_audit_entry(attested=True), True), (_audit_entry(attested=False), True)],
+        scope="org",
         total=2,
+        ledger_total=5,
         offset=0,
         prev_offset=0,
         next_offset=50,
         has_more=False,
         report=None,
     )
-    assert "belongs to the ledger, not to one organisation" in html
+    assert "a scoped view of the wider ledger (2 of 5)" in html
+    assert "auditor view" in html  # the whole ledger is an explicit step
     assert "gateway via" in html  # attestation beside the actor
     assert "not recorded" in html  # pre-attestation rows render gracefully
-    assert "audit-row--org" in html  # the soft highlight, never a filter
     assert "TradeCaptured(org=acme-energy" in html
     assert "glasshouse evidence-verify" in html  # the offline pointer
+    assert "whole ledger prefix, every tenant included" in html  # the pack is honest
+
+
+def test_the_audit_pages_ledger_scope_labels_itself() -> None:
+    html = _render(
+        "audit.html",
+        org="acme-energy",
+        org_options=["acme-energy"],
+        active="audit",
+        rows=[(_audit_entry(attested=True), False)],
+        scope="ledger",
+        total=5,
+        ledger_total=5,
+        offset=0,
+        prev_offset=0,
+        next_offset=50,
+        has_more=False,
+        report=None,
+    )
+    assert "every tenant" in html
+    assert "auditor view" in html
 
 
 def test_the_verify_report_fragment_is_a_fragment_with_loud_failures() -> None:

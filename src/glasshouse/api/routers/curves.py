@@ -47,3 +47,9 @@ def diff_curves(
         )
     except curve_queries.UnknownCurveVersionError as unknown:
         raise HTTPException(status_code=404, detail=str(unknown)) from unknown
+    except curve_queries.IncomparableCurvesError as incomparable:
+        raise HTTPException(status_code=422, detail=str(incomparable)) from incomparable
+    except curve_queries.CurveIntegrityError as broken:
+        # An integrity break between ledger and app schema, never a
+        # not-found: alarming on purpose.
+        raise HTTPException(status_code=409, detail=str(broken)) from broken

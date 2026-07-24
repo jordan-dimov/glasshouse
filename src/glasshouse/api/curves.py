@@ -3,11 +3,13 @@ verdicts and the two-version diff.
 
 This sits BESIDE `glasshouse.api.queries` (the projection-query layer)
 rather than inside it: curve versions have no projection table, and
-their honest source is the pinned typed ledger surface - `client.read`
-over the generated claim models - plus the hash-anchored payload store.
-The same functions serve the JSON endpoints and the Curves screen (UI
-law 4). Operational failure of the binary surfaces as `MorphologError`,
-mapped app-wide to the same 503 discipline as a dead database.
+their honest source is the pinned typed ledger surface - one
+`claims_named` call over the four predicates, so every screen renders
+ONE ledger snapshot (separate reads could straddle a concurrent
+correction) - plus the hash-anchored payload store. The same functions
+serve the JSON endpoints and the Curves screen (UI law 4). Operational
+failure of the binary surfaces as `MorphologError`, mapped app-wide to
+the same 503 discipline as a dead database.
 """
 
 from __future__ import annotations
@@ -21,15 +23,58 @@ from glasshouse.commit import GlasshouseClient, models
 from glasshouse.compute.curves import HourlyCurve
 from glasshouse.compute.store import CurveStore, StoreError
 
+_PREDICATES = ("CurveRegistered", "OfficialCurve", "CurveSupersedes", "TradeValued")
+
 
 class UnknownCurveVersionError(ValueError):
-    """A requested version is not registered for this org and market
-    (or its payload is absent, which makes a diff impossible)."""
+    """A requested version is not registered for this org and market."""
+
+
+class IncomparableCurvesError(ValueError):
+    """The selected versions are not economically comparable: a curve
+    correction comparison needs one org, market and as-of date (which,
+    under the model's one-official-per-date rule, also means one
+    supersession chain). Comparing different dates would juxtapose two
+    unrelated timelines, not show a correction."""
+
+
+class CurveIntegrityError(RuntimeError):
+    """A registered version's payload is missing from the store: the
+    application schema disagrees with the governed ledger. This is an
+    integrity break, never a not-found - run `glasshouse verify`."""
+
+
+class _Snapshot:
+    """The four curve-relevant predicates decoded from ONE named read -
+    one ledger snapshot, whatever commits mid-render."""
+
+    def __init__(self, client: GlasshouseClient) -> None:
+        rows = client.claims_named(*_PREDICATES)
+        self.registered = [
+            models.CurveRegisteredClaim.from_named(row.args)
+            for row in rows
+            if row.predicate == "CurveRegistered"
+        ]
+        self.official = [
+            models.OfficialCurveClaim.from_named(row.args)
+            for row in rows
+            if row.predicate == "OfficialCurve"
+        ]
+        self.supersedes = [
+            models.CurveSupersedesClaim.from_named(row.args)
+            for row in rows
+            if row.predicate == "CurveSupersedes"
+        ]
+        self.valued = [
+            models.TradeValuedClaim.from_named(row.args)
+            for row in rows
+            if row.predicate == "TradeValued"
+        ]
 
 
 def list_markets(client: GlasshouseClient, *, org: str) -> list[str]:
     """Markets with at least one registered curve version in this org."""
-    return sorted({c.market for c in client.read(models.CurveRegisteredClaim) if c.org == org})
+    return sorted({c.market for c in _Snapshot(client).registered if c.org == org})
 
 
 def list_curve_versions(
@@ -39,27 +84,18 @@ def list_curve_versions(
     superseded / registered), the admitted payload hash beside a live
     re-hash verdict (the `glasshouse verify` payload leg in miniature),
     the supersession lineage, and which marks were struck on it."""
-    registered = [
-        c for c in client.read(models.CurveRegisteredClaim) if c.org == org and c.market == market
-    ]
+    snapshot = _Snapshot(client)
+    registered = [c for c in snapshot.registered if c.org == org and c.market == market]
     known = {c.version for c in registered}
-    official = {
-        o.version
-        for o in client.read(models.OfficialCurveClaim)
-        if o.org == org and o.market == market
-    }
+    official = {o.version for o in snapshot.official if o.org == org and o.market == market}
     # CurveSupersedes carries no org (versions are unique per org by
     # discipline); edges are joined via the versions registered here, so
     # a version id colliding across orgs would alias - a documented
     # limitation of the current model, not of this screen.
-    edges = [
-        e
-        for e in client.read(models.CurveSupersedesClaim)
-        if e.new_version in known or e.prior_version in known
-    ]
+    edges = [e for e in snapshot.supersedes if e.new_version in known or e.prior_version in known]
     supersedes = {e.new_version: e.prior_version for e in edges}
     superseded_by = {e.prior_version: e.new_version for e in edges}
-    marks = [m for m in client.read(models.TradeValuedClaim) if m.org == org]
+    marks = [m for m in snapshot.valued if m.org == org]
 
     versions = []
     for claim in sorted(registered, key=lambda c: c.version):
@@ -96,7 +132,8 @@ def list_curve_versions(
 def _diff_periods(base: HourlyCurve, compare: HourlyCurve) -> list[CurveDiffPeriod]:
     """Period-by-period price comparison. Curves are hour-aligned by
     construction, so alignment is `period_start` equality; a period
-    absent from one side carries no delta."""
+    absent from one side carries no delta (the function stays total even
+    though the comparability rule keeps same-date curves together)."""
     base_prices: dict[dt.datetime, Decimal] = dict(base.periods)
     compare_prices: dict[dt.datetime, Decimal] = dict(compare.periods)
     rows = []
@@ -128,31 +165,33 @@ def curve_diff(
     base: str,
     compare: str,
 ) -> CurveDiff:
-    """What changed between two versions, and which trades' marks were
-    struck on each - the money interaction of the Curves screen."""
-    known = {
-        c.version
-        for c in client.read(models.CurveRegisteredClaim)
-        if c.org == org and c.market == market
-    }
+    """What changed between two versions of one curve, and which trades'
+    marks were struck on each - the money interaction of the Curves
+    screen. Refuses versions that are not economically comparable (they
+    must share the as-of date, which the one-official-per-date rule ties
+    to one supersession chain)."""
+    snapshot = _Snapshot(client)
+    by_version = {c.version: c for c in snapshot.registered if c.org == org and c.market == market}
     for version in (base, compare):
-        if version not in known:
+        if version not in by_version:
             raise UnknownCurveVersionError(
                 f"version {version!r} is not registered for {org}/{market}"
             )
+    if by_version[base].as_of != by_version[compare].as_of:
+        raise IncomparableCurvesError(
+            f"versions {base!r} (as of {by_version[base].as_of.isoformat()}) and "
+            f"{compare!r} (as of {by_version[compare].as_of.isoformat()}) describe "
+            "different business dates; a correction comparison needs one date"
+        )
     try:
         base_curve = store.load(org=org, version=base)
         compare_curve = store.load(org=org, version=compare)
     except StoreError as absent:
-        raise UnknownCurveVersionError(
-            f"a payload is missing for {org}/{market}: {absent}. "
+        raise CurveIntegrityError(
+            f"a registered payload is missing for {org}/{market}: {absent}. "
             "The app schema disagrees with the ledger; run glasshouse verify."
         ) from absent
-    marks = [
-        m
-        for m in client.read(models.TradeValuedClaim)
-        if m.org == org and m.curve_version in (base, compare)
-    ]
+    marks = [m for m in snapshot.valued if m.org == org and m.curve_version in (base, compare)]
     return CurveDiff(
         org=org,
         market=market,

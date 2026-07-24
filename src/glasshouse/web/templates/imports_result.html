@@ -7,7 +7,10 @@
   <p class="page-header__note">Every write ended one of three ways: committed, rejected by the rules (lawful, with the reason), or failed operationally. Every input row is accounted for.</p>
 </div>
 
-<p>{{ report.committed }} committed, {{ report.rejected }} rejected, {{ report.errored }} errored, {{ report.quarantined }} quarantined; projected: {{ applied }} transition(s) applied.</p>
+<p>{{ report.committed }} committed, {{ report.rejected }} rejected, {{ report.errored }} errored, {{ report.quarantined }} quarantined{% if applied is not none %}; projected: {{ applied }} transition(s) applied{% endif %}.</p>
+{% if applied is none %}
+<p class="empty-state">The writes above are committed, but the projection catch-up failed - the screens will lag until it runs. Run <span class="mono">glasshouse project</span> or reload shortly; the receipts above are complete and the ledger holds every committed row.</p>
+{% endif %}
 
 {% if report.outcomes %}
 {{ outcome_table(report.outcomes, "Import receipts") }}

@@ -1,5 +1,7 @@
-"""The Control Room routes: three read-only screens over the shared
-query layer.
+"""The Control Room routes: the six screens over the shared query
+layers, including the browser's first governed writes (the Imports
+workbench - fenced off in production until authenticated identity
+lands).
 
 Every handler is a thin composition: parse parameters, call the same
 `glasshouse.api.queries` functions the JSON API serves (UI law 4), hand
@@ -27,10 +29,14 @@ from fastapi.responses import RedirectResponse
 from glasshouse.api import audit as audit_queries
 from glasshouse.api import curves as curve_queries
 from glasshouse.api import health, queries
-from glasshouse.api.curves import UnknownCurveVersionError
+from glasshouse.api.curves import (
+    CurveIntegrityError,
+    IncomparableCurvesError,
+    UnknownCurveVersionError,
+)
 from glasshouse.api.deps import get_client, get_engine, get_store
 from glasshouse.api.schemas import CurveVersion
-from glasshouse.commit import GlasshouseClient
+from glasshouse.commit import GlasshouseClient, MorphologError
 from glasshouse.compute.store import CurveStore
 from glasshouse.config import get_settings
 from glasshouse.imports import (
@@ -40,9 +46,12 @@ from glasshouse.imports import (
     preview_curves,
     preview_trades,
 )
+from glasshouse.logging import get_logger
 from glasshouse.projections import catch_up
 from glasshouse.verify import verify as run_verify
 from glasshouse.web.templating import templates
+
+log = get_logger("glasshouse.web")
 
 router = APIRouter(include_in_schema=False)
 
@@ -184,6 +193,12 @@ def curves(
         except UnknownCurveVersionError as unknown:
             context |= {"title": "Unknown curve version", "message": str(unknown)}
             return templates.TemplateResponse(request, "error.html", context, status_code=404)
+        except IncomparableCurvesError as incomparable:
+            context |= {"title": "Not comparable", "message": str(incomparable)}
+            return templates.TemplateResponse(request, "error.html", context, status_code=422)
+        except CurveIntegrityError as broken:
+            context |= {"title": "Integrity break", "message": str(broken)}
+            return templates.TemplateResponse(request, "error.html", context, status_code=409)
     context |= {
         "markets": markets,
         "market": market,
@@ -196,9 +211,14 @@ def curves(
     return templates.TemplateResponse(request, "curves.html", context)
 
 
-# The upload cap: bounded state between preview and commit, and a
-# bounded parse. Demo-scale honest; a real book arrives via the CLI.
+# The browser import's bounds: the upload cap keeps the preview-commit
+# round trip and the parse bounded; the row cap keeps the per-row
+# explain procession and the batch bounded; the batch timeout bounds the
+# one long-running invocation the client-wide timeout deliberately
+# exempts. Demo-scale honest; a real book arrives via the CLI, unbounded.
 SIZE_CAP = 512 * 1024
+MAX_IMPORT_ROWS = 2_000
+BATCH_TIMEOUT_SECONDS = 120.0
 
 IMPORT_KINDS = ("trades", "curves")
 
@@ -245,6 +265,36 @@ def _checked_import_form(kind: str, actor: str) -> str | None:
     return None
 
 
+def _write_fence(request: Request, org: str) -> Response | None:
+    # Browser writes are L0: identity is typed, not authenticated. In
+    # production that is not an acceptable write path, so the fence is
+    # structural, not advisory; it lifts when authenticated identity
+    # lands (issue #40).
+    if get_settings().environment == "production":
+        return _import_refusal(
+            request,
+            org,
+            403,
+            "Browser imports are fenced off in production",
+            "Typed-actor identity is a readiness-L0 convenience; in production, "
+            "import through the CLI until authenticated identity lands.",
+        )
+    return None
+
+
+def _row_count_refusal(request: Request, org: str, text: str) -> Response | None:
+    if text.count("\n") > MAX_IMPORT_ROWS:
+        return _import_refusal(
+            request,
+            org,
+            413,
+            "Too many rows for a browser import",
+            f"The browser path is capped at {MAX_IMPORT_ROWS} rows; "
+            "import larger files with the CLI.",
+        )
+    return None
+
+
 @router.get("/ui/imports")
 def imports_home(
     request: Request,
@@ -266,6 +316,9 @@ def imports_preview(
     engine: sa.Engine = Depends(get_engine),
     client: GlasshouseClient = Depends(get_client),
 ) -> Response:
+    fence = _write_fence(request, org)
+    if fence:
+        return fence
     problem = _checked_import_form(kind, actor)
     if problem:
         return _import_refusal(request, org, 422, "Check the form", problem)
@@ -273,6 +326,9 @@ def imports_preview(
         text = _read_upload(file)
     except _UploadRefusedError as refused:
         return _import_refusal(request, org, refused.status_code, refused.title, refused.message)
+    oversized = _row_count_refusal(request, org, text)
+    if oversized:
+        return oversized
     try:
         preview = preview_trades if kind == "trades" else preview_curves
         report = preview(client, text, org=org, actor=actor)
@@ -302,6 +358,9 @@ def imports_commit(
     client: GlasshouseClient = Depends(get_client),
     store: CurveStore = Depends(get_store),
 ) -> Response:
+    fence = _write_fence(request, org)
+    if fence:
+        return fence
     problem = _checked_import_form(kind, actor)
     if problem:
         return _import_refusal(request, org, 422, "Check the form", problem)
@@ -326,17 +385,58 @@ def imports_commit(
             "The preview payload is damaged",
             "Upload and preview the file again.",
         )
+    if len(text.encode("utf-8")) > SIZE_CAP:
+        return _import_refusal(
+            request,
+            org,
+            413,
+            "File too large",
+            "The upload cap is 512 KiB; import larger files with the CLI.",
+        )
+    oversized = _row_count_refusal(request, org, text)
+    if oversized:
+        return oversized
     try:
         if kind == "trades":
-            report = import_trades(client, text, org=org, actor=actor)
+            report = import_trades(
+                client, text, org=org, actor=actor, timeout=BATCH_TIMEOUT_SECONDS
+            )
         else:
             report = import_curves(client, store, text, org=org, actor=actor)
     except ImportFormatError as refusal:
         return _import_refusal(request, org, 422, "The file was refused whole", str(refusal))
+    except MorphologError as failure:
+        # A WRITE failed operationally - never claim the ledger is
+        # unaffected: a batch aborts between rows, so part of the file
+        # may already be committed. Honest instructions, not reassurance.
+        log.warning("web.import_failed", org=org, kind=kind, error=str(failure))
+        return _import_refusal(
+            request,
+            org,
+            500,
+            "The import failed part-way",
+            "The commit layer failed while processing this file, and some rows may "
+            "already be committed. Nothing is lost: check the Audit screen for what "
+            "landed, then re-run the same file - rows already committed come back "
+            "as lawful rejections, never duplicates.",
+        )
     # The inline projector mode: the screens read projections, so the
-    # commit catches them up before showing receipts.
-    applied = catch_up(client, engine)
-    context = _chrome(engine, org, "imports") | {
+    # commit catches them up before showing receipts. A catch-up failure
+    # must never cost the operator their receipts: the writes above are
+    # committed, so render them with the lag stated instead of an error
+    # page that would misreport the ledger. The chrome degrades for the
+    # same reason - receipts outrank the org selector.
+    applied: int | None
+    try:
+        applied = catch_up(client, engine)
+    except (MorphologError, sa.exc.SQLAlchemyError) as lag:
+        log.warning("web.import_projection_lagged", org=org, error=str(lag))
+        applied = None
+    try:
+        chrome = _chrome(engine, org, "imports")
+    except queries.ReadUnavailableError:
+        chrome = {"org": org, "active": "imports"}
+    context = chrome | {
         "kind": kind,
         "actor": actor,
         "report": report,
@@ -349,6 +449,7 @@ def imports_commit(
 def audit_screen(
     request: Request,
     org: str | None = None,
+    scope: str = "org",
     offset: int = Query(default=0, ge=0),
     engine: sa.Engine = Depends(get_engine),
     client: GlasshouseClient = Depends(get_client),
@@ -357,12 +458,21 @@ def audit_screen(
         return RedirectResponse("/ui", status_code=303)
     # The ledger read comes first (deliberately before the chrome): the
     # log is the screen's subject, and a binary that cannot answer is
-    # its own honest 503 whatever the read model is doing.
+    # its own honest 503 whatever the read model is doing. The default
+    # view is SCOPED to the org (the tenancy boundary) and says so; the
+    # whole-ledger view is an explicit step, labelled as the auditor
+    # view (honesty-labelled at L0, authenticated once identity lands).
     entries = audit_queries.list_audit(client)
+    ledger_total = len(entries)
+    if scope != "ledger":
+        scope = "org"
+        entries = [e for e in entries if audit_queries.mentions_org(e, org)]
     page = entries[offset : offset + PAGE_SIZE]
     context = _chrome(engine, org, "audit") | {
         "rows": [(entry, audit_queries.mentions_org(entry, org)) for entry in page],
+        "scope": scope,
         "total": len(entries),
+        "ledger_total": ledger_total,
         "offset": offset,
         "prev_offset": max(0, offset - PAGE_SIZE),
         "next_offset": offset + PAGE_SIZE,
@@ -388,8 +498,12 @@ def audit_verify(
             request, "partials/verify_report.html", {"report": report}
         )
     entries = audit_queries.list_audit(client)
+    ledger_total = len(entries)
+    entries = [e for e in entries if audit_queries.mentions_org(e, org)]
     context = _chrome(engine, org, "audit") | {
-        "rows": [(entry, audit_queries.mentions_org(entry, org)) for entry in entries[:PAGE_SIZE]],
+        "rows": [(entry, True) for entry in entries[:PAGE_SIZE]],
+        "scope": "org",
+        "ledger_total": ledger_total,
         "total": len(entries),
         "offset": 0,
         "prev_offset": 0,

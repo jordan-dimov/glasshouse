@@ -4,7 +4,11 @@
 {% block content %}
 <div class="page-header">
   <h1>Audit &amp; Evidence</h1>
-  <p class="page-header__note">The audit log belongs to the ledger, not to one organisation: transitions from every tenant appear here. Rows that mention {{ org }} are highlighted.</p>
+  {% if scope == "ledger" %}
+  <p class="page-header__note">The whole ledger - the auditor view: transitions from every tenant. Rows that mention {{ org }} are highlighted. <a href="/ui/audit?org={{ org | urlencode }}">Back to the {{ org }} view</a>.</p>
+  {% else %}
+  <p class="page-header__note">Transitions relevant to {{ org }} - a scoped view of the wider ledger ({{ total }} of {{ ledger_total }}). <a href="/ui/audit?org={{ org | urlencode }}&scope=ledger">Show the whole ledger (auditor view)</a>.</p>
+  {% endif %}
 </div>
 
 <div class="tiles">
@@ -24,6 +28,7 @@
       <button type="submit">Record and download a checkpoint anchor</button>
     </form>
     <p class="tile__note">Verify offline, no database access: <span class="mono">glasshouse evidence-verify glasshouse-evidence-pack.json --anchor glasshouse-checkpoint-anchor.json</span></p>
+    <p class="tile__note">The pack covers the whole ledger prefix, every tenant included - it is the tamper-evidence surface, not a disclosure one. Per-organisation selective packs wait for their forcing case.</p>
   </section>
 </div>
 
@@ -73,8 +78,8 @@
     </table>
   </div>
   <nav class="pager" aria-label="Audit pages">
-    {% if offset > 0 %}<a href="/ui/audit?org={{ org | urlencode }}&offset={{ prev_offset }}">Newer</a>{% endif %}
-    {% if has_more %}<a href="/ui/audit?org={{ org | urlencode }}&offset={{ next_offset }}">Older</a>{% endif %}
+    {% if offset > 0 %}<a href="/ui/audit?org={{ org | urlencode }}&scope={{ scope }}&offset={{ prev_offset }}">Newer</a>{% endif %}
+    {% if has_more %}<a href="/ui/audit?org={{ org | urlencode }}&scope={{ scope }}&offset={{ next_offset }}">Older</a>{% endif %}
   </nav>
   {% else %}
   {{ empty_state("The ledger has no transitions yet.") }}

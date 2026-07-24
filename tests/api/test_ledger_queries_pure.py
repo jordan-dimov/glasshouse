@@ -102,3 +102,12 @@ def test_a_dead_commit_layer_is_the_pinned_json_503(dead_stack: None, endpoint: 
         response = client.get(endpoint, params=params)
     assert response.status_code == 503
     assert response.json() == {"detail": "commit layer unavailable"}
+
+
+def test_the_audit_endpoint_requires_an_org(dead_stack: None) -> None:
+    # The tenancy boundary holds on the audit read too: the scoped view
+    # is the default, so org is structural - refused before any backend
+    # work (the dead stack proves none ran).
+    with TestClient(create_app()) as client:
+        response = client.get("/audit")
+    assert response.status_code == 422
