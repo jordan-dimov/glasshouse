@@ -28,6 +28,9 @@
   --status-quarantined: #b54708;
   --status-break: #b42318;
   --status-reconciled: #027a48;
+  --status-error: #b42318;
+  --status-admissible: #027a48;
+  --status-refused: #b42318;
 
   /* Type */
   --font-ui: system-ui, "Segoe UI", sans-serif;

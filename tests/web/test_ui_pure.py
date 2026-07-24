@@ -27,7 +27,7 @@ def test_root_redirects_to_the_control_room() -> None:
     assert response.headers["location"] == "/ui"
 
 
-@pytest.mark.parametrize("path", ["/ui/blotter", "/ui/positions"])
+@pytest.mark.parametrize("path", ["/ui/blotter", "/ui/positions", "/ui/curves"])
 def test_a_screen_without_an_org_goes_to_the_picker(path: str) -> None:
     # A 303 before any database work: the dead database proves no query
     # ran on the way out.

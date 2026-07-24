@@ -11,11 +11,15 @@ from types import SimpleNamespace
 from glasshouse.api.schemas import (
     BlotterTrade,
     BookSummary,
+    CurveDiff,
+    CurveDiffPeriod,
+    CurveVersion,
     OverviewSummary,
     PositionHour,
     ProjectionCursor,
     TradeValuation,
     ValuationSummary,
+    VersionMark,
 )
 from glasshouse.web.templating import templates
 
@@ -145,6 +149,69 @@ def test_overview_renders_the_tiles_and_health() -> None:
     assert "badge--ok" in html
     assert "badge--break" in html
     assert "error" in html  # the verdict is text, never colour alone
+
+
+def test_curves_render_status_lineage_and_the_diff() -> None:
+    versions = [
+        CurveVersion(
+            version="crv-a-v1",
+            as_of=dt.date(2026, 7, 1),
+            status="superseded",
+            payload_hash="sha256:aa11",
+            payload="ok",
+            supersedes=None,
+            superseded_by="crv-a-v2",
+            mark_count=1,
+            books=["spec-de"],
+        ),
+        CurveVersion(
+            version="crv-a-v2",
+            as_of=dt.date(2026, 7, 1),
+            status="official",
+            payload_hash="sha256:bb22",
+            payload="mismatch",
+            supersedes="crv-a-v1",
+            superseded_by=None,
+            mark_count=0,
+            books=[],
+        ),
+    ]
+    diff = CurveDiff(
+        org="acme-energy",
+        market="de-power",
+        base="crv-a-v1",
+        compare="crv-a-v2",
+        periods=[
+            CurveDiffPeriod(
+                period_start=T0,
+                base_price=Decimal("78"),
+                compare_price=Decimal("75.5"),
+                delta=Decimal("-2.5"),
+            )
+        ],
+        base_marks=[VersionMark(trade="T-001", book="spec-de", mtm=Decimal("-220"))],
+        compare_marks=[],
+    )
+    html = _render(
+        "curves.html",
+        org="acme-energy",
+        org_options=["acme-energy"],
+        active="curves",
+        markets=["de-power"],
+        market="de-power",
+        versions=versions,
+        chains=[["crv-a-v2", "crv-a-v1"]],
+        base="crv-a-v1",
+        compare="crv-a-v2",
+        diff=diff,
+    )
+    assert "badge--official" in html
+    assert "badge--superseded" in html
+    assert ">mismatch<" in html  # the verdict is text, never colour alone
+    assert "crv-a-v2</span> supersedes <span" in html  # the lineage line
+    assert 'class="numeric neg">-2.5' in html  # a price drop is loud
+    assert 'class="numeric neg">-220' in html  # the mark struck on the base version
+    assert "Marks struck on" in html
 
 
 def test_the_error_page_needs_no_context() -> None:

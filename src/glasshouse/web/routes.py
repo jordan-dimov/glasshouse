@@ -20,9 +20,13 @@ import sqlalchemy as sa
 from fastapi import APIRouter, Depends, Query, Request, Response
 from fastapi.responses import RedirectResponse
 
+from glasshouse.api import curves as curve_queries
 from glasshouse.api import health, queries
-from glasshouse.api.deps import get_client, get_engine
+from glasshouse.api.curves import UnknownCurveVersionError
+from glasshouse.api.deps import get_client, get_engine, get_store
+from glasshouse.api.schemas import CurveVersion
 from glasshouse.commit import GlasshouseClient
+from glasshouse.compute.store import CurveStore
 from glasshouse.config import get_settings
 from glasshouse.web.templating import templates
 
@@ -115,6 +119,67 @@ def blotter(
     return templates.TemplateResponse(
         request, "blotter.html", _chrome(engine, org, "blotter") | context
     )
+
+
+def _chains(versions: list[CurveVersion]) -> list[list[str]]:
+    # Each supersession chain rendered newest-first: start from every
+    # head (a version nothing supersedes) that has a lineage, and walk
+    # the supersedes pointers back.
+    by_version = {v.version: v for v in versions}
+    chains = []
+    for head in versions:
+        if head.superseded_by is not None or head.supersedes is None:
+            continue
+        chain = [head.version]
+        cursor = head
+        while cursor.supersedes is not None and cursor.supersedes in by_version:
+            chain.append(cursor.supersedes)
+            cursor = by_version[cursor.supersedes]
+        chains.append(chain)
+    return chains
+
+
+@router.get("/ui/curves")
+def curves(
+    request: Request,
+    org: str | None = None,
+    market: str | None = None,
+    base: str | None = None,
+    compare: str | None = None,
+    engine: sa.Engine = Depends(get_engine),
+    client: GlasshouseClient = Depends(get_client),
+    store: CurveStore = Depends(get_store),
+) -> Response:
+    if not org:
+        return RedirectResponse("/ui", status_code=303)
+    # Chrome first: a dead database is one verdict (the projection 503)
+    # before any binary work.
+    context = _chrome(engine, org, "curves")
+    markets = curve_queries.list_markets(client, org=org)
+    market = market or (markets[0] if markets else None)
+    versions = (
+        curve_queries.list_curve_versions(client, store, org=org, market=market) if market else []
+    )
+    diff = None
+    base, compare = base or None, compare or None
+    if market and base and compare:
+        try:
+            diff = curve_queries.curve_diff(
+                client, store, org=org, market=market, base=base, compare=compare
+            )
+        except UnknownCurveVersionError as unknown:
+            context |= {"title": "Unknown curve version", "message": str(unknown)}
+            return templates.TemplateResponse(request, "error.html", context, status_code=404)
+    context |= {
+        "markets": markets,
+        "market": market,
+        "versions": versions,
+        "chains": _chains(versions),
+        "base": base,
+        "compare": compare,
+        "diff": diff,
+    }
+    return templates.TemplateResponse(request, "curves.html", context)
 
 
 @router.get("/ui/positions")
