@@ -46,6 +46,7 @@ def test_the_thread_starts_only_in_the_demo_environment(
     assert started == ["demo"]
 
 
+@pytest.mark.filterwarnings("ignore::pytest.PytestUnhandledThreadExceptionWarning")
 def test_a_dying_projector_never_takes_the_web_service_down(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

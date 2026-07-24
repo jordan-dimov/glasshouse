@@ -221,6 +221,19 @@ def test_curves_render_status_lineage_and_the_diff() -> None:
     assert "Marks struck on" in html
 
 
+def test_the_imports_page_derives_identity_from_the_login() -> None:
+    html = _render(
+        "imports.html",
+        org="acme-energy",
+        org_options=["acme-energy"],
+        active="imports",
+        authenticated_actor="demo",
+    )
+    assert 'name="actor"' not in html  # identity never comes from a form when logged in
+    assert "Importing as <strong>demo</strong>" in html
+    assert "gateway that asserted it" in html
+
+
 def test_the_imports_page_states_the_contracts_truthfully() -> None:
     html = _render("imports.html", org="acme-energy", org_options=["acme-energy"], active="imports")
     # The rendered header lines carry exactly the column contracts the

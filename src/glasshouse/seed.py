@@ -163,6 +163,11 @@ def seed_demo(client: GlasshouseClient, store: CurveStore, engine: sa.Engine) ->
             models.GrantValuationAuthorityRequest(principal="risk-engine", org=ORG, book=b)
             for b in BOOKS
         ),
+        # The shared demo login maps to one actor; it holds the union of
+        # capabilities so the hosted workbench can drive every flow.
+        *(models.GrantCaptureAuthorityRequest(principal="demo", org=ORG, book=b) for b in BOOKS),
+        models.GrantCurveAuthorityRequest(principal="demo", org=ORG, market=MARKET),
+        *(models.GrantValuationAuthorityRequest(principal="demo", org=ORG, book=b) for b in BOOKS),
     )
     for grant in grants:
         _committed(client.submit(grant, actor="bootstrap"))
