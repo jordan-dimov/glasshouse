@@ -80,6 +80,35 @@ def test_an_authenticated_import_carries_the_derived_actor(ui: TestClient) -> No
         assert by_trade["T-500"]["actor"] == "demo"
 
 
+TAMPER_CSV = (
+    "book,trade,counterparty,market,direction,quantity,price,delivery_start,delivery_end\n"
+    "spec-de,T-501,nordkraft,de-power,buy,1,77,2026-07-01T03:00:00Z,2026-07-01T04:00:00Z\n"
+)
+
+
+def test_a_tampered_org_field_is_ignored_on_authenticated_writes(ui: TestClient) -> None:
+    # Org derives from configuration when authenticated - a hostile form
+    # value must not choose the tenancy of a governed write.
+    creds = ("demo", PASSWORD)
+    with ui as client:
+        receipts = client.post(
+            "/ui/imports/commit",
+            data={
+                "org": "evil-corp",
+                "kind": "trades",
+                "text_b64": base64.b64encode(TAMPER_CSV.encode()).decode(),
+            },
+            auth=creds,
+        )
+        assert receipts.status_code == 200
+        assert "1 committed" in receipts.text
+        # The trade landed in the CONFIGURED org, not the submitted one.
+        ours = client.get("/trades", params={"org": ORG, "book": "spec-de"}, auth=creds).json()
+        theirs = client.get("/trades", params={"org": "evil-corp"}, auth=creds).json()
+    assert "T-501" in {row["trade"] for row in ours}
+    assert theirs == []
+
+
 def test_the_same_post_without_credentials_is_challenged(ui: TestClient) -> None:
     with ui as client:
         response = client.post(

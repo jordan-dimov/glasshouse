@@ -7,6 +7,7 @@ dead database, so every verdict is the gate's own.
 
 import pytest
 from fastapi.testclient import TestClient
+from pydantic import ValidationError
 
 from glasshouse.api.app import create_app
 
@@ -65,6 +66,19 @@ def test_credentials_pass_through_to_the_existing_faces() -> None:
     assert no_org.status_code == 303  # routing behaviour unchanged behind the gate
 
 
+@pytest.mark.parametrize("weak", ["", "   ", "short", "elevenchars"])
+def test_a_blank_or_weak_password_refuses_to_boot(
+    monkeypatch: pytest.MonkeyPatch, weak: str
+) -> None:
+    # The password is the whole perimeter of a public deployment: a
+    # blank or trivial value fails LOUDLY at settings construction,
+    # never quietly enables the gate with an empty secret (or lifts the
+    # demo write fence).
+    monkeypatch.setenv("GLASSHOUSE_DEMO_PASSWORD", weak)
+    with pytest.raises(ValidationError, match="at least 12"):
+        create_app()
+
+
 def test_cross_site_unsafe_requests_are_refused() -> None:
     form = {"org": "acme-energy", "kind": "trades", "actor": "x", "text_b64": "Ym9vaw=="}
     with TestClient(create_app()) as client:
@@ -80,17 +94,27 @@ def test_cross_site_unsafe_requests_are_refused() -> None:
             auth=CREDS,
             headers={"Sec-Fetch-Site": "same-origin"},
         )
+        sibling = client.post(
+            "/ui/imports/commit",
+            data=form,
+            auth=CREDS,
+            headers={"Sec-Fetch-Site": "same-site"},
+        )
         headerless = client.post("/ui/imports/commit", data=form, auth=CREDS)
         safe_get = client.get(
             "/ui", params={"org": "x"}, auth=CREDS, headers={"Sec-Fetch-Site": "cross-site"}
         )
     assert hostile.status_code == 403
     assert hostile.json() == {"detail": "cross-site request refused"}
-    # Only the one hostile value is refused: same-origin browsers and
-    # header-less clients (curl) proceed to the handler's own verdicts.
+    # A sibling subdomain (another *.a115.co.uk origin) is same-site,
+    # not same-origin: with Basic's ambient credentials it is just as
+    # hostile a write vector, and is refused too.
+    assert sibling.status_code == 403
+    # Same-origin browsers and header-less clients (curl) proceed to the
+    # handler's own verdicts; safe methods are never blocked.
     assert same_origin.status_code != 403
     assert headerless.status_code != 403
-    assert safe_get.status_code != 403  # safe methods are never blocked
+    assert safe_get.status_code != 403
 
 
 def test_an_unset_password_means_no_gate(monkeypatch: pytest.MonkeyPatch) -> None:

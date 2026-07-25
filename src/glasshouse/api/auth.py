@@ -12,8 +12,10 @@ Identity stays L0-honest: the login maps to one actor string
 (`DEMO_USERNAME`) and nothing more; the ledger's gateway attestation
 records who asserted it on every write. Cross-site protection for
 Basic's ambient credentials is the `Sec-Fetch-Site` check on unsafe
-methods: only the literal `cross-site` is refused, so curl and older
-clients (which send no such header) keep working.
+methods: `cross-site` AND `same-site` are refused (the demo lives on a
+subdomain, so a compromised sibling on the parent domain is same-site,
+not same-origin); `same-origin`, `none` and an absent header (curl,
+non-browser clients) pass.
 
 `/static` is deliberately NOT exempt: browsers cache Basic credentials
 per (origin, realm), so after the first page's challenge every
@@ -42,6 +44,9 @@ _CHALLENGE = JSONResponse(
     headers={"WWW-Authenticate": f'Basic realm="{REALM}", charset="UTF-8"'},
 )
 _CROSS_SITE = JSONResponse({"detail": "cross-site request refused"}, status_code=403)
+# Both hostile Fetch Metadata classifications for a subdomain-hosted
+# service: a sibling *.a115.co.uk origin is same-site, not same-origin.
+_REFUSED_FETCH_SITES = (b"cross-site", b"same-site")
 
 
 class DemoAuthMiddleware:
@@ -79,7 +84,8 @@ class DemoAuthMiddleware:
         if scope["method"] not in _UNSAFE_METHODS:
             return False
         return any(
-            name == b"sec-fetch-site" and value == b"cross-site" for name, value in scope["headers"]
+            name == b"sec-fetch-site" and value in _REFUSED_FETCH_SITES
+            for name, value in scope["headers"]
         )
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:

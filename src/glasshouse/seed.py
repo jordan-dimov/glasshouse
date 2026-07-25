@@ -267,7 +267,23 @@ def run_seed(database_url: str, *, reset: bool) -> SeedReport:
                 raise SeedError("another seed or reset is already running; refusing to overlap")
             try:
                 if reset:
-                    reset_app_state(engine, database_url)
+                    # The destructive window is fenced from the live
+                    # projector: holding the projector's own advisory
+                    # lock (session-level, on this guard) makes any
+                    # concurrent catch_up page wait out the drop-and-
+                    # migrate rather than meet missing tables. Released
+                    # as soon as the tables exist again - seeding runs
+                    # alongside a live projector by design (the binary-
+                    # side init gap is covered by the thread's retry).
+                    guard.execute(
+                        sa.text("select pg_advisory_lock(hashtext('glasshouse.projector'))")
+                    )
+                    try:
+                        reset_app_state(engine, database_url)
+                    finally:
+                        guard.execute(
+                            sa.text("select pg_advisory_unlock(hashtext('glasshouse.projector'))")
+                        )
                 client = GlasshouseClient(str(MODEL_FILE), database_url)
                 store = CurveStore(engine)
                 report = seed_demo(client, store, engine)

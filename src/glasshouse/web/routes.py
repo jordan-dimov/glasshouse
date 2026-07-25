@@ -334,10 +334,14 @@ def imports_preview(
     fence = _write_fence(request, org)
     if fence:
         return fence
-    # When the demo login is active the actor DERIVES from it - never
-    # from the form (the gate is the identity authority); the typed
-    # field remains only for ungated dev.
-    actor = authenticated_actor(request) or actor
+    # When the demo login is active, BOTH halves of a write's identity
+    # derive from authenticated context - the actor from the login, the
+    # org from configuration - never from the request body (the gate is
+    # the identity authority); the typed field remains only for ungated
+    # dev, where org stays the explicit L0 parameter.
+    if authenticated_actor(request):
+        actor = authenticated_actor(request) or actor
+        org = get_settings().demo_org
     problem = _checked_import_form(kind, actor)
     if problem:
         return _import_refusal(request, org, 422, "Check the form", problem)
@@ -380,7 +384,9 @@ def imports_commit(
     fence = _write_fence(request, org)
     if fence:
         return fence
-    actor = authenticated_actor(request) or actor
+    if authenticated_actor(request):
+        actor = authenticated_actor(request) or actor
+        org = get_settings().demo_org
     problem = _checked_import_form(kind, actor)
     if problem:
         return _import_refusal(request, org, 422, "Check the form", problem)

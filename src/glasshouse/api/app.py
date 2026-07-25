@@ -49,11 +49,14 @@ def create_app() -> FastAPI:
             app.state.engine = engine
             app.state.client = build_client(settings)
             app.state.store = CurveStore(engine)
+            app.state.projector_thread = None
             if settings.environment == "demo":
                 # The DESIGN section 13 demo profile: one process, the
                 # background-thread projector. Dev composes its own run
-                # mode; production runs the separate worker.
+                # mode; production runs the separate worker. The thread
+                # rides app.state so /readyz can answer for its liveness.
                 projector = start_projector_thread(app.state.client, engine)
+                app.state.projector_thread = projector[0]
             log.info("api.startup", environment=settings.environment, version=__version__)
             yield
         finally:
@@ -61,8 +64,15 @@ def create_app() -> FastAPI:
                 thread, stop = projector
                 stop.set()
                 # Joined BEFORE the engine is disposed: the thread reads
-                # through this pool.
+                # through this pool. A join that times out is loud, and
+                # gets one longer chance - disposing under a live thread
+                # would break the lifecycle guarantee silently.
                 thread.join(timeout=5)
+                if thread.is_alive():
+                    log.error("api.projector_join_timed_out", waited_seconds=5)
+                    thread.join(timeout=30)
+                    if thread.is_alive():
+                        log.error("api.projector_still_alive_at_dispose", waited_seconds=35)
             engine.dispose()
             log.info("api.shutdown")
 
@@ -118,6 +128,12 @@ def create_app() -> FastAPI:
     @app.get("/readyz")
     def readyz(response: Response) -> dict[str, str]:
         verdicts = health.checks(settings, app.state.engine, app.state.client)
+        if settings.environment == "demo":
+            # The demo profile's read side depends on the background
+            # projector; a dead thread must be a visible verdict, not a
+            # silent lag until the next restart.
+            thread = app.state.projector_thread
+            verdicts["projector"] = "ok" if thread is not None and thread.is_alive() else "error"
         if any(verdict != "ok" for verdict in verdicts.values()):
             response.status_code = 503
         return verdicts

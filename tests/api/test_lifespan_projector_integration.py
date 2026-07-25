@@ -9,10 +9,15 @@ import time
 from decimal import Decimal
 
 import pytest
+import sqlalchemy as sa
 from fastapi.testclient import TestClient
 
 from glasshouse.api.app import create_app
 from glasshouse.commit import MODEL_FILE, Committed, GlasshouseClient, models
+from glasshouse.projections.runner import start_projector_thread
+from glasshouse.projections.tables import blotter_trade
+from glasshouse.seed import ORG as SEED_ORG
+from glasshouse.seed import run_seed
 from tests.support import BINARY, DB, needs_live_stack, provision
 
 pytestmark = needs_live_stack
@@ -67,3 +72,41 @@ def test_a_write_becomes_visible_without_manual_catch_up(
                 break
             time.sleep(0.2)
         assert [row["trade"] for row in rows] == ["TH-1"]
+
+
+def test_the_nightly_reset_never_kills_a_live_projector(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # The exact hosted collision: the web process's projector polls every
+    # second while the cron drops and rebuilds the world. The reset holds
+    # the projector's advisory lock across the destructive window and the
+    # thread retries operational failures, so it must come out alive and
+    # projecting the reseeded book.
+    engine = provision()
+    client = GlasshouseClient(str(MODEL_FILE), DB, binary=str(BINARY))
+    monkeypatch.setenv("GLASSHOUSE_MORPHOLOG_BIN", str(BINARY))
+    monkeypatch.setenv("GLASSHOUSE_ENVIRONMENT", "demo")
+    thread, stop = start_projector_thread(client, engine, interval_seconds=0.05)
+    try:
+        run_seed(DB, reset=True)  # drops schemas and tables mid-poll
+        assert thread.is_alive(), "the reset must never kill the projector"
+        # The surviving thread projects the reseeded book by itself.
+        deadline = time.monotonic() + 15
+        count = 0
+        while time.monotonic() < deadline:
+            with engine.connect() as connection:
+                count = connection.execute(
+                    sa.select(sa.func.count())
+                    .select_from(blotter_trade)
+                    .where(blotter_trade.c.org == SEED_ORG)
+                ).scalar_one()
+            if count == 6:
+                break
+            time.sleep(0.2)
+        assert count == 6
+        assert thread.is_alive()
+    finally:
+        stop.set()
+        thread.join(timeout=10)
+        engine.dispose()
+    assert not thread.is_alive()

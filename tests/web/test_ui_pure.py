@@ -148,13 +148,13 @@ def test_the_demo_with_a_login_is_not_fenced(monkeypatch: pytest.MonkeyPatch) ->
     # With the login configured the gate is the guard, not the fence:
     # an authenticated preview proceeds to the handler's own verdicts.
     monkeypatch.setenv("GLASSHOUSE_ENVIRONMENT", "demo")
-    monkeypatch.setenv("GLASSHOUSE_DEMO_PASSWORD", "pw")
+    monkeypatch.setenv("GLASSHOUSE_DEMO_PASSWORD", "a-long-demo-password")
     with TestClient(create_app()) as client:
         response = client.post(
             "/ui/imports/preview",
             data={"org": "acme-energy", "kind": "spreadsheets", "actor": ""},
             files={"file": ("t.csv", b"book,trade\n", "text/csv")},
-            auth=("demo", "pw"),
+            auth=("demo", "a-long-demo-password"),
         )
     assert response.status_code == 422  # the form check, not a fence 403
     assert "trades or curves" in response.text
@@ -163,16 +163,18 @@ def test_the_demo_with_a_login_is_not_fenced(monkeypatch: pytest.MonkeyPatch) ->
 def test_the_login_derives_the_actor_and_hides_the_field(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setenv("GLASSHOUSE_DEMO_PASSWORD", "pw")
+    monkeypatch.setenv("GLASSHOUSE_DEMO_PASSWORD", "a-long-demo-password")
     with TestClient(create_app()) as client:
-        page = client.get("/ui/imports", params={"org": "acme-energy"}, auth=("demo", "pw"))
+        page = client.get(
+            "/ui/imports", params={"org": "acme-energy"}, auth=("demo", "a-long-demo-password")
+        )
         # An empty actor field with a damaged payload: the refusal must be
         # about the payload, proving the derived identity satisfied the
         # actor check before any backend work.
         commit = client.post(
             "/ui/imports/commit",
             data={"org": "acme-energy", "kind": "trades", "actor": "", "text_b64": "not!!!b64"},
-            auth=("demo", "pw"),
+            auth=("demo", "a-long-demo-password"),
         )
     assert page.status_code == 503  # dead DB chrome; the template legs are pure below
     assert commit.status_code == 422
