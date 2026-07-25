@@ -128,6 +128,60 @@ def test_a_damaged_preview_payload_is_refused_before_any_backend_work() -> None:
     assert "preview" in response.text
 
 
+def test_a_hosted_demo_without_a_login_refuses_browser_writes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # A missing env var must never leave a public deployment writable.
+    monkeypatch.setenv("GLASSHOUSE_ENVIRONMENT", "demo")
+    with TestClient(create_app()) as client:
+        preview = _preview(client)
+        commit = client.post(
+            "/ui/imports/commit",
+            data={"org": "acme-energy", "kind": "trades", "actor": "alice", "text_b64": "Ym9vaw=="},
+        )
+    assert preview.status_code == 403
+    assert commit.status_code == 403
+    assert "need the demo login" in preview.text
+
+
+def test_the_demo_with_a_login_is_not_fenced(monkeypatch: pytest.MonkeyPatch) -> None:
+    # With the login configured the gate is the guard, not the fence:
+    # an authenticated preview proceeds to the handler's own verdicts.
+    monkeypatch.setenv("GLASSHOUSE_ENVIRONMENT", "demo")
+    monkeypatch.setenv("GLASSHOUSE_DEMO_PASSWORD", "a-long-demo-password")
+    with TestClient(create_app()) as client:
+        response = client.post(
+            "/ui/imports/preview",
+            data={"org": "acme-energy", "kind": "spreadsheets", "actor": ""},
+            files={"file": ("t.csv", b"book,trade\n", "text/csv")},
+            auth=("demo", "a-long-demo-password"),
+        )
+    assert response.status_code == 422  # the form check, not a fence 403
+    assert "trades or curves" in response.text
+
+
+def test_the_login_derives_the_actor_and_hides_the_field(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("GLASSHOUSE_DEMO_PASSWORD", "a-long-demo-password")
+    with TestClient(create_app()) as client:
+        page = client.get(
+            "/ui/imports", params={"org": "acme-energy"}, auth=("demo", "a-long-demo-password")
+        )
+        # An empty actor field with a damaged payload: the refusal must be
+        # about the payload, proving the derived identity satisfied the
+        # actor check before any backend work.
+        commit = client.post(
+            "/ui/imports/commit",
+            data={"org": "acme-energy", "kind": "trades", "actor": "", "text_b64": "not!!!b64"},
+            auth=("demo", "a-long-demo-password"),
+        )
+    assert page.status_code == 503  # dead DB chrome; the template legs are pure below
+    assert commit.status_code == 422
+    assert "preview payload is damaged" in commit.text
+    assert "An actor is required" not in commit.text
+
+
 def test_browser_writes_are_fenced_off_in_production(monkeypatch: pytest.MonkeyPatch) -> None:
     # Typed-actor identity is an L0 convenience; production refuses the
     # browser write path entirely until authenticated identity lands.

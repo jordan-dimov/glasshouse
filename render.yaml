@@ -1,8 +1,17 @@
 # Render Blueprint: the DEMO profile (DESIGN.md section 13).
 # Deliberately minimal: one web service with the background-thread
-# projector, one managed Postgres, one nightly reset job. The separate
-# worker (outbox + projector) is the production-like profile and joins a
-# deployment only when external effects or projection lag force it.
+# projector (started by the lifespan in the demo environment), one
+# managed Postgres, one nightly reset job. The separate worker (outbox +
+# projector) is the production-like profile and joins a deployment only
+# when external effects or projection lag force it.
+#
+# First boot: the web service's preDeployCommand provisions everything
+# non-destructively (app schema to head, governed schema init, sealed
+# views), so the service comes up serving an empty ledger; trigger the
+# seed-reset cron once (or run it as a one-off job) to load the demo
+# dataset. GLASSHOUSE_DEMO_PASSWORD is prompted at Blueprint creation
+# (sync: false) and never enters this repository; the demo login is
+# HTTP Basic, username "demo".
 #
 # Database: Render managed Postgres 18. TimescaleDB is supported on
 # Render managed Postgres (PG13+, for databases created after 12/01/2023),
@@ -11,20 +20,25 @@
 # the app uses core hypertables (chunk exclusion) only; continuous
 # aggregates and compression (TSL) are not used, which also keeps the
 # stack Apache-2. The Alembic migration runs CREATE EXTENSION timescaledb
-# (the preDeployCommand below), so the extension is provisioned at deploy.
-# Worth one live confirmation that create_hypertable succeeds on the plan
-# before the demo leans on it.
+# (inside the preDeployCommand's provision step), so the extension is
+# provisioned at deploy. Worth one live confirmation that
+# create_hypertable succeeds on the plan before the demo leans on it.
 
 services:
   - type: web
     name: glasshouse-web
     runtime: docker
     plan: starter
-    healthCheckPath: /healthz
-    preDeployCommand: uv run alembic upgrade head
+    region: frankfurt
+    healthCheckPath: /healthz # exempt from the demo login by design, as is /readyz
+    preDeployCommand: uv run python -m glasshouse.cli provision
+    domains:
+      - glasshouse.a115.co.uk
     envVars:
       - key: GLASSHOUSE_ENVIRONMENT
         value: demo
+      - key: GLASSHOUSE_DEMO_PASSWORD
+        sync: false # prompted at Blueprint creation; lives only in Render
       - key: GLASSHOUSE_DATABASE_URL
         fromDatabase:
           name: glasshouse-db
@@ -34,13 +48,11 @@ services:
     name: glasshouse-seed-reset
     runtime: docker
     schedule: "30 2 * * *"
-    # First-time provisioning: trigger this cron manually once after the
-    # Blueprint is created (the reset path inits the governed schema,
-    # migrates the app schema and applies the views before seeding).
-    # Still deferred to a deploy-hardening pass: a pre-deploy
-    # init/apply-views step for the web service, the in-process
-    # projector, demo login, and as-of mode.
+    # The nightly reset to the known Monday-morning book; also the
+    # first-time data load (trigger it manually once after the Blueprint
+    # is created). No demo password here: seed never needs one.
     dockerCommand: uv run python -m glasshouse.cli seed --reset
+    region: frankfurt
     envVars:
       - key: GLASSHOUSE_ENVIRONMENT
         value: demo
@@ -52,4 +64,5 @@ services:
 databases:
   - name: glasshouse-db
     plan: basic-256mb
+    region: frankfurt
     postgresMajorVersion: "18"

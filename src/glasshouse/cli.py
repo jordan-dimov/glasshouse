@@ -44,6 +44,7 @@ from glasshouse.imports import (
 )
 from glasshouse.logging import configure_logging, get_logger
 from glasshouse.projections import catch_up, follow
+from glasshouse.provision import ProvisionError, run_provision
 from glasshouse.seed import SeedError, run_seed
 from glasshouse.verify import verify
 
@@ -134,6 +135,26 @@ def import_curves_command(
         preview=preview,
         db=_db(database_url),
     )
+
+
+@app.command(
+    "provision",
+    help="Non-destructive first-boot provisioning: migrate the app schema to head, initialise "
+    "the governed schema if absent, apply the sealed inspection views. Idempotent - the web "
+    "service's pre-deploy step.",
+)
+def provision_command(
+    least_privilege: Annotated[
+        bool,
+        typer.Option(
+            "--least-privilege",
+            help="provision the governed schema with the reader/writer role floor (needs "
+            "CREATEROLE; the report names the membership grants left to the operator)",
+        ),
+    ] = False,
+    database_url: DatabaseUrl = "",
+) -> None:
+    print(run_provision(_db(database_url), least_privilege=least_privilege).render())
 
 
 @app.command(
@@ -266,7 +287,7 @@ def main(argv: list[str] | None = None) -> int:
         get_command(app).main(args=effective)
     except SystemExit as exit_:
         return int(exit_.code) if isinstance(exit_.code, int) else 0
-    except (ImportFormatError, MorphologError, SeedError, OSError) as failure:
+    except (ImportFormatError, MorphologError, ProvisionError, SeedError, OSError) as failure:
         log.warning(
             "cli.command_failed",
             command=effective[0] if effective else "?",

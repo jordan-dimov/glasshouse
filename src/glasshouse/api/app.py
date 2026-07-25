@@ -9,6 +9,7 @@ three independent verdicts: is the binary present and speaking, does the
 database answer, and do the two agree through a governed read.
 """
 
+import threading
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
@@ -18,6 +19,7 @@ from fastapi.staticfiles import StaticFiles
 
 from glasshouse import __version__
 from glasshouse.api import health
+from glasshouse.api.auth import DEMO_USERNAME, DemoAuthMiddleware
 from glasshouse.api.deps import build_client, build_engine
 from glasshouse.api.queries import ReadUnavailableError
 from glasshouse.api.routers import audit, curves, explain, reads
@@ -25,6 +27,7 @@ from glasshouse.commit import MorphologError
 from glasshouse.compute.store import CurveStore
 from glasshouse.config import get_settings
 from glasshouse.logging import configure_logging, get_logger
+from glasshouse.projections.runner import start_projector_thread
 from glasshouse.web import STATIC_DIR
 from glasshouse.web import routes as web
 from glasshouse.web.routes import unavailable_page
@@ -41,13 +44,35 @@ def create_app() -> FastAPI:
         # The engine is built before the try, then disposed in the finally
         # whatever happens after: a client build that failed would
         # otherwise leak the pool on a half-completed startup.
+        projector: tuple[threading.Thread, threading.Event] | None = None
         try:
             app.state.engine = engine
             app.state.client = build_client(settings)
             app.state.store = CurveStore(engine)
+            app.state.projector_thread = None
+            if settings.environment == "demo":
+                # The DESIGN section 13 demo profile: one process, the
+                # background-thread projector. Dev composes its own run
+                # mode; production runs the separate worker. The thread
+                # rides app.state so /readyz can answer for its liveness.
+                projector = start_projector_thread(app.state.client, engine)
+                app.state.projector_thread = projector[0]
             log.info("api.startup", environment=settings.environment, version=__version__)
             yield
         finally:
+            if projector is not None:
+                thread, stop = projector
+                stop.set()
+                # Joined BEFORE the engine is disposed: the thread reads
+                # through this pool. A join that times out is loud, and
+                # gets one longer chance - disposing under a live thread
+                # would break the lifecycle guarantee silently.
+                thread.join(timeout=5)
+                if thread.is_alive():
+                    log.error("api.projector_join_timed_out", waited_seconds=5)
+                    thread.join(timeout=30)
+                    if thread.is_alive():
+                        log.error("api.projector_still_alive_at_dispose", waited_seconds=35)
             engine.dispose()
             log.info("api.shutdown")
 
@@ -64,6 +89,15 @@ def create_app() -> FastAPI:
     app.include_router(audit.router)
     app.include_router(web.router)
     app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
+
+    if settings.demo_password is not None:
+        # The shared demo login: one gate in front of everything except
+        # the deployment probes. Added last = outermost, so it answers
+        # before routing and the 503 faces below see only authenticated
+        # traffic.
+        app.add_middleware(
+            DemoAuthMiddleware, username=DEMO_USERNAME, password=settings.demo_password
+        )
 
     @app.exception_handler(ReadUnavailableError)
     async def read_unavailable(request: Request, _exc: ReadUnavailableError) -> Response:
@@ -94,6 +128,12 @@ def create_app() -> FastAPI:
     @app.get("/readyz")
     def readyz(response: Response) -> dict[str, str]:
         verdicts = health.checks(settings, app.state.engine, app.state.client)
+        if settings.environment == "demo":
+            # The demo profile's read side depends on the background
+            # projector; a dead thread must be a visible verdict, not a
+            # silent lag until the next restart.
+            thread = app.state.projector_thread
+            verdicts["projector"] = "ok" if thread is not None and thread.is_alive() else "error"
         if any(verdict != "ok" for verdict in verdicts.values()):
             response.status_code = 503
         return verdicts

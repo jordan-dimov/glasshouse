@@ -23,10 +23,8 @@ from __future__ import annotations
 import datetime as dt
 from dataclasses import dataclass
 from decimal import Decimal
-from pathlib import Path
 
 import sqlalchemy as sa
-from alembic.config import Config
 
 from alembic import command
 from glasshouse.commit import MODEL_FILE, Committed, GlasshouseClient, apply_views, models
@@ -37,14 +35,15 @@ from glasshouse.compute.store import metadata as payload_metadata
 from glasshouse.config import Environment, get_settings
 from glasshouse.projections import rebuild
 from glasshouse.projections.tables import metadata as projection_metadata
+from glasshouse.provision import ALEMBIC_INI, ProvisionError, alembic_config
 from glasshouse.verify import verify
 
 # One session-level advisory lock for the whole seed/reset operation.
 SEED_LOCK_KEY = 423_001
 
-# The migration bundle the reset path replays. Resolved as a constant so
-# the preflight (and its test) name one place.
-_ALEMBIC_INI = Path(__file__).resolve().parents[2] / "alembic.ini"
+# The migration bundle the reset path replays - provision.py's constant,
+# re-bound here because the pure tests monkeypatch this seam.
+_ALEMBIC_INI = ALEMBIC_INI
 
 ORG = "acme-energy"
 MARKET = "de-power"
@@ -134,13 +133,10 @@ def reset_app_state(engine: sa.Engine, database_url: str) -> None:
     Docker image) root - a wheel-only install cannot reset, and the
     preflight refuses BEFORE the first destructive statement, so an
     unsupported install leaves the database untouched."""
-    if not _ALEMBIC_INI.exists():
-        raise SeedError(
-            f"alembic.ini not found at {_ALEMBIC_INI}; seed --reset runs from the "
-            "source checkout or the Docker image, not a wheel-only install"
-        )
-    config = Config(str(_ALEMBIC_INI))
-    config.set_main_option("sqlalchemy.url", engine_url(database_url))
+    try:
+        config = alembic_config(database_url, ini=_ALEMBIC_INI)
+    except ProvisionError as absent:
+        raise SeedError(str(absent)) from absent
     with engine.begin() as connection:
         connection.execute(sa.text("DROP SCHEMA IF EXISTS morpholog CASCADE"))
         connection.execute(sa.text("DROP SCHEMA IF EXISTS morpholog_views CASCADE"))
@@ -167,6 +163,11 @@ def seed_demo(client: GlasshouseClient, store: CurveStore, engine: sa.Engine) ->
             models.GrantValuationAuthorityRequest(principal="risk-engine", org=ORG, book=b)
             for b in BOOKS
         ),
+        # The shared demo login maps to one actor; it holds the union of
+        # capabilities so the hosted workbench can drive every flow.
+        *(models.GrantCaptureAuthorityRequest(principal="demo", org=ORG, book=b) for b in BOOKS),
+        models.GrantCurveAuthorityRequest(principal="demo", org=ORG, market=MARKET),
+        *(models.GrantValuationAuthorityRequest(principal="demo", org=ORG, book=b) for b in BOOKS),
     )
     for grant in grants:
         _committed(client.submit(grant, actor="bootstrap"))
@@ -266,7 +267,23 @@ def run_seed(database_url: str, *, reset: bool) -> SeedReport:
                 raise SeedError("another seed or reset is already running; refusing to overlap")
             try:
                 if reset:
-                    reset_app_state(engine, database_url)
+                    # The destructive window is fenced from the live
+                    # projector: holding the projector's own advisory
+                    # lock (session-level, on this guard) makes any
+                    # concurrent catch_up page wait out the drop-and-
+                    # migrate rather than meet missing tables. Released
+                    # as soon as the tables exist again - seeding runs
+                    # alongside a live projector by design (the binary-
+                    # side init gap is covered by the thread's retry).
+                    guard.execute(
+                        sa.text("select pg_advisory_lock(hashtext('glasshouse.projector'))")
+                    )
+                    try:
+                        reset_app_state(engine, database_url)
+                    finally:
+                        guard.execute(
+                            sa.text("select pg_advisory_unlock(hashtext('glasshouse.projector'))")
+                        )
                 client = GlasshouseClient(str(MODEL_FILE), database_url)
                 store = CurveStore(engine)
                 report = seed_demo(client, store, engine)

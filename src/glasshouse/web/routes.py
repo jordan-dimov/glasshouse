@@ -29,6 +29,7 @@ from fastapi.responses import RedirectResponse
 from glasshouse.api import audit as audit_queries
 from glasshouse.api import curves as curve_queries
 from glasshouse.api import health, queries
+from glasshouse.api.auth import authenticated_actor
 from glasshouse.api.curves import (
     CurveIntegrityError,
     IncomparableCurvesError,
@@ -266,11 +267,13 @@ def _checked_import_form(kind: str, actor: str) -> str | None:
 
 
 def _write_fence(request: Request, org: str) -> Response | None:
-    # Browser writes are L0: identity is typed, not authenticated. In
-    # production that is not an acceptable write path, so the fence is
-    # structural, not advisory; it lifts when authenticated identity
-    # lands (issue #40).
-    if get_settings().environment == "production":
+    # The write-path fence matrix: production never accepts browser
+    # writes (a demo login is not production identity); a HOSTED demo
+    # with no login configured refuses too - a missing env var must not
+    # leave a public deployment writable; dev stays open, and a demo
+    # with the login configured is guarded by the gate itself.
+    settings = get_settings()
+    if settings.environment == "production":
         return _import_refusal(
             request,
             org,
@@ -278,6 +281,15 @@ def _write_fence(request: Request, org: str) -> Response | None:
             "Browser imports are fenced off in production",
             "Typed-actor identity is a readiness-L0 convenience; in production, "
             "import through the CLI until authenticated identity lands.",
+        )
+    if settings.environment == "demo" and settings.demo_password is None:
+        return _import_refusal(
+            request,
+            org,
+            403,
+            "Browser imports need the demo login",
+            "This hosted demo refuses browser writes while GLASSHOUSE_DEMO_PASSWORD "
+            "is unset; configure the demo login, or import through the CLI.",
         )
     return None
 
@@ -303,7 +315,10 @@ def imports_home(
 ) -> Response:
     if not org:
         return RedirectResponse("/ui", status_code=303)
-    return templates.TemplateResponse(request, "imports.html", _chrome(engine, org, "imports"))
+    context = _chrome(engine, org, "imports") | {
+        "authenticated_actor": authenticated_actor(request)
+    }
+    return templates.TemplateResponse(request, "imports.html", context)
 
 
 @router.post("/ui/imports/preview")
@@ -311,7 +326,7 @@ def imports_preview(
     request: Request,
     org: str = Form(),
     kind: str = Form(),
-    actor: str = Form(),
+    actor: str = Form(default=""),
     file: UploadFile = File(),
     engine: sa.Engine = Depends(get_engine),
     client: GlasshouseClient = Depends(get_client),
@@ -319,6 +334,14 @@ def imports_preview(
     fence = _write_fence(request, org)
     if fence:
         return fence
+    # When the demo login is active, BOTH halves of a write's identity
+    # derive from authenticated context - the actor from the login, the
+    # org from configuration - never from the request body (the gate is
+    # the identity authority); the typed field remains only for ungated
+    # dev, where org stays the explicit L0 parameter.
+    if authenticated_actor(request):
+        actor = authenticated_actor(request) or actor
+        org = get_settings().demo_org
     problem = _checked_import_form(kind, actor)
     if problem:
         return _import_refusal(request, org, 422, "Check the form", problem)
@@ -352,7 +375,7 @@ def imports_commit(
     request: Request,
     org: str = Form(),
     kind: str = Form(),
-    actor: str = Form(),
+    actor: str = Form(default=""),
     text_b64: str = Form(),
     engine: sa.Engine = Depends(get_engine),
     client: GlasshouseClient = Depends(get_client),
@@ -361,6 +384,9 @@ def imports_commit(
     fence = _write_fence(request, org)
     if fence:
         return fence
+    if authenticated_actor(request):
+        actor = authenticated_actor(request) or actor
+        org = get_settings().demo_org
     problem = _checked_import_form(kind, actor)
     if problem:
         return _import_refusal(request, org, 422, "Check the form", problem)

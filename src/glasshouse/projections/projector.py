@@ -335,11 +335,36 @@ def accumulate(
 
 def rebuild(client: GlasshouseClient, engine: sa.Engine) -> int:
     """The read-side law as a callable: delete every projection row and
-    replay the tail from zero. Returns the number of transitions applied."""
+    replay the tail from zero. Returns the number of transitions applied.
+
+    Wipe, replay and cursor advance happen in ONE transaction holding
+    the same advisory lock as a `catch_up` page, so a concurrent live
+    projector can never interleave with a half-rebuilt world (an
+    unlocked wipe once let a live page advance the cursor to the tip
+    over freshly emptied tables - permanent divergence), and the replay
+    is deterministic for a verify that runs immediately after (a
+    two-step wipe-then-catch-up could be blinded by a lock-waiting
+    transaction pinning the audit tail's resume horizon). The tail is
+    fetched inside the open transaction: every transition to replay
+    committed before this transaction began, so the horizon never
+    withholds them."""
     log.warning("projector.rebuild_started")
     with engine.begin() as connection:
+        connection.execute(
+            sa.text("SELECT pg_advisory_xact_lock(hashtext('glasshouse.projector'))")
+        )
         for table in (blotter_trade, position_hour, trade_valuation, projection_progress):
             connection.execute(sa.delete(table))
-    applied = catch_up(client, engine)
-    log.warning("projector.rebuild_complete", transitions=applied)
-    return applied
+        rows = client.audit()
+        for row in rows:
+            fold = fold_transition(row.asserted_claims, row.retracted_claims)
+            _apply(connection, fold, row.committed_at, row.transition_id, row.actor)
+        if rows:
+            last = rows[-1]
+            connection.execute(
+                pg_insert(projection_progress).values(
+                    name=CURSOR, committed_at=last.committed_at, transition_id=last.transition_id
+                )
+            )
+    log.warning("projector.rebuild_complete", transitions=len(rows))
+    return len(rows)

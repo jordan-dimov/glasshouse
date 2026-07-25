@@ -18,10 +18,16 @@
           <option value="curves">curves</option>
         </select>
       </label>
+      {% if not authenticated_actor %}
       <label>Actor <input type="text" name="actor" placeholder="who is importing" required></label>
+      {% endif %}
       <button type="submit">Preview</button>
     </form>
+    {% if authenticated_actor %}
+    <p class="tile__note">Importing as <strong>{{ authenticated_actor }}</strong>: the shared demo login maps to this actor, and the ledger records the gateway that asserted it on every write.</p>
+    {% else %}
     <p class="tile__note">Identity is asserted, not authenticated, at readiness L0; the ledger records who asserted every import.</p>
+    {% endif %}
   </section>
 
   <section class="tile">
