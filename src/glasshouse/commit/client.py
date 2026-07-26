@@ -76,16 +76,23 @@ class GlasshouseClient(Morpholog):
         # blessed all-sessions horizon exactly as it was.
         self.writer_roles = writer_roles or None
 
+    def _asserted(self, writer_roles: list[str] | None) -> list[str] | None:
+        """The generated `None` means "no flag"; here it means "whatever
+        this deployment is configured with". An explicit empty list keeps
+        the generated meaning - no flag, the all-sessions horizon - so a
+        caller can still turn the assertion off for one call."""
+        return self.writer_roles if writer_roles is None else writer_roles
+
     # The three surfaces that compute the resume horizon. Each keeps the
     # generated signature and semantics; the configured assertion is
     # simply the default a caller does not pass.
     def audit(self, after: str | None = None, *, writer_roles: list[str] | None = None) -> list:  # type: ignore[type-arg]
-        return super().audit(after, writer_roles=writer_roles or self.writer_roles)
+        return super().audit(after, writer_roles=self._asserted(writer_roles))
 
     def audit_named(
         self, after: str | None = None, *, writer_roles: list[str] | None = None
     ) -> list:  # type: ignore[type-arg]
-        return super().audit_named(after, writer_roles=writer_roles or self.writer_roles)
+        return super().audit_named(after, writer_roles=self._asserted(writer_roles))
 
     def checkpoint(
         self,
@@ -94,9 +101,7 @@ class GlasshouseClient(Morpholog):
         *,
         writer_roles: list[str] | None = None,
     ) -> envelopes.CheckpointCreated | envelopes.CheckpointNoNewRows:
-        return super().checkpoint(
-            signing_key, key_id, writer_roles=writer_roles or self.writer_roles
-        )
+        return super().checkpoint(signing_key, key_id, writer_roles=self._asserted(writer_roles))
 
     def write_checkpoint(
         self, path: str | Path

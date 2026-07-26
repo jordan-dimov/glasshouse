@@ -11,6 +11,7 @@ must actually reach the client the API builds.
 """
 
 import pytest
+from pydantic import ValidationError
 
 from glasshouse.api.deps import build_client
 from glasshouse.config import Settings
@@ -23,7 +24,9 @@ from glasshouse.config import Settings
         ("app_user,importer", ["app_user", "importer"]),
         (" app_user , importer ", ["app_user", "importer"]),  # dashboard whitespace
         ('["app_user", "importer"]', ["app_user", "importer"]),  # JSON still works
+        ('[" app_user ", "importer"]', ["app_user", "importer"]),  # normalised the same way
         ("", []),
+        (",", []),
     ],
 )
 def test_writer_roles_parse_from_a_dashboard_or_from_json(
@@ -31,6 +34,21 @@ def test_writer_roles_parse_from_a_dashboard_or_from_json(
 ) -> None:
     monkeypatch.setenv("GLASSHOUSE_AUDIT_WRITER_ROLES", raw)
     assert Settings().audit_writer_roles == expected
+
+
+@pytest.mark.parametrize("bad", ["[app_user", '[{"role": "app_user"}]', "[1, 2]"])
+def test_a_broken_json_spelling_is_refused_at_boot(
+    monkeypatch: pytest.MonkeyPatch, bad: str
+) -> None:
+    # Anything opening with a bracket is JSON and is held to it: broken
+    # syntax, or a list of things that are not role names, fails at
+    # settings construction. A value that does not open with a bracket is
+    # a comma-separated list of names by definition, so there is nothing
+    # to be strict about there - a name that is not a role is caught by
+    # the substrate's own catalogue census, which knows the roles.
+    monkeypatch.setenv("GLASSHOUSE_AUDIT_WRITER_ROLES", bad)
+    with pytest.raises(ValidationError):
+        Settings()
 
 
 def test_unset_means_no_assertion() -> None:

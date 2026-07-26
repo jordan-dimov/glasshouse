@@ -11,6 +11,7 @@ app schema is migrated by Alembic in the fixture, so revision 0002 is
 part of what this test proves."""
 
 import datetime as dt
+import subprocess
 import threading
 from decimal import Decimal
 
@@ -18,7 +19,7 @@ import pytest
 import sqlalchemy as sa
 
 from glasshouse import cli
-from glasshouse.commit import MODEL_FILE, Committed, GlasshouseClient, models
+from glasshouse.commit import MODEL_FILE, Committed, GlasshouseClient, MorphologError, models
 from glasshouse.compute.curves import HourlyCurve
 from glasshouse.compute.marking import correct_curve_version, register_curve_version, value_trade
 from glasshouse.compute.store import CurveStore
@@ -236,3 +237,34 @@ def test_accumulate_stops_at_the_cursor_and_refuses_an_unknown_one(
     # corruption, never lag.
     with pytest.raises(ProjectionError, match="does not describe this ledger"):
         accumulate(morpholog, up_to="0197-no-such-transition")
+
+
+def test_the_writer_role_assertion_returns_the_tail_the_projector_reads(
+    morpholog: GlasshouseClient, history: tuple[int, str]
+) -> None:
+    # The deployment fix (upstream #210) against a real ledger: on managed
+    # PostgreSQL the platform's hidden sessions make the all-sessions
+    # resume horizon uncomputable, so every tail here - the projector's
+    # included - refused. Asserting the role that writes audit restores
+    # it, and must return exactly the tail the default computes: the
+    # condition the assertion exists FOR is a managed-host property no
+    # local database reproduces, so what this pins is that turning it on
+    # changes nothing about what the projector sees.
+    transitions, _ = history
+    role = subprocess.run(
+        ["psql", DB, "-tAqc", "select current_user"],
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout.strip()
+    asserted = GlasshouseClient(str(MODEL_FILE), DB, binary=str(BINARY), writer_roles=[role])
+    tail = [row.transition_id for row in asserted.audit()]
+    assert len(tail) >= transitions
+    assert tail == [row.transition_id for row in morpholog.audit()]
+
+    # A name that is not a role is refused, not silently ignored: an
+    # assertion that filtered nothing would be an unsound horizon wearing
+    # a correct-looking flag.
+    typo = GlasshouseClient(str(MODEL_FILE), DB, binary=str(BINARY), writer_roles=["no_such_role"])
+    with pytest.raises(MorphologError, match="do not exist"):
+        typo.audit()

@@ -149,6 +149,21 @@ def test_without_configured_roles_the_horizon_stays_the_blessed_default(tmp_path
     assert argv[argv.index("--writer-role") + 1] == "one_off"
 
 
+def test_an_explicit_empty_assertion_turns_the_configured_one_off(tmp_path: Path) -> None:
+    # None means "this deployment's assertion"; an empty list keeps the
+    # generated meaning, no flag at all. Without the distinction a caller
+    # could not ask for the all-sessions horizon on a configured client -
+    # and would silently get the configured one back instead.
+    client = GlasshouseClient(
+        "model.morph",
+        "postgres:///x",
+        binary=str(fake_binary(tmp_path, "")),
+        writer_roles=["app_user"],
+    )
+    client.audit(writer_roles=[])
+    assert "--writer-role" not in (tmp_path / "argv.txt").read_text().splitlines()
+
+
 def test_binary_discovery_honours_the_glasshouse_env_var(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

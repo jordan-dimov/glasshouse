@@ -82,6 +82,24 @@ def test_the_cli_checkpoints_exports_and_verifies(
     assert "evidence verify: intact" in capsys.readouterr().out
 
 
+def test_offline_verification_ignores_the_deployment_environment(
+    anchored: GlasshouseClient,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # The forensic command is run by a third party against a pack and an
+    # anchor, on a machine whose environment is none of their business.
+    # Settings a hosted deployment would refuse to boot with must not
+    # stop a valid pack from being verified.
+    pack = tmp_path / "forensic-pack.json"
+    assert cli.main(["evidence-export", str(pack), "--database-url", DB]) == 0
+    monkeypatch.setenv("GLASSHOUSE_DEMO_PASSWORD", "short")
+    monkeypatch.setenv("GLASSHOUSE_AUDIT_WRITER_ROLES", "[broken")
+    assert cli.main(["evidence-verify", str(pack)]) == 0
+    assert "evidence verify: intact" in capsys.readouterr().out
+
+
 def test_the_anchor_round_trip(
     anchored: GlasshouseClient, tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:

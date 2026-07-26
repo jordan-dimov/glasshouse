@@ -23,6 +23,7 @@ from typing import Annotated
 
 import sqlalchemy as sa
 import typer
+from pydantic import ValidationError
 from typer.main import get_command
 
 from glasshouse.commit import (
@@ -34,7 +35,7 @@ from glasshouse.commit import (
 )
 from glasshouse.commit.morpholog_client.envelopes import CheckpointCreated, TreeIntact
 from glasshouse.compute.store import CurveStore, engine_url
-from glasshouse.config import get_settings
+from glasshouse.config import Settings, get_settings
 from glasshouse.imports import (
     ImportFormatError,
     import_curves,
@@ -271,13 +272,33 @@ def evidence_verify_command(
         typer.Option(help="an externally-held checkpoint JSON the pack must be shown to extend"),
     ] = None,
 ) -> None:
-    # Offline: no database is touched, so no --database-url.
-    client = _client("")
+    # Offline: no database is touched, so no --database-url - and no
+    # settings either. This command is the forensic one, run by a third
+    # party against a pack and an anchor; a malformed writer-role list or
+    # a rejected demo password in the environment must not be able to
+    # stop a valid pack from being verified.
+    client = GlasshouseClient(str(MODEL_FILE), "")
     verdict = client.evidence_verify(str(pack), anchor_file=str(anchor) if anchor else None)
     intact = isinstance(verdict, TreeIntact)
     print(f"evidence verify: {'intact' if intact else type(verdict).__name__.removeprefix('Tree')}")
     if not intact:
         raise typer.Exit(code=1)
+
+
+def _logging_settings() -> Settings:
+    """Configuring logging must never be the thing that refuses a command.
+
+    A misconfigured environment (a weak demo password, a malformed
+    writer-role list) is a real failure for any command that reads
+    settings - and those raise below, cleanly. But `evidence-verify` is
+    forensic: a third party runs it against a pack and an anchor, on a
+    machine whose environment is none of their business, and it must not
+    be blocked by a variable it never reads. So log like dev until a
+    command proves otherwise."""
+    try:
+        return get_settings()
+    except ValidationError:
+        return Settings.model_construct()
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -286,15 +307,23 @@ def main(argv: list[str] | None = None) -> int:
     Typer runs in standalone mode (it renders usage errors and raises
     `SystemExit`); we catch that for the code, and catch the operational
     failures a command raises (a rejected header, an unreadable file, a
-    binary or batch abort) to log one structured event and return 1.
+    binary or batch abort, a refused setting) to log one structured event
+    and return 1.
     """
-    configure_logging(get_settings())
+    configure_logging(_logging_settings())
     effective = sys.argv[1:] if argv is None else argv
     try:
         get_command(app).main(args=effective)
     except SystemExit as exit_:
         return int(exit_.code) if isinstance(exit_.code, int) else 0
-    except (ImportFormatError, MorphologError, ProvisionError, SeedError, OSError) as failure:
+    except (
+        ImportFormatError,
+        MorphologError,
+        ProvisionError,
+        SeedError,
+        OSError,
+        ValidationError,
+    ) as failure:
         log.warning(
             "cli.command_failed",
             command=effective[0] if effective else "?",

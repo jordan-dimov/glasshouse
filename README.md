@@ -29,7 +29,7 @@ What you get instead of building it in-house:
 
 ## Development
 
-Requires Python 3.13+, [uv](https://docs.astral.sh/uv/), and Docker (for the TimescaleDB Postgres 18 the migrations need). The [morpholog](https://github.com/jordan-dimov/morpholog) binary is a checksummed download, not a build: no Rust toolchain needed, and it is the exact release CI and the deployed image use.
+Requires Python 3.13+, [uv](https://docs.astral.sh/uv/), and Docker (for the TimescaleDB Postgres 18 the migrations need). On **linux x86_64** the [morpholog](https://github.com/jordan-dimov/morpholog) binary is a checksummed download rather than a build: no Rust toolchain, and it is the exact release CI and the deployed image use. That is the only target upstream publishes today, so on macOS or ARM build morpholog from source (its README) and point `GLASSHOUSE_MORPHOLOG_BIN` at the result; nothing else differs.
 
 ```bash
 ./scripts/install-morpholog.sh ~/.local/bin   # the pinned release; export GLASSHOUSE_MORPHOLOG_BIN=~/.local/bin/morpholog

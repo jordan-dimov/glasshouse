@@ -53,11 +53,17 @@ class Settings(BaseSettings):
         # the value, so a comma-separated list parses here: an operator
         # naming one role in a hosting dashboard should not have to
         # spell it `["role"]`, and JSON still works for anyone who does.
+        # Both spellings normalise identically - a stray space around a
+        # role name would otherwise survive JSON and reach the substrate
+        # as a role that does not exist, refused at the first audit tail
+        # rather than at boot. Anything that is not a list of strings is
+        # left for the field's own validation to reject.
         if isinstance(value, str):
             text = value.strip()
-            if text.startswith("["):
-                return json.loads(text)
-            return [part.strip() for part in text.split(",") if part.strip()]
+            value = json.loads(text) if text.startswith("[") else text.split(",")
+        if isinstance(value, list):
+            named = [part.strip() if isinstance(part, str) else part for part in value]
+            return [part for part in named if part != ""]
         return value
 
     @field_validator("demo_password")

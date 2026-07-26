@@ -17,6 +17,15 @@
 # MSRV to track and no build cache to warm - and the checksum, not a
 # mutable git tag, is what makes the pin immutable.
 #
+# ONE TARGET, STATED HONESTLY: upstream publishes linux x86_64 only, so
+# this script refuses every other platform by name instead of narrowing
+# what Glasshouse supports by accident. Development on macOS or ARM is
+# still the source build (morpholog's README) with
+# GLASSHOUSE_MORPHOLOG_BIN pointed at the result; only the convenience
+# is missing, not the capability. A release-matrix ask (linux arm64 and
+# macOS) is recorded in contract doc section 20: a public project should
+# not ask contributors to install Rust on the machines they own.
+#
 # Usage: install-morpholog.sh <dest-dir> [main-latest]
 #
 # With no channel argument the pinned release below is installed and
@@ -32,6 +41,23 @@ SHA256=2ee5e62ba57347b2b38593c6946b4c284d32726183fae1dccff91eab733c51e5
 
 dest=${1:?usage: install-morpholog.sh <dest-dir> [main-latest]}
 channel=${2:-pinned}
+
+# Resolve the destination BEFORE the working directory moves: everything
+# below runs inside a temp directory the exit trap deletes, so a relative
+# destination would be installed into it and vanish on the way out.
+case "$dest" in
+/*) ;;
+*) dest="$(pwd)/$dest" ;;
+esac
+
+# The release channel publishes one target. Refuse anything else by name
+# rather than download a binary that cannot run here: the source build
+# (see the morpholog README) is the path on other platforms.
+if [ "$(uname -s)" != Linux ] || [ "$(uname -m)" != x86_64 ]; then
+    echo "no prebuilt morpholog for $(uname -s)/$(uname -m) - upstream publishes" \
+        "linux x86_64 only; build from source and point GLASSHOUSE_MORPHOLOG_BIN at it" >&2
+    exit 2
+fi
 
 case "$channel" in
 pinned) tag=$VERSION label=$VERSION ;;
