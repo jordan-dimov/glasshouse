@@ -18,6 +18,7 @@ from fastapi import Request
 from glasshouse.commit import MODEL_FILE, GlasshouseClient
 from glasshouse.compute.store import CurveStore, engine_url
 from glasshouse.config import Settings
+from glasshouse.projections.runner import RunningProjector
 
 
 def build_engine(settings: Settings) -> sa.Engine:
@@ -51,3 +52,11 @@ def get_client(request: Request) -> GlasshouseClient:
 def get_store(request: Request) -> CurveStore:
     store: CurveStore = request.app.state.store
     return store
+
+
+def get_projector(request: Request) -> RunningProjector | None:
+    """None in every run mode that does not project in this process (the
+    worker profile, and dev): the health checks then say nothing about a
+    projector rather than inventing a verdict for another service."""
+    projector: RunningProjector | None = request.app.state.projector
+    return projector

@@ -1,9 +1,10 @@
 """`glasshouse provision`: non-destructive first-boot provisioning.
 
-The three idempotent steps a fresh (or already-provisioned) database
-needs before the web service can serve: migrate the app schema to head,
-initialise the governed schema if absent (`init --skip-if-exists`), and
-apply the sealed inspection views. This is the web service's pre-deploy
+The idempotent steps a fresh (or already-provisioned) database needs
+before the web service can serve: migrate the app schema to head,
+initialise the governed schema if absent (`init --skip-if-exists`),
+apply the sealed inspection views, and prove the audit tail can be read
+at all. This is the web service's pre-deploy
 command (DESIGN section 13: migrations and the Morpholog bootstrap run
 in a pre-deploy step, never at app startup) and is safe to run on every
 deploy: the migration no-ops at head, the init skips an existing schema,
@@ -14,6 +15,18 @@ and the committed view script re-applies and re-seals.
 the operator can decide - printed, never executed). It needs CREATEROLE
 on the connecting role, which managed hosts may not grant; the flag is
 off by default and adopted deliberately per host.
+
+The tail check earns its place from a real outage. On managed
+PostgreSQL the platform's hidden sessions make the audit tail's resume
+horizon uncomputable unless the writing roles are asserted
+(`GLASSHOUSE_AUDIT_WRITER_ROLES`); misconfigured, everything that reads
+the ledger refuses - the projector, `seed`, `verify` - while the service
+itself comes up healthy and serves stale reads until someone notices.
+Reading one tail here turns that into a FAILED DEPLOY carrying the
+substrate's own remedy, which is where a configuration error belongs.
+The deliberate trade: a transient refusal now blocks a deploy rather
+than degrading a running demo. That is the right way round - the deploy
+is watched, 02:30 is not.
 
 This module never prints; the CLI renders the report and turns
 `ProvisionError` into stderr plus exit 1.
@@ -71,16 +84,27 @@ class ProvisionReport:
         return "\n".join(lines)
 
 
-def run_provision(database_url: str, *, least_privilege: bool = False) -> ProvisionReport:
+def run_provision(
+    database_url: str,
+    *,
+    least_privilege: bool = False,
+    writer_roles: list[str] | None = None,
+) -> ProvisionReport:
     """The whole operation, in dependency order: app schema first (the
     migration owns the TimescaleDB extension), then the governed schema,
-    then the inspection views over it."""
+    then the inspection views over it, then one audit tail read to prove
+    the ledger is readable with this deployment's configuration."""
     command.upgrade(alembic_config(database_url), "head")
-    client = GlasshouseClient(str(MODEL_FILE), database_url)
+    client = GlasshouseClient(str(MODEL_FILE), database_url, writer_roles=writer_roles)
     init_report = client.init(skip_if_exists=True, least_privilege=least_privilege)
     engine = sa.create_engine(engine_url(database_url))
     try:
         apply_views(engine)
     finally:
         engine.dispose()
+    # An empty tail is a lawful answer, so this costs nothing on a fresh
+    # database; what it refuses is a deployment that cannot read the
+    # ledger at all. The substrate's message names the remedy, so it is
+    # carried through rather than summarised.
+    client.audit()
     return ProvisionReport(governed=init_report.status, least_privilege=init_report.least_privilege)

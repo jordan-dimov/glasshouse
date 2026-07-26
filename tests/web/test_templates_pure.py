@@ -27,10 +27,18 @@ from glasshouse.api.schemas import (
 from glasshouse.imports import ImportReport, RowOutcome
 from glasshouse.imports.curves import COLUMNS as CURVE_COLUMNS
 from glasshouse.imports.trades import COLUMNS as TRADE_COLUMNS
+from glasshouse.projections.runner import ProjectorProgress
 from glasshouse.verify import Leg, VerifyReport
-from glasshouse.web.templating import templates
+from glasshouse.web.templating import _ago, templates
 
 T0 = dt.datetime(2026, 7, 1, tzinfo=dt.UTC)
+
+
+def _now() -> dt.datetime:
+    """Operational wall-clock, for the ages the screens render."""
+    return dt.datetime.now(dt.UTC)
+
+
 REQUEST = SimpleNamespace(url=SimpleNamespace(path="/ui"))
 
 
@@ -148,7 +156,8 @@ def test_overview_renders_the_tiles_and_health() -> None:
         org_options=["acme-energy"],
         active="overview",
         summary=summary,
-        health={"morpholog": "ok", "database": "ok", "commit": "error"},
+        health={"morpholog": "ok", "database": "ok", "commit": "error", "projector": "ok"},
+        projector=ProjectorProgress(polled_at=_now(), applied_at=T0, applied_total=12),
     )
     assert "spec-de" in html
     assert "-66.25" in html
@@ -156,6 +165,57 @@ def test_overview_renders_the_tiles_and_health() -> None:
     assert "badge--ok" in html
     assert "badge--break" in html
     assert "error" in html  # the verdict is text, never colour alone
+    # The projector's own progress, beside the cursor: a cursor moves
+    # only when the ledger does, so its age alone cannot tell an idle
+    # projector from a stuck one.
+    assert "Last poll" in html
+    assert "s ago" in html
+
+
+def test_overview_says_when_a_failing_projector_is_failing() -> None:
+    summary = OverviewSummary(
+        org="acme-energy",
+        books=[BookSummary(book="spec-de", trade_count=2)],
+        valuation=ValuationSummary(trade_count=2, valued_at=T0, total_mtm=Decimal("-66.25")),
+        projection=ProjectionCursor(committed_at=T0, transition_id="txn-3"),
+    )
+    html = _render(
+        "overview.html",
+        org="acme-energy",
+        org_options=["acme-energy"],
+        active="overview",
+        summary=summary,
+        health={"morpholog": "ok", "database": "ok", "commit": "ok", "projector": "error"},
+        projector=ProjectorProgress(
+            polled_at=None, consecutive_failures=21, last_error="MorphologError"
+        ),
+    )
+    assert "never" in html  # it has not once got through
+    assert "21 consecutive, MorphologError" in html
+    assert "badge--break" in html
+
+
+def test_overview_does_not_invent_a_verdict_for_another_services_projector() -> None:
+    # The worker profile projects in a different process. This screen can
+    # see the cursor and nothing else, and says so rather than rendering
+    # a blank where a number belongs.
+    summary = OverviewSummary(
+        org="acme-energy",
+        books=[BookSummary(book="spec-de", trade_count=2)],
+        valuation=ValuationSummary(trade_count=2, valued_at=T0, total_mtm=Decimal("-66.25")),
+        projection=ProjectionCursor(committed_at=T0, transition_id="txn-3"),
+    )
+    html = _render(
+        "overview.html",
+        org="acme-energy",
+        org_options=["acme-energy"],
+        active="overview",
+        summary=summary,
+        health={"morpholog": "ok", "database": "ok", "commit": "ok"},
+        projector=None,
+    )
+    assert "Last poll" not in html
+    assert "outside this process" in html
 
 
 def test_curves_render_status_lineage_and_the_diff() -> None:
@@ -401,3 +461,16 @@ def test_the_error_page_needs_no_context() -> None:
     html = templates.env.get_template("error.html").render()
     assert "database is unavailable" in html
     assert "Viewing: Current" in html  # the chrome still stands
+
+
+def test_the_ago_filter_speaks_in_the_coarsest_honest_unit() -> None:
+    # Operational ages only: a delivery period is an exact instant by
+    # law, and never rendered like this.
+    now = dt.datetime(2026, 7, 26, 12, 0, tzinfo=dt.UTC)
+    assert _ago(None) == "never"
+    assert _ago(now - dt.timedelta(seconds=5), now=now) == "5s ago"
+    assert _ago(now - dt.timedelta(minutes=4), now=now) == "4m ago"
+    assert _ago(now - dt.timedelta(hours=3), now=now) == "3h ago"
+    assert _ago(now - dt.timedelta(days=9), now=now) == "9d ago"
+    # A clock ahead of the database is shown as itself, not as "just now".
+    assert _ago(now + dt.timedelta(minutes=1), now=now) == "ahead of this clock"

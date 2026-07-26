@@ -190,6 +190,16 @@ Correct, and structural on managed PostgreSQL: the platform keeps its own sessio
 
 **Operational consequence for credential rotation**: Render's rotation keeps the existing credential live until it is removed, so during the overlap two login roles can write audit. An assertion naming only `fromDatabase.property: user` is then *correctly refused as incomplete* by the catalogue census (that is the census working, not a bug). The rotation procedure is therefore: name **both** roles in `GLASSHOUSE_AUDIT_WRITER_ROLES` for the overlap, then drop the retired one from the list when the old credential is removed. Better a refusal than a horizon computed over half the writers.
 
+## 21. What the first live deployment taught about the writer assertion — 26/07/2026
+
+Section 20's adoption was correct and incomplete: the assertion works, and nothing in Glasshouse would have told us if it had not been applied.
+
+**The hidden-session condition is intermittent.** Within a single minute the live service logged "1 session(s) ... hidden" and "2 session(s) ... hidden"; between those, the same tail read succeeded unasserted. So a deployment can be misconfigured and look perfectly healthy for hours, then refuse every ledger read at 02:30 - which is exactly what the demo did before the assertion, and what it would have gone on doing if the variable had not reached the process. Anything that depends on this configuration must be provable on demand, never inferred from a green probe.
+
+**Two consequences adopted here.** `provision` (the pre-deploy command) now reads one audit tail, so a deployment that cannot read its ledger fails the deploy carrying the substrate's own remedy, instead of coming up healthy and serving stale reads. And the projector's readiness verdict now reads its own progress - last successful poll, consecutive failures - rather than thread liveness, which the bounded retry loop had quietly made meaningless: a projector that refused twenty-one consecutive tails reported itself healthy for a quarter of an hour.
+
+**Worth noting for any embedder**: the substrate behaved correctly throughout. It refused rather than compute an unsound horizon, its message named both remedies, and the intermittency is a property of the managed host's sessions, not of the tail. Every failure in this episode was on the embedder's side of the line - the assertion not reaching the process, and a health check that measured the wrong thing.
+
 ## Coordination agreements
 
 - **Evidence-pack extension contract pinned now** (no waiting for full WP5): a content-addressed JSON manifest, entries `{role, hash, media_type, locator?}`, chained to the ledger by transition ids.

@@ -162,7 +162,13 @@ def provision_command(
     ] = False,
     database_url: DatabaseUrl = "",
 ) -> None:
-    print(run_provision(_db(database_url), least_privilege=least_privilege).render())
+    settings = get_settings()
+    report = run_provision(
+        _db(database_url),
+        least_privilege=least_privilege,
+        writer_roles=settings.audit_writer_roles,
+    )
+    print(report.render())
 
 
 @app.command(
