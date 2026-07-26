@@ -1,19 +1,19 @@
 name: Docker build
 
-# The deployment image builds the pinned morpholog from source with its
-# own Rust base image; the CI integration job builds with a different
-# toolchain (dtolnay/rust-toolchain@stable), so a Dockerfile-only break -
-# a base image older than the pin's MSRV, a bad COPY - is invisible
-# there. This smoke build closes that "deployment binary differs from the
-# CI binary" gap. It runs only when the image's inputs change: the build
-# is a full cargo release, not worth paying on every PR.
+# The deployment image and CI's integration leg now install the SAME
+# pinned release binary from scripts/install-morpholog.sh, so the old
+# "deployment binary differs from the CI binary" gap is closed by
+# construction. What is left for this job is the image itself: a bad
+# COPY, a stale base, an install script that works on a runner and not in
+# the fetch stage. Since the build no longer compiles anything, it is
+# cheap enough to run on every PR - and the checked-in image is the
+# demo's only deployment path, so a break should never wait for a push to
+# main to surface.
 
 on:
   push:
     branches: [main]
-    paths: [Dockerfile, pyproject.toml, uv.lock, .github/workflows/docker-build.yml]
   pull_request:
-    paths: [Dockerfile, pyproject.toml, uv.lock, .github/workflows/docker-build.yml]
   workflow_dispatch: {}
 
 concurrency:
@@ -30,5 +30,16 @@ jobs:
         with:
           context: .
           push: false
+          load: true
+          tags: glasshouse:ci
           cache-from: type=gha
           cache-to: type=gha,mode=max
+      # Building is not running. The image must carry the pinned binary,
+      # and `uv run` inside it must find a complete environment without
+      # syncing: a container that re-syncs at start pulls the dev group
+      # back in over the network before serving anything (the nightly
+      # reset job did exactly that until UV_NO_SYNC).
+      - name: The image runs what it ships
+        run: |
+          docker run --rm glasshouse:ci morpholog --version
+          docker run --rm --network none glasshouse:ci uv run python -m glasshouse.cli --help

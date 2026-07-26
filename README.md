@@ -29,9 +29,10 @@ What you get instead of building it in-house:
 
 ## Development
 
-Requires Python 3.13+, [uv](https://docs.astral.sh/uv/), Docker (for the TimescaleDB Postgres 18 the migrations need), and a [morpholog](https://github.com/jordan-dimov/morpholog) binary (`cargo build --release`, then point `GLASSHOUSE_MORPHOLOG_BIN` at it).
+Requires Python 3.13+, [uv](https://docs.astral.sh/uv/), and Docker (for the TimescaleDB Postgres 18 the migrations need). The [morpholog](https://github.com/jordan-dimov/morpholog) binary is a checksummed download, not a build: no Rust toolchain needed, and it is the exact release CI and the deployed image use.
 
 ```bash
+./scripts/install-morpholog.sh ~/.local/bin   # the pinned release; export GLASSHOUSE_MORPHOLOG_BIN=~/.local/bin/morpholog
 docker compose up -d          # TimescaleDB-enabled Postgres 18 (the floor)
 uv sync --dev
 uv run pytest                 # live integration legs run when the binary and a database are reachable

@@ -1,6 +1,7 @@
 # Local development stack: TimescaleDB-enabled Postgres only.
 # The app itself runs on the host during development (uv run uvicorn ...),
-# with GLASSHOUSE_MORPHOLOG_BIN pointing at a locally built morpholog binary.
+# with GLASSHOUSE_MORPHOLOG_BIN pointing at the pinned morpholog binary
+# (./scripts/install-morpholog.sh installs it; no Rust toolchain needed).
 #
 # Postgres floor is 18 (CI and the demo run this same image); TimescaleDB
 # is a dependency, not an option - the position_hour hypertable needs it.

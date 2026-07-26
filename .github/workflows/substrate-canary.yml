@@ -6,10 +6,10 @@ name: Substrate canary
 # someone re-pins - exactly how the `verify` envelope change slipped past
 # us until a re-pin caught it the hard way.
 #
-# This job closes that gap: it builds morpholog HEAD (the default branch)
-# and runs the full live suite against it on a schedule. It is NOT a
-# merge gate - it never runs on a pull request, and its failure blocks
-# nothing. A red canary means "the next re-pin will need work": adopt the
+# This job closes that gap: it installs upstream's rolling `main-latest`
+# prerelease (recreated on every merge to main) and runs the full live
+# suite against it on a schedule. It is NOT a merge gate - it never runs
+# on a pull request, and its failure blocks nothing. A red canary means "the next re-pin will need work": adopt the
 # new surface deliberately, or report the friction upstream.
 
 on:
@@ -41,38 +41,32 @@ jobs:
           --health-retries 10
     steps:
       - uses: actions/checkout@v7
-      # No ref: the default branch HEAD - the whole point is "latest",
-      # not the pin ci.yml validates.
-      - uses: actions/checkout@v7
-        with:
-          repository: jordan-dimov/morpholog
-          path: morpholog
-      - name: Record the morpholog HEAD under test
-        run: git -C morpholog rev-parse HEAD
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: morpholog
-      - run: cargo build --release --manifest-path morpholog/Cargo.toml
+      # The rolling channel, not the pin the same script installs by
+      # default - the whole point is "what main has moved to". Its
+      # checksum is the one published beside it, which proves the
+      # download intact and nothing more; that is the right trade for a
+      # job that gates nothing.
+      - run: ./scripts/install-morpholog.sh "$RUNNER_TEMP/morpholog" main-latest
       - uses: astral-sh/setup-uv@v9.0.0
         with:
           python-version: "3.13"
       - run: uv sync --dev
       - name: Assert live prerequisites are visible
         env:
-          GLASSHOUSE_MORPHOLOG_REPO: ${{ github.workspace }}/morpholog
+          GLASSHOUSE_MORPHOLOG_BIN: ${{ runner.temp }}/morpholog/morpholog
           GLASSHOUSE_TEST_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/morpholog_scratch
         run: |
-          test -x "$GLASSHOUSE_MORPHOLOG_REPO/target/release/morpholog"
+          test -x "$GLASSHOUSE_MORPHOLOG_BIN"
           psql "$GLASSHOUSE_TEST_DATABASE_URL" -qc 'select 1'
-      # The full live suite against HEAD. No coverage gate: this job is
-      # about wire/behaviour drift, which surfaces as test failures (a
-      # reshaped envelope stops parsing, a renamed verb stops resolving),
-      # not as a coverage dip. REQUIRE_LIVE keeps the live legs from
-      # skipping quietly, so a green canary really did exercise HEAD.
-      - name: Full suite against morpholog HEAD
+      # The full live suite against what main has become. No coverage
+      # gate: this job is about wire/behaviour drift, which surfaces as
+      # test failures (a reshaped envelope stops parsing, a renamed verb
+      # stops resolving), not as a coverage dip. REQUIRE_LIVE keeps the
+      # live legs from skipping quietly, so a green canary really did
+      # exercise the rolling binary.
+      - name: Full suite against the rolling main-latest binary
         env:
-          GLASSHOUSE_MORPHOLOG_REPO: ${{ github.workspace }}/morpholog
+          GLASSHOUSE_MORPHOLOG_BIN: ${{ runner.temp }}/morpholog/morpholog
           GLASSHOUSE_TEST_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/morpholog_scratch
           GLASSHOUSE_REQUIRE_LIVE: "1"
         run: uv run pytest
