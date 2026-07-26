@@ -35,7 +35,7 @@ from glasshouse.api.curves import (
     IncomparableCurvesError,
     UnknownCurveVersionError,
 )
-from glasshouse.api.deps import get_client, get_engine, get_store
+from glasshouse.api.deps import get_client, get_engine, get_projector, get_store
 from glasshouse.api.schemas import CurveVersion
 from glasshouse.commit import GlasshouseClient, MorphologError
 from glasshouse.compute.store import CurveStore
@@ -49,6 +49,7 @@ from glasshouse.imports import (
 )
 from glasshouse.logging import get_logger
 from glasshouse.projections import catch_up
+from glasshouse.projections.runner import RunningProjector
 from glasshouse.verify import verify as run_verify
 from glasshouse.web.templating import templates
 
@@ -100,13 +101,18 @@ def home(
     org: str | None = None,
     engine: sa.Engine = Depends(get_engine),
     client: GlasshouseClient = Depends(get_client),
+    projector: RunningProjector | None = Depends(get_projector),
 ) -> Response:
     if not org:
         # The organisation picker is this same route without an org.
         return templates.TemplateResponse(request, "orgs.html", {"orgs": queries.list_orgs(engine)})
     context = _chrome(engine, org, "overview") | {
         "summary": queries.overview(engine, org=org),
-        "health": health.checks(get_settings(), engine, client),
+        # The projector's own progress, where it runs in this process: a
+        # cursor advances only when the ledger moves, so cursor age alone
+        # cannot tell an idle projector from a stuck one.
+        "projector": projector.status.progress() if projector else None,
+        "health": health.checks(get_settings(), engine, client, projector),
     }
     return templates.TemplateResponse(request, "overview.html", context)
 

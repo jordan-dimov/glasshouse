@@ -43,7 +43,22 @@
     <dl class="tile-facts">
       <div><dt>Cursor at</dt><dd>{{ summary.projection.committed_at | utc }}</dd></div>
       <div><dt>Transition</dt><dd>{{ evidence(summary.projection.transition_id) }}</dd></div>
+      {% if projector %}
+      {# The cursor moves only when the ledger does, so its age cannot
+         tell an idle projector from a stuck one. The last successful
+         poll can, and it is the number this deployment was missing. #}
+      <div><dt>Last poll</dt><dd>{{ projector.polled_at | ago }}</dd></div>
+      {% if projector.consecutive_failures %}
+      <div>
+        <dt>Failing</dt>
+        <dd>{{ badge("break", projector.consecutive_failures ~ " consecutive, " ~ projector.last_error) }}</dd>
+      </div>
+      {% endif %}
+      {% endif %}
     </dl>
+    {% if not projector %}
+    <p class="note">The projector runs outside this process here, so its progress is another service's verdict; the cursor above is what this one can see.</p>
+    {% endif %}
     {% else %}
     {{ empty_state("Never projected: the read model has no cursor yet.") }}
     {% endif %}

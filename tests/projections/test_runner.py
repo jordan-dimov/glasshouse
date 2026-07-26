@@ -9,7 +9,7 @@ import time
 import pytest
 import sqlalchemy as sa
 
-from glasshouse.commit import GlasshouseClient
+from glasshouse.commit import GlasshouseClient, MorphologError
 from glasshouse.projections import runner
 
 # Lazy by design: create_engine never connects until used, the client
@@ -21,8 +21,14 @@ CLIENT = GlasshouseClient("unused.morph", "postgres:///unused", binary="/nonexis
 
 def test_the_thread_mode_loops_until_stopped(monkeypatch: pytest.MonkeyPatch) -> None:
     calls: list[int] = []
-    monkeypatch.setattr(runner, "catch_up", lambda client, engine: calls.append(1))
-    thread, stop = runner.start_projector_thread(CLIENT, ENGINE, interval_seconds=0.001)
+
+    def counted(client: object, engine: sa.Engine) -> int:
+        calls.append(1)
+        return 0
+
+    monkeypatch.setattr(runner, "catch_up", counted)
+    projector = runner.start_projector_thread(CLIENT, ENGINE, interval_seconds=0.001)
+    thread, stop = projector.thread, projector.stop
     deadline = time.monotonic() + 5
     while len(calls) < 3 and time.monotonic() < deadline:
         time.sleep(0.001)
@@ -49,7 +55,8 @@ def test_operational_failures_are_retried_with_backoff(
         return 0
 
     monkeypatch.setattr(runner, "catch_up", flaky)
-    thread, stop = runner.start_projector_thread(CLIENT, ENGINE, interval_seconds=0.001)
+    projector = runner.start_projector_thread(CLIENT, ENGINE, interval_seconds=0.001)
+    thread, stop = projector.thread, projector.stop
     deadline = time.monotonic() + 5
     while "ok" not in outcomes and time.monotonic() < deadline:
         time.sleep(0.001)
@@ -96,8 +103,74 @@ def test_the_thread_mode_dies_on_an_unexpected_failure(monkeypatch: pytest.Monke
     # spinning silently; capture it so the failure is observable.
     raised: list[type[BaseException] | None] = []
     monkeypatch.setattr(threading, "excepthook", lambda args: raised.append(args.exc_type))
-    thread, stop = runner.start_projector_thread(CLIENT, ENGINE, interval_seconds=0.001)
+    projector = runner.start_projector_thread(CLIENT, ENGINE, interval_seconds=0.001)
+    thread, stop = projector.thread, projector.stop
     thread.join(timeout=5)
     stop.set()
     assert not thread.is_alive()
     assert raised == [RuntimeError]
+
+
+def test_progress_distinguishes_an_idle_projector_from_a_stuck_one(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # The whole point of the status: a poll that found nothing to apply
+    # is still progress. A cursor would not move here, and neither would
+    # `applied_at` - but `polled_at` does, which is what makes "idle" and
+    # "stuck" distinguishable at all.
+    monkeypatch.setattr(runner, "catch_up", lambda client, engine: 0)
+    projector = runner.start_projector_thread(CLIENT, ENGINE, interval_seconds=0.001)
+    deadline = time.monotonic() + 5
+    while projector.status.progress().polled_at is None and time.monotonic() < deadline:
+        time.sleep(0.001)
+    projector.stop.set()
+    projector.thread.join(timeout=5)
+
+    progress = projector.status.progress()
+    assert progress.polled_at is not None  # polling
+    assert progress.applied_at is None  # but nothing to apply
+    assert progress.applied_total == 0
+    assert progress.consecutive_failures == 0
+
+
+def test_progress_counts_failures_and_forgets_them_on_recovery(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # The counter the readiness verdict reads: it must rise while the
+    # condition lasts and reset the moment a poll succeeds, so a
+    # recovered projector stops reporting itself unready.
+    outcomes: list[str] = []
+
+    def flaky(client: object, engine: sa.Engine) -> int:
+        if len(outcomes) < 2:
+            outcomes.append("fail")
+            raise MorphologError("inspect audit failed: hidden sessions")
+        outcomes.append("ok")
+        return 3
+
+    monkeypatch.setattr(runner, "catch_up", flaky)
+    projector = runner.start_projector_thread(CLIENT, ENGINE, interval_seconds=0.001)
+    deadline = time.monotonic() + 5
+    while "ok" not in outcomes and time.monotonic() < deadline:
+        time.sleep(0.001)
+    projector.stop.set()
+    projector.thread.join(timeout=5)
+
+    progress = projector.status.progress()
+    assert progress.consecutive_failures == 0  # forgotten on recovery
+    assert progress.last_error is None
+    assert progress.applied_total == 3
+    assert progress.applied_at is not None
+
+
+def test_a_status_never_recovers_on_its_own_while_the_condition_lasts() -> None:
+    # Recorded directly, without a thread: the reader must see a rising
+    # count, because this is exactly the state that reported itself
+    # healthy for a quarter of an hour on the live demo.
+    status = runner.ProjectorStatus()
+    for _ in range(21):
+        status.record_failure(MorphologError("hidden sessions"))
+    progress = status.progress()
+    assert progress.consecutive_failures == 21
+    assert progress.last_error == "MorphologError"
+    assert progress.polled_at is None  # it has never once got through

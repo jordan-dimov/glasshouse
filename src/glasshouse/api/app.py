@@ -4,12 +4,11 @@ The factory wires the API boundary's two dependencies - the pooled
 engine and the commit-zone client - from settings over a lifespan, so
 the engine pool is built on startup and disposed on shutdown rather than
 leaked at import. Logging is configured for the running process at the
-same point. `/readyz` answers the deployment hook's real question in
-three independent verdicts: is the binary present and speaking, does the
-database answer, and do the two agree through a governed read.
+same point. `/readyz` answers the deployment hook's real question through
+`health.checks` - the same call the Overview screen's health tile
+renders, so the probe and the screen can never disagree.
 """
 
-import threading
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
@@ -27,7 +26,7 @@ from glasshouse.commit import MorphologError
 from glasshouse.compute.store import CurveStore
 from glasshouse.config import get_settings
 from glasshouse.logging import configure_logging, get_logger
-from glasshouse.projections.runner import start_projector_thread
+from glasshouse.projections.runner import RunningProjector, start_projector_thread
 from glasshouse.web import STATIC_DIR
 from glasshouse.web import routes as web
 from glasshouse.web.routes import unavailable_page
@@ -44,24 +43,25 @@ def create_app() -> FastAPI:
         # The engine is built before the try, then disposed in the finally
         # whatever happens after: a client build that failed would
         # otherwise leak the pool on a half-completed startup.
-        projector: tuple[threading.Thread, threading.Event] | None = None
+        projector: RunningProjector | None = None
         try:
             app.state.engine = engine
             app.state.client = build_client(settings)
             app.state.store = CurveStore(engine)
-            app.state.projector_thread = None
+            app.state.projector = None
             if settings.environment == "demo":
                 # The DESIGN section 13 demo profile: one process, the
                 # background-thread projector. Dev composes its own run
-                # mode; production runs the separate worker. The thread
-                # rides app.state so /readyz can answer for its liveness.
+                # mode; production runs the separate worker. It rides
+                # app.state so the health checks can answer for its
+                # PROGRESS, not merely its liveness.
                 projector = start_projector_thread(app.state.client, engine)
-                app.state.projector_thread = projector[0]
+                app.state.projector = projector
             log.info("api.startup", environment=settings.environment, version=__version__)
             yield
         finally:
             if projector is not None:
-                thread, stop = projector
+                thread, stop = projector.thread, projector.stop
                 stop.set()
                 # Joined BEFORE the engine is disposed: the thread reads
                 # through this pool. A join that times out is loud, and
@@ -127,13 +127,9 @@ def create_app() -> FastAPI:
 
     @app.get("/readyz")
     def readyz(response: Response) -> dict[str, str]:
-        verdicts = health.checks(settings, app.state.engine, app.state.client)
-        if settings.environment == "demo":
-            # The demo profile's read side depends on the background
-            # projector; a dead thread must be a visible verdict, not a
-            # silent lag until the next restart.
-            thread = app.state.projector_thread
-            verdicts["projector"] = "ok" if thread is not None and thread.is_alive() else "error"
+        # The projector verdict comes from the shared checks (which the
+        # Overview tile renders too), never from this route.
+        verdicts = health.checks(settings, app.state.engine, app.state.client, app.state.projector)
         if any(verdict != "ok" for verdict in verdicts.values()):
             response.status_code = 503
         return verdicts

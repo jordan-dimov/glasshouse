@@ -198,14 +198,21 @@ Production-like profile (documented, exercised in CI, not the demo):
 The worker joins a deployment when external effects or projection lag force it; the demo has neither. Fewer moving parts, fewer failure modes, and consistent with projection being an internal idempotent fold.
 
 - One multi-stage Docker image (a fetch stage installs the pinned `morpholog` release binary, checksum-verified; Python runtime copies it in); web and worker run the same image with different commands. The pin lives in exactly one file, which CI installs from too, so the binary gating a merge is the binary that deploys.
-- Migrations and the Morpholog schema bootstrap run in a **pre-deploy command**, never at app startup.
+- Migrations and the Morpholog schema bootstrap run in a **pre-deploy command**, never at app startup. It ends by reading one audit tail: a deployment that cannot read its own ledger fails the deploy, where someone is watching, rather than serving stale reads until the nightly job alerts.
 - **Managed Postgres hides its platform sessions**, which is not cosmetic: the audit tail computes a lossless resume horizon from the oldest open transaction, and a session it cannot see could silently fall out of that minimum, so the substrate refuses rather than risk skipping a transition. The deployment therefore asserts the roles that write the audit log (`GLASSHOUSE_AUDIT_WRITER_ROLES`, taken from the database's own user); the substrate verifies the assertion against the catalogue instead of trusting it. Self-hosted deployments leave it empty and keep the all-sessions horizon.
 - Internal/private-network database URL for app-to-Postgres traffic; environment groups for config shared across web and worker.
-- `/healthz` (liveness) and `/readyz` (database connectivity + morpholog binary + a commit-layer round-trip).
+- `/healthz` (liveness) and `/readyz` (database connectivity + morpholog binary + a commit-layer round-trip + the projector's **progress** where it runs in-process). The Overview screen's health tile renders the same call, so the probe and the screen cannot disagree.
+- **Readiness means progress, not liveness.** The demo-profile projector retries operational failure indefinitely by design, so a live thread proves nothing: the verdict reads the projector's own last successful poll and its consecutive-failure count. A poll that finds nothing to apply still counts as progress, which is what separates an idle projector from a stuck one - a cursor only moves when the ledger does.
 - Seed/reset as a one-off or cron job: the demo resets nightly to a known book.
 - **Demo login** (simple auth): public financial-looking demos attract junk traffic and accidental misuse.
 - Postgres 18 is the floor; the full suite runs green against the PG18 TimescaleDB image, in CI and locally.
 - The demo is **readiness-ladder L0** and says so on screen; no production claims anywhere.
+
+Operational notes, each learned the hard way on the first live deploy:
+
+- **An environment-variable change does not redeploy.** The running process keeps the old environment until the next deploy, so a configuration fix looks applied and is not.
+- **Blueprint auto-sync can stall silently.** `status: in_sync` is not evidence; compare `lastSync` against the commit you expect. A variable declared in `render.yaml` that never synced is indistinguishable, from the app's side, from one that was never written.
+- **A green probe proves the moment, not the day.** The hidden-session condition behind the writer assertion is intermittent (the same minute reported one hidden session, then two), so the demo can look healthy at noon and refuse every ledger read at 02:30. Configuration that is only exercised by the failing case needs a test, not an observation.
 
 ## 14. Guardrails
 

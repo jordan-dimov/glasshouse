@@ -86,7 +86,8 @@ def test_the_nightly_reset_never_kills_a_live_projector(
     client = GlasshouseClient(str(MODEL_FILE), DB, binary=str(BINARY))
     monkeypatch.setenv("GLASSHOUSE_MORPHOLOG_BIN", str(BINARY))
     monkeypatch.setenv("GLASSHOUSE_ENVIRONMENT", "demo")
-    thread, stop = start_projector_thread(client, engine, interval_seconds=0.05)
+    projector = start_projector_thread(client, engine, interval_seconds=0.05)
+    thread, stop = projector.thread, projector.stop
     try:
         run_seed(DB, reset=True)  # drops schemas and tables mid-poll
         assert thread.is_alive(), "the reset must never kill the projector"
@@ -105,6 +106,14 @@ def test_the_nightly_reset_never_kills_a_live_projector(
             time.sleep(0.2)
         assert count == 6
         assert thread.is_alive()
+        # Progress, not just liveness: the thread survived the reset AND
+        # got through afterwards, which is the pair the readiness verdict
+        # now reads. A live thread that had stopped getting through would
+        # have reported itself healthy before this change.
+        progress = projector.status.progress()
+        assert progress.consecutive_failures == 0
+        assert progress.polled_at is not None
+        assert progress.applied_total >= 6
     finally:
         stop.set()
         thread.join(timeout=10)
