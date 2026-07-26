@@ -291,3 +291,32 @@ def test_the_needle_lifecycle(morpholog: GlasshouseClient) -> None:
     assert len(in_programme) == 7
     assert all(t.transitions > 0 for t in in_programme)
     assert not [i.invariant for i in report.invariants if i.verdict == "never_fired"]
+
+
+def test_the_writer_role_assertion_returns_the_same_tail(morpholog: GlasshouseClient) -> None:
+    # The deployment fix (upstream #210), exercised for real: asserting
+    # the session role that writes audit must return the same tail the
+    # all-sessions horizon does, and the binary's catalogue census must
+    # accept the shape every Glasshouse deployment has (one login role
+    # doing all the writing). The condition the assertion EXISTS for -
+    # sessions this role cannot see - is a managed-host property no
+    # local database reproduces; what this leg pins is that turning the
+    # assertion on does not change what the tail returns, so a
+    # configured deployment reads exactly what an unconfigured one does.
+    role = subprocess.run(
+        ["psql", DB, "-tAqc", "select current_user"],
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout.strip()
+    asserted = GlasshouseClient(str(MODEL_FILE), DB, binary=str(BINARY), writer_roles=[role])
+    assert [row.transition_id for row in asserted.audit()] == [
+        row.transition_id for row in morpholog.audit()
+    ]
+
+    # A name that is not a role is refused, not silently ignored: an
+    # assertion that filtered nothing would be an unsound horizon
+    # wearing a correct-looking flag.
+    typo = GlasshouseClient(str(MODEL_FILE), DB, binary=str(BINARY), writer_roles=["no_such_role"])
+    with pytest.raises(MorphologError, match="do not exist"):
+        typo.audit()

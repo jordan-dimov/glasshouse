@@ -7,10 +7,11 @@ honours the same name); in the Docker image the binary is baked in at a
 known path.
 """
 
-from typing import Literal
+import json
+from typing import Annotated, Literal
 
 from pydantic import field_validator
-from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 # dev is local; demo and production are hosted (Render), where logs are
 # operational records and render as JSON lines. An unknown value is
@@ -25,6 +26,16 @@ class Settings(BaseSettings):
     morpholog_bin: str = "morpholog"
     # Bounds API-boundary operations; CLI imports run unbounded.
     morpholog_timeout_seconds: float = 10.0
+    # The session roles that write morpholog.audit, asserted so the audit
+    # tail's resume horizon can be computed over their sessions alone.
+    # Empty on a self-hosted database, where the horizon reads every
+    # session and is sound without help. Managed PostgreSQL (Render's
+    # included) hides the platform's own sessions from the application
+    # role and grants no pg_read_all_stats, so the default horizon is
+    # structurally uncomputable and the tail refuses rather than skip a
+    # row; naming the one role every writer connects as restores it.
+    # Comma-separated or JSON, e.g. GLASSHOUSE_AUDIT_WRITER_ROLES=app_user.
+    audit_writer_roles: Annotated[list[str], NoDecode] = []
     # The shared demo login (HTTP Basic, username "demo"). None = no
     # gate: local dev and the pure tests run open. Set = everything but
     # the deployment probes requires it, and in the demo environment
@@ -34,6 +45,20 @@ class Settings(BaseSettings):
     # login active, org never comes from a request body.
     demo_org: str = "acme-energy"
     environment: Environment = "dev"
+
+    @field_validator("audit_writer_roles", mode="before")
+    @classmethod
+    def _split_roles(cls, value: object) -> object:
+        # NoDecode above keeps the environment source from JSON-decoding
+        # the value, so a comma-separated list parses here: an operator
+        # naming one role in a hosting dashboard should not have to
+        # spell it `["role"]`, and JSON still works for anyone who does.
+        if isinstance(value, str):
+            text = value.strip()
+            if text.startswith("["):
+                return json.loads(text)
+            return [part.strip() for part in text.split(",") if part.strip()]
+        return value
 
     @field_validator("demo_password")
     @classmethod

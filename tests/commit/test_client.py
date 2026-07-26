@@ -52,9 +52,9 @@ def test_read_as_of_reaches_the_cli(tmp_path: Path) -> None:
 
 
 def test_verify_passes_the_views_schema_flag_through(tmp_path: Path) -> None:
-    # The one bridge back in the sliver: the binary's `--views-schema`
-    # (the sealed view surface) is not on the generated verify() yet, so
-    # our override carries it and the report's views verdict decodes.
+    # The sealed view surface: `--views-schema` reaches the binary and
+    # the report's views verdict decodes. Generated since upstream #197,
+    # so this now pins the surface we depend on rather than a bridge.
     report_json = json.dumps(
         {
             "replay": {"status": "consistent", "transitions": 1, "claims": 1},
@@ -85,6 +85,68 @@ def test_verify_without_the_flag_matches_the_generated_call(tmp_path: Path) -> N
     assert client.verify().views is None
     argv = (tmp_path / "argv.txt").read_text().splitlines()
     assert "--views-schema" not in argv
+
+
+CHECKPOINT = json.dumps(
+    {
+        "status": "created",
+        "tree_size": 3,
+        "checkpoint_hash": "sha256:beef",
+        "prev_checkpoint_hash": None,
+        "root_hash": "sha256:cafe",
+    }
+)
+
+
+@pytest.mark.parametrize("call", ["audit", "audit_named"])
+def test_the_configured_writer_roles_reach_every_audit_tail(tmp_path: Path, call: str) -> None:
+    # The assertion is deployment configuration, so a call site that says
+    # nothing about writer roles still makes it: on managed PostgreSQL a
+    # tail without it refuses, and forgetting it at one call site would
+    # pass every self-hosted test.
+    binary = fake_binary(tmp_path, "")
+    client = GlasshouseClient(
+        "model.morph", "postgres:///x", binary=str(binary), writer_roles=["app_user", "importer"]
+    )
+    assert getattr(client, call)() == []
+    argv = (tmp_path / "argv.txt").read_text().splitlines()
+    assert [argv[i + 1] for i, a in enumerate(argv) if a == "--writer-role"] == [
+        "app_user",
+        "importer",
+    ]
+
+
+def test_the_configured_writer_roles_reach_both_checkpoint_paths(tmp_path: Path) -> None:
+    # `checkpoint` shares the audit tail's resume horizon, and
+    # `write_checkpoint` builds its own argv - both carry the assertion.
+    client = GlasshouseClient(
+        "model.morph",
+        "postgres:///x",
+        binary=str(fake_binary(tmp_path, CHECKPOINT)),
+        writer_roles=["app_user"],
+    )
+    client.checkpoint()
+    argv = (tmp_path / "argv.txt").read_text().splitlines()
+    assert argv[argv.index("--writer-role") + 1] == "app_user"
+
+    anchor = tmp_path / "anchor.json"
+    client.write_checkpoint(anchor)
+    argv = (tmp_path / "argv.txt").read_text().splitlines()
+    assert argv[argv.index("--writer-role") + 1] == "app_user"
+    assert json.loads(anchor.read_text())["tree_size"] == 3
+
+
+def test_without_configured_roles_the_horizon_stays_the_blessed_default(tmp_path: Path) -> None:
+    # A self-hosted database computes the horizon over every session and
+    # is sound without help: no flag must appear, and an explicit
+    # per-call assertion still wins.
+    binary = fake_binary(tmp_path, "")
+    client = GlasshouseClient("model.morph", "postgres:///x", binary=str(binary))
+    client.audit()
+    assert "--writer-role" not in (tmp_path / "argv.txt").read_text().splitlines()
+    client.audit(writer_roles=["one_off"])
+    argv = (tmp_path / "argv.txt").read_text().splitlines()
+    assert argv[argv.index("--writer-role") + 1] == "one_off"
 
 
 def test_binary_discovery_honours_the_glasshouse_env_var(

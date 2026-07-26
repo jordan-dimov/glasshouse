@@ -65,11 +65,18 @@ def _db(database_url: str) -> str:
     return database_url or get_settings().database_url
 
 
+def _client(db: str) -> GlasshouseClient:
+    """One construction site for the operator's client, so the writer-role
+    assertion the audit tail needs on managed PostgreSQL is configuration,
+    never something a new command can forget."""
+    return GlasshouseClient(str(MODEL_FILE), db, writer_roles=get_settings().audit_writer_roles)
+
+
 def _run_import(
     *, curves: bool, file: Path, org: str, actor: str, project: bool, preview: bool, db: str
 ) -> None:
     text = file.read_text()
-    client = GlasshouseClient(str(MODEL_FILE), db)
+    client = _client(db)
     if not curves:
         report = (preview_trades if preview else import_trades)(client, text, org=org, actor=actor)
     elif preview:
@@ -179,7 +186,7 @@ def seed_command(
 @app.command("verify", help="Prove the operational database still agrees with the governed ledger.")
 def verify_command(database_url: DatabaseUrl = "") -> None:
     db = _db(database_url)
-    client = GlasshouseClient(str(MODEL_FILE), db)
+    client = _client(db)
     engine = sa.create_engine(engine_url(db))
     report = verify(client, engine, CurveStore(engine))
     print(report.render())
@@ -206,7 +213,7 @@ def project_command(
     database_url: DatabaseUrl = "",
 ) -> None:
     db = _db(database_url)
-    client = GlasshouseClient(str(MODEL_FILE), db)
+    client = _client(db)
     engine = sa.create_engine(engine_url(db))
     if follow_:
         follow(client, engine, interval_seconds=interval)
@@ -229,7 +236,7 @@ def checkpoint_command(
     ] = None,
     database_url: DatabaseUrl = "",
 ) -> None:
-    client = GlasshouseClient(str(MODEL_FILE), _db(database_url))
+    client = _client(_db(database_url))
     outcome = client.write_checkpoint(out) if out else client.checkpoint()
     kind = "created" if isinstance(outcome, CheckpointCreated) else "no new rows"
     checkpoint = outcome.checkpoint
@@ -247,7 +254,7 @@ def evidence_export_command(
     out: Annotated[Path, typer.Argument(help="the pack JSON file to write")],
     database_url: DatabaseUrl = "",
 ) -> None:
-    client = GlasshouseClient(str(MODEL_FILE), _db(database_url))
+    client = _client(_db(database_url))
     client.export_evidence_pack(out)
     print(f"evidence pack written to {out}")
 
@@ -265,7 +272,7 @@ def evidence_verify_command(
     ] = None,
 ) -> None:
     # Offline: no database is touched, so no --database-url.
-    client = GlasshouseClient(str(MODEL_FILE), "")
+    client = _client("")
     verdict = client.evidence_verify(str(pack), anchor_file=str(anchor) if anchor else None)
     intact = isinstance(verdict, TreeIntact)
     print(f"evidence verify: {'intact' if intact else type(verdict).__name__.removeprefix('Tree')}")

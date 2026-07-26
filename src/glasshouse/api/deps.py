@@ -34,6 +34,7 @@ def build_client(settings: Settings) -> GlasshouseClient:
         settings.database_url,
         binary=settings.morpholog_bin,
         timeout_seconds=settings.morpholog_timeout_seconds,
+        writer_roles=settings.audit_writer_roles,
     )
 
 
