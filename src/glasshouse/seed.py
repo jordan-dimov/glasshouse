@@ -284,7 +284,15 @@ def run_seed(database_url: str, *, reset: bool) -> SeedReport:
                         guard.execute(
                             sa.text("select pg_advisory_unlock(hashtext('glasshouse.projector'))")
                         )
-                client = GlasshouseClient(str(MODEL_FILE), database_url)
+                # Writer roles configured, not passed per call: the seed
+                # tails the audit twice (the emptiness refusal below, and
+                # `verify`'s projection leg), and on managed PostgreSQL
+                # both refuse without the assertion.
+                client = GlasshouseClient(
+                    str(MODEL_FILE),
+                    database_url,
+                    writer_roles=get_settings().audit_writer_roles,
+                )
                 store = CurveStore(engine)
                 report = seed_demo(client, store, engine)
                 verification = verify(client, engine, store)

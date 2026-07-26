@@ -118,6 +118,14 @@ class Morpholog:
     def _json(self, *args: str) -> object:
         return json.loads(self._invoke(*args))
 
+    @staticmethod
+    def _opt(flag: str, value: "str | None") -> list:
+        return [] if value is None else [flag, value]
+
+    @staticmethod
+    def _repeat(flag: str, values: "list[str] | None") -> list:
+        return [part for v in values or [] for part in (flag, v)]
+
     # ------------------------------------------------------------
     # Provisioning and model identity.
     # ------------------------------------------------------------
@@ -238,55 +246,90 @@ class Morpholog:
         transition id, or an RFC 3339 timestamp resolved to the last
         transition committed at or before it.
         """
-        flags = [flag for p in predicates for flag in ("--predicate", p)]
-        if as_of is not None:
-            flags.extend(["--as-of", as_of])
-        payload = self._json(
-            "inspect", "claims", *flags, "--database-url", self.database_url
-        )
-        return [envelopes.ClaimInstance.from_json(c) for c in payload]
+        return self._claims(predicates, named=False, as_of=as_of)
 
     def claims_named(self, *predicates: str, as_of: str | None = None) -> list:
         """The named read: the programme is the authority, skew is a
         hard error on the binary side. Values stay wire-true; the
-        generated read models parse them by declared kind.
+        generated read models parse them by declared kind. `as_of` as
+        on ``claims``."""
+        return self._claims(predicates, named=True, as_of=as_of)
 
-        `as_of` reads the claims as they were at a past moment - a
-        transition id, or an RFC 3339 timestamp resolved to the last
-        transition committed at or before it.
+    def _claims(self, predicates, named: bool, as_of: "str | None") -> list:
+        argv = ["inspect", "claims"]
+        argv += self._repeat("--predicate", list(predicates))
+        argv += self._opt("--as-of", as_of)
+        cls = envelopes.NamedClaim if named else envelopes.ClaimInstance
+        if named:
+            argv += ["--named", self.file]
+        payload = self._json(*argv, "--database-url", self.database_url)
+        return [cls.from_json(c) for c in payload]
+
+    def derived(self, name: str, *, as_of: str | None = None) -> list:
+        """Compute a read-side view (a derived claim) directly from the
+        admitted claims - the authoritative, always-live read; it never
+        consults the ``refresh_derived`` cache. Rows are tagged
+        ``ClaimInstance``s, the same shape ``claims`` returns.
+
+        `as_of` computes the view over the state as it was at a past
+        moment - a transition id, or an RFC 3339 timestamp resolved to
+        the last transition committed at or before it. Diffing the same
+        view at two coordinates is the correction blast-radius read.
         """
-        flags = [flag for p in predicates for flag in ("--predicate", p)]
-        if as_of is not None:
-            flags.extend(["--as-of", as_of])
-        payload = self._json(
-            "inspect", "claims", *flags,
-            "--named", self.file,
-            "--database-url", self.database_url,
-        )
-        return [envelopes.NamedClaim.from_json(c) for c in payload]
+        return self._derived(name, named=False, as_of=as_of)
 
-    def audit(self, after: str | None = None) -> list:
+    def derived_named(self, name: str, *, as_of: str | None = None) -> list:
+        """``derived`` with each row's arguments decoded by declared
+        field name (the generated read models parse them by declared
+        kind). Same authority and skew contract as ``claims_named``."""
+        return self._derived(name, named=True, as_of=as_of)
+
+    def _derived(self, name: str, named: bool, as_of: "str | None") -> list:
+        argv = ["inspect", "derived", self.file, name]
+        cls = envelopes.NamedClaim if named else envelopes.ClaimInstance
+        if named:
+            argv.append("--named")
+        argv += self._opt("--as-of", as_of)
+        payload = self._json(*argv, "--database-url", self.database_url)
+        return [cls.from_json(c) for c in payload]
+
+    def audit(
+        self, after: str | None = None, *, writer_roles: list[str] | None = None
+    ) -> list:
         """The audit tail: committed transitions in commit order, one
         ``AuditRow`` per NDJSON line. ``after`` resumes strictly after
         a previously seen transition id - lossless: rows whose writers
         were still in flight are withheld until the next call, never
-        skipped. An empty tail is a lawful empty list."""
+        skipped. An empty tail is a lawful empty list.
+
+        ``writer_roles`` asserts the session roles that write audit,
+        for managed PostgreSQL where the platform's hidden sessions
+        make the default refuse. The binary verifies the assertion
+        against the catalog; superuser writes are the residue the
+        assertion explicitly accepts, and role grants, memberships,
+        and login attributes must stay unchanged until the command
+        establishes its read snapshot."""
         return [
             envelopes.AuditRow.from_json(row)
-            for row in self._audit_lines(after, named=False)
+            for row in self._audit_lines(after, named=False, writer_roles=writer_roles)
         ]
 
-    def audit_named(self, after: str | None = None) -> list:
+    def audit_named(
+        self, after: str | None = None, *, writer_roles: list[str] | None = None
+    ) -> list:
         """The audit tail with asserted/retracted claims decoded by
         declared field name under this programme's authority (skew is
         a hard error on the binary side). ``arguments`` and intent
-        payloads stay positional - a different vocabulary."""
+        payloads stay positional - a different vocabulary.
+        ``writer_roles`` as on ``audit``."""
         return [
             envelopes.AuditRowNamed.from_json(row)
-            for row in self._audit_lines(after, named=True)
+            for row in self._audit_lines(after, named=True, writer_roles=writer_roles)
         ]
 
-    def _audit_lines(self, after: str | None, named: bool) -> list:
+    def _audit_lines(
+        self, after: str | None, named: bool, writer_roles: list[str] | None = None
+    ) -> list:
         # Not _invoke: an empty tail is a lawful empty stdout, not a
         # protocol violation - so the discrimination here is on the
         # exit code alone.
@@ -295,6 +338,7 @@ class Morpholog:
             argv.extend(["--after", after])
         if named:
             argv.extend(["--named", self.file])
+        argv += self._repeat("--writer-role", writer_roles)
         argv.extend(["--database-url", self.database_url])
         proc = self._run(argv, timeout=self.timeout)
         if proc.returncode != 0:
@@ -317,6 +361,20 @@ class Morpholog:
             self._json(
                 "inspect", "coverage", self.file,
                 "--json",
+                "--database-url", self.database_url,
+            )
+        )
+
+    def refresh_derived(self) -> envelopes.RefreshDerivedReport:
+        """Recompute every derived claim with the kernel and publish a
+        new generation of the ``morpholog_read`` cache that the
+        generated derived SQL views read. Operational, out of band:
+        run it after an import or on a schedule. It feeds only the SQL
+        views - the ``derived`` reads above compute live and never
+        need it."""
+        return envelopes.RefreshDerivedReport.from_json(
+            self._json(
+                "refresh", "derived", self.file,
                 "--database-url", self.database_url,
             )
         )
@@ -349,17 +407,24 @@ class Morpholog:
         return envelopes.VerifyReport.from_json(self._json(*args))
 
     def checkpoint(
-        self, signing_key: str | None = None, key_id: str | None = None
+        self,
+        signing_key: str | None = None,
+        key_id: str | None = None,
+        *,
+        writer_roles: list[str] | None = None,
     ) -> "envelopes.CheckpointCreated | envelopes.CheckpointNoNewRows":
         """Record a checkpoint over the current stable prefix, or return
         the unchanged head - either way a usable external anchor. Pass
         ``signing_key`` (a PKCS#8 PEM path) and ``key_id`` to sign the new
-        tree head, so the anchor is attributable."""
+        tree head, so the anchor is attributable. ``writer_roles`` as on
+        ``audit`` - the checkpoint's stable prefix rests on the same
+        resume horizon."""
         if (signing_key is None) != (key_id is None):
             raise ValueError("signing_key and key_id must be given together")
         args = ["checkpoint", "--database-url", self.database_url]
         if signing_key is not None:
             args.extend(["--signing-key", str(signing_key), "--key-id", str(key_id)])
+        args += self._repeat("--writer-role", writer_roles)
         return envelopes.parse_checkpoint_outcome(self._json(*args))
 
     def evidence_export(self, tree_size: int | None = None) -> envelopes.EvidencePack:

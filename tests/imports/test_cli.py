@@ -66,3 +66,17 @@ def test_project_follow_enters_the_worker_loop(monkeypatch: pytest.MonkeyPatch) 
     code = cli.main(["project", "--follow", "--interval", "0.5", "--database-url", "postgres:///x"])
     assert code == 0
     assert entered == [0.5]
+
+
+def test_a_refused_setting_is_a_clean_exit_not_a_traceback(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # Misconfiguration is an operational failure like any other: one
+    # `cli.command_failed` event, `error: ...` on stderr, exit 1. It used
+    # to escape as a raw ValidationError traceback from the logging setup
+    # before any command ran - which also meant the offline forensic
+    # commands could be blocked by a variable they never read.
+    monkeypatch.setenv("GLASSHOUSE_AUDIT_WRITER_ROLES", "[broken")
+    code = cli.main(["project", "--database-url", "postgres:///x"])
+    assert code == 1
+    assert "error:" in capsys.readouterr().err

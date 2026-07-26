@@ -3,7 +3,14 @@ morpholog binary and a disposable database, or a clean skip in local and
 pure-test runs (CI's integration leg builds both and sets
 GLASSHOUSE_REQUIRE_LIVE, so there the skip becomes a failure).
 
-    GLASSHOUSE_MORPHOLOG_REPO    default ~/dev/morpholog (for the binary)
+    GLASSHOUSE_MORPHOLOG_BIN     the binary itself (what CI installs from
+                                 scripts/install-morpholog.sh, and what a
+                                 developer machine gets from the same
+                                 script - no Rust toolchain needed)
+    GLASSHOUSE_MORPHOLOG_REPO    a source checkout to take
+                                 target/release/morpholog from, when
+                                 running against a local build instead
+                                 (default ~/dev/morpholog)
     GLASSHOUSE_TEST_DATABASE_URL default postgres:///morpholog_scratch
     GLASSHOUSE_REQUIRE_LIVE      when set, an absent stack is a failure,
                                  not a skip (CI sets this; it turns a
@@ -32,7 +39,13 @@ from glasshouse.projections.tables import metadata as projection_metadata
 ROOT = Path(__file__).resolve().parents[1]
 REPO = Path(os.environ.get("GLASSHOUSE_MORPHOLOG_REPO", "~/dev/morpholog")).expanduser()
 DB = os.environ.get("GLASSHOUSE_TEST_DATABASE_URL", "postgres:///morpholog_scratch")
-BINARY = REPO / "target" / "release" / "morpholog"
+# An explicit binary wins: the release channel is the blessed way to get
+# one, and a source checkout is now the special case, not the default.
+BINARY = (
+    Path(os.environ["GLASSHOUSE_MORPHOLOG_BIN"])
+    if os.environ.get("GLASSHOUSE_MORPHOLOG_BIN")
+    else REPO / "target" / "release" / "morpholog"
+)
 
 
 def provision(database_url: str = DB) -> sa.Engine:

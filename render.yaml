@@ -43,6 +43,17 @@ services:
         fromDatabase:
           name: glasshouse-db
           property: connectionString
+      # Managed Postgres hides the platform's own sessions from this role
+      # and grants no pg_read_all_stats, so the audit tail's resume
+      # horizon cannot be computed over all sessions and refuses rather
+      # than risk skipping a row. Every Glasshouse write connects as the
+      # database's single user, so asserting it restores the horizon
+      # (the binary verifies the assertion against the catalogue). Taken
+      # from the database itself, never a copied literal.
+      - key: GLASSHOUSE_AUDIT_WRITER_ROLES
+        fromDatabase:
+          name: glasshouse-db
+          property: user
 
   - type: cron
     name: glasshouse-seed-reset
@@ -60,6 +71,13 @@ services:
         fromDatabase:
           name: glasshouse-db
           property: connectionString
+      # The seed rebuilds the projections and verifies all six legs, so
+      # it tails the audit twice: it needs the assertion as much as the
+      # web service does (see the note there).
+      - key: GLASSHOUSE_AUDIT_WRITER_ROLES
+        fromDatabase:
+          name: glasshouse-db
+          property: user
 
 databases:
   - name: glasshouse-db
