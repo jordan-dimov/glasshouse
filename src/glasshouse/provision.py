@@ -3,12 +3,13 @@
 The idempotent steps a fresh (or already-provisioned) database needs
 before the web service can serve: migrate the app schema to head,
 initialise the governed schema if absent (`init --skip-if-exists`),
+bring that governed schema up to the binary's own version (`migrate`),
 apply the sealed inspection views, and prove the audit tail can be read
 at all. This is the web service's pre-deploy
 command (DESIGN section 13: migrations and the Morpholog bootstrap run
 in a pre-deploy step, never at app startup) and is safe to run on every
-deploy: the migration no-ops at head, the init skips an existing schema,
-and the committed view script re-applies and re-seals.
+deploy: both migrations no-op when current, the init skips an existing
+schema, and the committed view script re-applies and re-seals.
 
 `--least-privilege` passes the upstream provisioning floor through
 (reader/writer group roles; the report names the membership grants only
@@ -72,9 +73,19 @@ def alembic_config(database_url: str, *, ini: Path = ALEMBIC_INI) -> Config:
 class ProvisionReport:
     governed: str  # the InitReport status: "initialised" | "already-initialised"
     least_privilege: LeastPrivilege | None
+    # The governed-schema migrations this deploy applied. Empty on a fresh
+    # database (init provisions at the binary's own version) and on one
+    # already current, which is the ordinary case.
+    governed_migrations: tuple[str, ...] = ()
 
     def render(self) -> str:
-        lines = [f"provisioned: app schema at head, governed schema {self.governed}, views applied"]
+        applied = (
+            f"governed schema {self.governed}"
+            if not self.governed_migrations
+            else f"governed schema {self.governed}, "
+            f"migrated ({', '.join(self.governed_migrations)})"
+        )
+        lines = [f"provisioned: app schema at head, {applied}, views applied"]
         if self.least_privilege is not None:
             floor = self.least_privilege
             lines.append(
@@ -97,6 +108,14 @@ def run_provision(
     command.upgrade(alembic_config(database_url), "head")
     client = GlasshouseClient(str(MODEL_FILE), database_url, writer_roles=writer_roles)
     init_report = client.init(skip_if_exists=True, least_privilege=least_privilege)
+    # `init` provisions but never alters, so a governed schema laid down by
+    # an older binary stays behind it forever - and since v0.0.8 the binary
+    # says so and refuses rather than working against a schema it does not
+    # expect. That refusal belongs to the watched deploy, not to the first
+    # workload that touches the ledger, so bring it up here. A fresh
+    # database is already current (init wrote this binary's own schema) and
+    # a current one is left alone, which keeps provision idempotent.
+    migration = client.migrate()
     engine = sa.create_engine(engine_url(database_url))
     try:
         apply_views(engine)
@@ -107,4 +126,8 @@ def run_provision(
     # ledger at all. The substrate's message names the remedy, so it is
     # carried through rather than summarised.
     client.audit()
-    return ProvisionReport(governed=init_report.status, least_privilege=init_report.least_privilege)
+    return ProvisionReport(
+        governed=init_report.status,
+        least_privilege=init_report.least_privilege,
+        governed_migrations=tuple(str(ref.version) for ref in migration.applied),
+    )

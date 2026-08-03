@@ -263,7 +263,7 @@ def verify(client: GlasshouseClient, engine: sa.Engine, store: CurveStore) -> Ve
     their evidence, but "ok" needs the seal - while the model, projection
     and payload legs still run, giving as much evidence as they can."""
     try:
-        report = client.verify(views_schema=VIEWS_SCHEMA)
+        report = client.audit_verify(views_schema=VIEWS_SCHEMA)
         ledger, tree = _ledger_leg(report), _tree_leg(report)
         seal = report.views
     except MorphologError as failure:

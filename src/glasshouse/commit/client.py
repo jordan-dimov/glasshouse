@@ -1,10 +1,14 @@
 """Glasshouse's thin extension of the generated client.
 
 The generated client now covers the whole surface Glasshouse drives -
-the operation timeout, batch `explain_on_reject`, `verify`, the audit
-tail, the tamper-evidence family (`checkpoint`, `evidence_export` /
-`evidence_verify`), and credential redaction in every raised error
-message - all typed and under the regenerate-and-diff drift gate. So the
+the operation timeout, batch `explain_on_reject`, `audit_verify`, the
+audit tail, the tamper-evidence family (`audit_checkpoint`,
+`audit_export` / `audit_verify_pack`), and credential redaction in every
+raised error message - all typed and under the regenerate-and-diff drift
+gate. (Upstream v0.0.8 gathered that family under one `morpholog audit`
+command group, so the generated methods gained their `audit_` prefix;
+the rename is absorbed by regeneration, but see `audit_checkpoint`
+below - an override that stops overriding is silent.) So the
 hand-written bridges are gone, including the last one (the `_invoke`
 redaction seam: the generated client now masks `--database-url` in its
 own messages, contract section 13 delivered). What remains is genuinely
@@ -16,7 +20,7 @@ ours, nothing duplicated:
 * **`read`**, the typed per-predicate as-of read composing the generated
   named-claim surface;
 * **`export_evidence_pack`**, writing the binary's exact pack bytes to a
-  file for offline verification (the generated `evidence_export` returns
+  file for offline verification (the generated `audit_export` returns
   the typed pack for inspection, not a file).
 
 The bridge count is zero again: the last one (the `views_schema` flag on
@@ -86,6 +90,15 @@ class GlasshouseClient(Morpholog):
     # The three surfaces that compute the resume horizon. Each keeps the
     # generated signature and semantics; the configured assertion is
     # simply the default a caller does not pass.
+    #
+    # These names must track the generated ones exactly: an override that
+    # no longer matches its base silently becomes a dead method, and the
+    # deployment's writer-role assertion stops reaching the binary with
+    # nothing failing - the managed-PostgreSQL horizon bug back again, and
+    # invisible to every self-hosted test. The v0.0.8 `audit` grouping
+    # renamed `checkpoint` to `audit_checkpoint` and did exactly that;
+    # `tests/commit/test_client.py` pins the argv each one emits, which is
+    # what catches it rather than mypy.
     def audit(self, after: str | None = None, *, writer_roles: list[str] | None = None) -> list:  # type: ignore[type-arg]
         return super().audit(after, writer_roles=self._asserted(writer_roles))
 
@@ -94,25 +107,28 @@ class GlasshouseClient(Morpholog):
     ) -> list:  # type: ignore[type-arg]
         return super().audit_named(after, writer_roles=self._asserted(writer_roles))
 
-    def checkpoint(
+    def audit_checkpoint(
         self,
         signing_key: str | None = None,
         key_id: str | None = None,
         *,
         writer_roles: list[str] | None = None,
     ) -> envelopes.CheckpointCreated | envelopes.CheckpointNoNewRows:
-        return super().checkpoint(signing_key, key_id, writer_roles=self._asserted(writer_roles))
+        return super().audit_checkpoint(
+            signing_key, key_id, writer_roles=self._asserted(writer_roles)
+        )
 
     def write_checkpoint(
         self, path: str | Path
     ) -> envelopes.CheckpointCreated | envelopes.CheckpointNoNewRows:
         """Record a checkpoint and write its JSON to `path` as an external
         anchor: the binary prints the checkpoint as JSON, and a later
-        `evidence_verify(pack, anchor_file=path)` against it catches a
+        `audit_verify_pack(pack, anchor_file=path)` against it catches a
         rewrite that also rewrote the checkpoint table. Writes the exact
         bytes (after parsing once to validate) and returns the typed
         outcome."""
         raw = self._invoke(
+            "audit",
             "checkpoint",
             "--database-url",
             self.database_url,
@@ -128,7 +144,7 @@ class GlasshouseClient(Morpholog):
         those exact bytes as explicit UTF-8 (the offline verifier
         recomputes roots from them) after parsing once to refuse a
         malformed pack loudly."""
-        args = ["evidence", "export", "--database-url", self.database_url]
+        args = ["audit", "export", "--database-url", self.database_url]
         if tree_size is not None:
             args.extend(["--tree-size", str(tree_size)])
         raw = self._invoke(*args)

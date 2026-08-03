@@ -1,9 +1,10 @@
 """The projector: the audit tail in, projection rows out, exactly once.
 
-The transition log arrives through the blessed tail (`inspect audit`
-via the generated client - the surface this projector forced upstream
-as morpholog#136): committed transitions in `(committed_at,
-transition_id)` order, resumed losslessly with `--after`. Lossless is
+The transition log arrives through the blessed tail (`inspect audit
+--named` via the generated client - the surface this projector forced
+upstream as morpholog#136): committed transitions in `(committed_at,
+transition_id)` order, resumed losslessly with `--after`, their claims
+keyed by declared field rather than position. Lossless is
 the binary's guarantee, not ours: `committed_at` is the writer's
 transaction START instant while visibility follows commit order, so a
 naive cursor over the raw table can skip a slow writer's transition
@@ -103,10 +104,19 @@ def _hours(start: dt.datetime, end: dt.datetime) -> list[dt.datetime]:
 
 
 def fold_transition(
-    asserted: list[envelopes.ClaimInstance], retracted: list[envelopes.ClaimInstance]
+    asserted: list[envelopes.NamedClaim], retracted: list[envelopes.NamedClaim]
 ) -> Fold:
     """The pure fold: claims in, row effects out, refusal on anything
-    the folds do not cover."""
+    the folds do not cover.
+
+    Claims arrive from the NAMED tail, keyed by declared field. The
+    positional tail would decode the same values in declaration order,
+    which is one silent reordering away from filing a counterparty under
+    `market`: nothing on the positional audit path guards arity or order,
+    where the named decode resolves fields under the programme's own
+    authority and makes skew a hard error on the binary side. Law 4's
+    "never read governed state via raw positional JSONB" applies to the
+    log exactly as it does to the claims table."""
     for claim in retracted:
         if claim.predicate in PROJECTED:
             raise ProjectionError(
@@ -119,12 +129,12 @@ def fold_transition(
     for claim in asserted:
         match claim.predicate:
             case "TradeCaptured":
-                captured.append(models.TradeCapturedClaim(*claim.args))
+                captured.append(models.TradeCapturedClaim.from_named(claim.args))
             case "TradeTerms":
-                row = models.TradeTermsClaim(*claim.args)
+                row = models.TradeTermsClaim.from_named(claim.args)
                 terms[row.trade] = row
             case "TradeValued":
-                valuations.append(models.TradeValuedClaim(*claim.args))
+                valuations.append(models.TradeValuedClaim.from_named(claim.args))
             case name if name in IGNORED:
                 pass
             case name:
@@ -229,7 +239,7 @@ def catch_up(client: GlasshouseClient, engine: sa.Engine) -> int:
                     projection_progress.c.name == CURSOR
                 )
             ).scalar_one_or_none()
-            page = client.audit(after=cursor)
+            page = client.audit_named(after=cursor)
             if not page:
                 return applied
             for row in page:
@@ -281,7 +291,7 @@ def accumulate(
     valuations: dict[tuple[str, str, str], tuple[object, ...]] = {}
     cursor: tuple[object, ...] | None = None
     reached_up_to = up_to is None
-    for row in client.audit():
+    for row in client.audit_named():
         if up_to is not None and reached_up_to:
             break
         fold = fold_transition(row.asserted_claims, row.retracted_claims)
@@ -355,7 +365,7 @@ def rebuild(client: GlasshouseClient, engine: sa.Engine) -> int:
         )
         for table in (blotter_trade, position_hour, trade_valuation, projection_progress):
             connection.execute(sa.delete(table))
-        rows = client.audit()
+        rows = client.audit_named()
         for row in rows:
             fold = fold_transition(row.asserted_claims, row.retracted_claims)
             _apply(connection, fold, row.committed_at, row.transition_id, row.actor)

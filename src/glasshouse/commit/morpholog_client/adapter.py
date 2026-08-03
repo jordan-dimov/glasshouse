@@ -81,7 +81,7 @@ class Morpholog:
 
     def _run(
         self, args: list[str], stdin: str | None = None, *, timeout: float | None
-    ) -> "subprocess.CompletedProcess[str]":
+    ) -> subprocess.CompletedProcess[str]:
         """Every invocation lands here. A timeout is operational, not a
         decided outcome, so it raises ``MorphologError``."""
         try:
@@ -119,11 +119,11 @@ class Morpholog:
         return json.loads(self._invoke(*args))
 
     @staticmethod
-    def _opt(flag: str, value: "str | None") -> list:
+    def _opt(flag: str, value: str | None) -> list[str]:
         return [] if value is None else [flag, value]
 
     @staticmethod
-    def _repeat(flag: str, values: "list[str] | None") -> list:
+    def _repeat(flag: str, values: list[str] | None) -> list[str]:
         return [part for v in values or [] for part in (flag, v)]
 
     # ------------------------------------------------------------
@@ -131,14 +131,57 @@ class Morpholog:
     # ------------------------------------------------------------
 
     def init(
-        self, skip_if_exists: bool = False, least_privilege: bool = False
+        self,
+        skip_if_exists: bool = False,
+        least_privilege: bool = False,
+        reset: bool = False,
+        i_know_this_deletes_data: bool = False,
     ) -> envelopes.InitReport:
+        """Provision the Morpholog tables.
+
+        `reset` DESTROYS every claim, audit row and outbox entry in the
+        target database, and needs `i_know_this_deletes_data` alongside
+        it. Both flags are passed straight through, so the pairing is
+        enforced in one place - the binary - rather than re-implemented
+        here where it could drift.
+        """
         args = ["init", "--database-url", self.database_url]
         if skip_if_exists:
             args.append("--skip-if-exists")
         if least_privilege:
             args.append("--least-privilege")
+        if reset:
+            args.append("--reset")
+        if i_know_this_deletes_data:
+            args.append("--i-know-this-deletes-data")
         return envelopes.InitReport.from_json(self._json(*args))
+
+    def migrate(self, *, check: bool = False) -> envelopes.MigrationReport:
+        """Bring the database up to the schema this binary expects.
+
+        The migrations are embedded in the binary, so an upgrade needs
+        nothing fetched from a source tree. Applies whatever the database
+        has not recorded, in order, and leaves a current one alone.
+
+        **Needs a connection that owns the schema.** Under
+        `--least-privilege` the runtime writer role cannot run DDL, so pass
+        an administrative URL for this call rather than the one your
+        proposals use. `check` only reads, and both roles are granted
+        `SELECT` on the record, so a readiness probe can run as either.
+
+        `check` reports and changes nothing. The binary exits non-zero when
+        the database is behind, but this client reads stdout rather than the
+        exit code, so you get the report either way - which is the more
+        useful outcome, because a raise would throw away what is pending.
+        Gate on the report:
+
+            if not client.migrate(check=True).is_current:
+                ...
+        """
+        args = ["migrate", "--database-url", self.database_url]
+        if check:
+            args.append("--check")
+        return envelopes.MigrationReport.from_json(self._json(*args))
 
     def hash(self) -> envelopes.HashReport:
         return envelopes.HashReport.from_json(self._json("hash", self.file))
@@ -157,9 +200,9 @@ class Morpholog:
         self,
         transformation: str,
         actor: str,
-        args_named: dict,
+        args_named: dict[str, object],
         explain_on_reject: bool = False,
-    ) -> "envelopes.Committed | envelopes.Rejected":
+    ) -> envelopes.Committed | envelopes.Rejected:
         """Propose a change by transformation name: it commits only if
         every rule holds; a refusal is a lawful outcome, returned as
         ``Rejected``."""
@@ -175,7 +218,7 @@ class Morpholog:
 
     def submit(
         self, request: object, actor: str, explain_on_reject: bool = False
-    ) -> "envelopes.Committed | envelopes.Rejected":
+    ) -> envelopes.Committed | envelopes.Rejected:
         """Commit a generated request model: its class names the
         transformation, its fields encode themselves."""
         return self.propose(
@@ -187,11 +230,11 @@ class Morpholog:
 
     def propose_batch(
         self,
-        rows: list,
+        rows: list[dict[str, object]],
         timeout: float | None = None,
         *,
         explain_on_reject: bool = False,
-    ) -> list:
+    ) -> list[envelopes.BatchReceipt]:
         """Admit many rows in one invocation (`propose --batch -`).
 
         Each row is a dict with ``transformation``, ``actor``, and one
@@ -222,7 +265,7 @@ class Morpholog:
         return receipts
 
     def explain(
-        self, transformation: str, actor: str, args_named: dict
+        self, transformation: str, actor: str, args_named: dict[str, object]
     ) -> envelopes.Explanation:
         return envelopes.Explanation.from_json(
             self._json(
@@ -238,7 +281,7 @@ class Morpholog:
     # Reading governed state back.
     # ------------------------------------------------------------
 
-    def claims(self, *predicates: str, as_of: str | None = None) -> list:
+    def claims(self, *predicates: str, as_of: str | None = None) -> list[envelopes.ClaimInstance]:
         """The bare read: the claims table is the authority, an unknown
         predicate matches nothing. Tagged args decoded to bare values.
 
@@ -248,24 +291,70 @@ class Morpholog:
         """
         return self._claims(predicates, named=False, as_of=as_of)
 
-    def claims_named(self, *predicates: str, as_of: str | None = None) -> list:
+    def claims_named(
+        self,
+        *predicates: str,
+        as_of: str | None = None,
+        where: dict[str, str] | None = None,
+    ) -> list[envelopes.NamedClaim]:
         """The named read: the programme is the authority, skew is a
         hard error on the binary side. Values stay wire-true; the
         generated read models parse them by declared kind. `as_of` as
-        on ``claims``."""
-        return self._claims(predicates, named=True, as_of=as_of)
+        on ``claims``.
 
-    def _claims(self, predicates, named: bool, as_of: "str | None") -> list:
+        `where` narrows by argument value - ``where={"invoice_id": "inv_1"}``
+        - so rows that cannot match are never transferred or decoded.
+        That is what it saves: the database still scans the predicate,
+        because no index covers argument positions.
+        Field names resolve against the programme, so exactly one
+        predicate must be named and an undeclared field is an error, not
+        an empty list. Filtering runs in the database except under
+        `as_of`, where the state is replayed first.
+        """
+        return self._claims(predicates, named=True, as_of=as_of, where=where)
+
+    def _claims(
+        self,
+        predicates: tuple[str, ...],
+        named: bool,
+        as_of: str | None,
+        where: dict[str, str] | None = None,
+    ) -> list[envelopes.ClaimInstance | envelopes.NamedClaim]:
         argv = ["inspect", "claims"]
         argv += self._repeat("--predicate", list(predicates))
         argv += self._opt("--as-of", as_of)
+        argv += self._repeat("--where", [f"{k}={v}" for k, v in (where or {}).items()])
         cls = envelopes.NamedClaim if named else envelopes.ClaimInstance
         if named:
             argv += ["--named", self.file]
         payload = self._json(*argv, "--database-url", self.database_url)
         return [cls.from_json(c) for c in payload]
 
-    def derived(self, name: str, *, as_of: str | None = None) -> list:
+    def rejections(self, *, limit: int = 100) -> list[envelopes.RejectionRow]:
+        """The most recent refusals, newest first, with the values the refused
+        rule was reading where the kernel could pin them.
+
+        Bounded: the log grows with every refusal, so raise `limit` to reach
+        further back rather than expecting the whole history. A witness runs
+        to a few hundred bytes, so a large limit is a large response.
+
+        **An operational floor, not a ledger.** Writes are at-most-once and
+        happen after rollback, so a storm or an insert failure can leave a
+        refusal unrecorded; audit remains the only legitimacy-grade record.
+        Read a row as a lead to follow, and never as proof of what did or
+        did not happen.
+        """
+        payload = self._json(
+            "inspect",
+            "rejections",
+            "--limit",
+            str(limit),
+            "--database-url",
+            self.database_url,
+        )
+        return [envelopes.RejectionRow.from_json(r) for r in payload]
+
+    def derived(self, name: str, *, as_of: str | None = None) -> list[envelopes.ClaimInstance]:
         """Compute a read-side view (a derived claim) directly from the
         admitted claims - the authoritative, always-live read; it never
         consults the ``refresh_derived`` cache. Rows are tagged
@@ -278,24 +367,39 @@ class Morpholog:
         """
         return self._derived(name, named=False, as_of=as_of)
 
-    def derived_named(self, name: str, *, as_of: str | None = None) -> list:
+    def derived_named(
+        self, name: str, *, as_of: str | None = None, where: dict[str, str] | None = None
+    ) -> list[envelopes.NamedClaim]:
         """``derived`` with each row's arguments decoded by declared
         field name (the generated read models parse them by declared
-        kind). Same authority and skew contract as ``claims_named``."""
-        return self._derived(name, named=True, as_of=as_of)
+        kind). Same authority and skew contract as ``claims_named``.
 
-    def _derived(self, name: str, named: bool, as_of: "str | None") -> list:
+        `where` narrows by field, as on ``claims_named``. A derived view
+        is computed from claims, so this narrows the answer rather than
+        the work - unlike the claims read, which pushes the comparison
+        into the database.
+        """
+        return self._derived(name, named=True, as_of=as_of, where=where)
+
+    def _derived(
+        self,
+        name: str,
+        named: bool,
+        as_of: str | None,
+        where: dict[str, str] | None = None,
+    ) -> list[envelopes.ClaimInstance | envelopes.NamedClaim]:
         argv = ["inspect", "derived", self.file, name]
         cls = envelopes.NamedClaim if named else envelopes.ClaimInstance
         if named:
             argv.append("--named")
         argv += self._opt("--as-of", as_of)
+        argv += self._repeat("--where", [f"{k}={v}" for k, v in (where or {}).items()])
         payload = self._json(*argv, "--database-url", self.database_url)
         return [cls.from_json(c) for c in payload]
 
     def audit(
         self, after: str | None = None, *, writer_roles: list[str] | None = None
-    ) -> list:
+    ) -> list[envelopes.AuditRow]:
         """The audit tail: committed transitions in commit order, one
         ``AuditRow`` per NDJSON line. ``after`` resumes strictly after
         a previously seen transition id - lossless: rows whose writers
@@ -316,7 +420,7 @@ class Morpholog:
 
     def audit_named(
         self, after: str | None = None, *, writer_roles: list[str] | None = None
-    ) -> list:
+    ) -> list[envelopes.AuditRowNamed]:
         """The audit tail with asserted/retracted claims decoded by
         declared field name under this programme's authority (skew is
         a hard error on the binary side). ``arguments`` and intent
@@ -329,7 +433,7 @@ class Morpholog:
 
     def _audit_lines(
         self, after: str | None, named: bool, writer_roles: list[str] | None = None
-    ) -> list:
+    ) -> list[dict[str, object]]:
         # Not _invoke: an empty tail is a lawful empty stdout, not a
         # protocol violation - so the discrimination here is on the
         # exit code alone.
@@ -383,7 +487,7 @@ class Morpholog:
     # Tamper-evidence: replay, checkpoints, evidence packs.
     # ------------------------------------------------------------
 
-    def verify(
+    def audit_verify(
         self,
         anchor_file: str | None = None,
         require_signatures: bool = False,
@@ -397,7 +501,7 @@ class Morpholog:
         in that schema against its recorded seals, adding the ``views``
         verdict to the report. A divergence or tamper is a decided
         verdict on stdout, not an operational error."""
-        args = ["verify", "--database-url", self.database_url]
+        args = ["audit", "verify", "--database-url", self.database_url]
         if anchor_file is not None:
             args.extend(["--anchor-file", str(anchor_file)])
         if require_signatures:
@@ -406,13 +510,13 @@ class Morpholog:
             args.extend(["--views-schema", views_schema])
         return envelopes.VerifyReport.from_json(self._json(*args))
 
-    def checkpoint(
+    def audit_checkpoint(
         self,
         signing_key: str | None = None,
         key_id: str | None = None,
         *,
         writer_roles: list[str] | None = None,
-    ) -> "envelopes.CheckpointCreated | envelopes.CheckpointNoNewRows":
+    ) -> envelopes.CheckpointCreated | envelopes.CheckpointNoNewRows:
         """Record a checkpoint over the current stable prefix, or return
         the unchanged head - either way a usable external anchor. Pass
         ``signing_key`` (a PKCS#8 PEM path) and ``key_id`` to sign the new
@@ -421,23 +525,23 @@ class Morpholog:
         resume horizon."""
         if (signing_key is None) != (key_id is None):
             raise ValueError("signing_key and key_id must be given together")
-        args = ["checkpoint", "--database-url", self.database_url]
+        args = ["audit", "checkpoint", "--database-url", self.database_url]
         if signing_key is not None:
             args.extend(["--signing-key", str(signing_key), "--key-id", str(key_id)])
         args += self._repeat("--writer-role", writer_roles)
         return envelopes.parse_checkpoint_outcome(self._json(*args))
 
-    def evidence_export(self, tree_size: int | None = None) -> envelopes.EvidencePack:
+    def audit_export(self, tree_size: int | None = None) -> envelopes.EvidencePack:
         """Export a complete-prefix evidence pack covering the latest
         checkpoint, or the one at ``tree_size``. The pack carries the
         full audit prefix - confidential data, not selective
         disclosure."""
-        args = ["evidence", "export", "--database-url", self.database_url]
+        args = ["audit", "export", "--database-url", self.database_url]
         if tree_size is not None:
             args.extend(["--tree-size", str(tree_size)])
         return envelopes.EvidencePack.from_json(self._json(*args))
 
-    def evidence_verify(
+    def audit_verify_pack(
         self,
         pack_file: str,
         anchor_file: str | None = None,
@@ -448,10 +552,10 @@ class Morpholog:
         verdict on stdout. ``require_signatures`` is compliance mode: an
         unsigned checkpoint becomes a failing verdict."""
         return envelopes.parse_tree_verification(
-            self._json(*self._evidence_verify_args(pack_file, anchor_file, require_signatures))
+            self._json(*self._verify_pack_args(pack_file, anchor_file, require_signatures))
         )
 
-    def evidence_export_window(
+    def audit_export_window(
         self,
         from_tree_size: int | None = None,
         to_tree_size: int | None = None,
@@ -466,7 +570,7 @@ class Morpholog:
         confidential data, not selective disclosure."""
         if (from_anchor is None) == (from_tree_size is None):
             raise ValueError("give exactly one of from_anchor or from_tree_size")
-        args = ["evidence", "export", "--database-url", self.database_url]
+        args = ["audit", "export", "--database-url", self.database_url]
         if from_anchor is not None:
             args.extend(["--from-anchor", str(from_anchor)])
         else:
@@ -475,7 +579,7 @@ class Morpholog:
             args.extend(["--tree-size", str(to_tree_size)])
         return envelopes.WindowEvidencePack.from_json(self._json(*args))
 
-    def evidence_verify_window(
+    def audit_verify_pack_window(
         self,
         pack_file: str,
         anchor_file: str | None = None,
@@ -484,14 +588,14 @@ class Morpholog:
         """Verify a window pack offline - no database. Returns the window
         verdict; a tamper, inconsistent extension, or malformed pack is a
         decided verdict on stdout. ``require_signatures`` is compliance
-        mode, as on ``evidence_verify``."""
+        mode, as on ``audit_verify_pack``."""
         return envelopes.parse_window_verification(
-            self._json(*self._evidence_verify_args(pack_file, anchor_file, require_signatures))
+            self._json(*self._verify_pack_args(pack_file, anchor_file, require_signatures))
         )
 
-    def evidence_export_selective(
+    def audit_export_selective(
         self,
-        transitions: "list[str]",
+        transitions: list[str],
         tree_size: int | None = None,
     ) -> envelopes.SelectiveEvidencePack:
         """Export a SELECTIVE pack disclosing only the named transitions,
@@ -502,14 +606,14 @@ class Morpholog:
         themselves visible."""
         if not transitions:
             raise ValueError("a selective pack must disclose at least one transition")
-        args = ["evidence", "export", "--database-url", self.database_url]
+        args = ["audit", "export", "--database-url", self.database_url]
         for transition in transitions:
             args.extend(["--transition", str(transition)])
         if tree_size is not None:
             args.extend(["--tree-size", str(tree_size)])
         return envelopes.SelectiveEvidencePack.from_json(self._json(*args))
 
-    def evidence_verify_selective(
+    def audit_verify_pack_selective(
         self,
         pack_file: str,
         anchor_file: str | None = None,
@@ -521,14 +625,14 @@ class Morpholog:
         ``require_signatures`` is compliance mode, as on
         ``evidence_verify``."""
         return envelopes.parse_selective_verification(
-            self._json(*self._evidence_verify_args(pack_file, anchor_file, require_signatures))
+            self._json(*self._verify_pack_args(pack_file, anchor_file, require_signatures))
         )
 
     @staticmethod
-    def _evidence_verify_args(
+    def _verify_pack_args(
         pack_file: str, anchor_file: str | None, require_signatures: bool
-    ) -> list:
-        args = ["evidence", "verify", str(pack_file)]
+    ) -> list[str]:
+        args = ["audit", "verify-pack", str(pack_file)]
         if anchor_file is not None:
             args.extend(["--anchor-file", str(anchor_file)])
         if require_signatures:
@@ -544,7 +648,7 @@ class Morpholog:
         intent_type: str,
         lease_seconds: int | None = None,
         worker_id: str | None = None,
-    ) -> "envelopes.OutboxRow | None":
+    ) -> envelopes.OutboxRow | None:
         args = [
             "outbox", "claim",
             "--intent-type", intent_type,

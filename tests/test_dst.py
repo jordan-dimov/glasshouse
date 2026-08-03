@@ -90,11 +90,31 @@ def test_the_fold_makes_one_position_hour_per_real_hour(
     zone: ZoneInfo, day: dt.date, hours: int
 ) -> None:
     start, end = utc_window(zone, day)
-    captured = envelopes.ClaimInstance(
-        "TradeCaptured", ["acme", "spec-de", "T-1", "stadtwerk-x", "de-power", "buy"]
+    captured = envelopes.NamedClaim(
+        "TradeCaptured",
+        {
+            "org": "acme",
+            "book": "spec-de",
+            "trade": "T-1",
+            "counterparty": "stadtwerk-x",
+            "market": "de-power",
+            "direction": "buy",
+        },
     )
-    terms = envelopes.ClaimInstance(
-        "TradeTerms", ["acme", "T-1", Decimal("10"), Decimal("90"), start, end]
+    # Spelled as the named tail spells it: the instants go to the wire as
+    # RFC 3339 UTC, which is the whole of law 9's claim - a DST day is 23
+    # or 25 real hours because the arithmetic is done on instants, with no
+    # special case anywhere in the fold.
+    terms = envelopes.NamedClaim(
+        "TradeTerms",
+        {
+            "org": "acme",
+            "trade": "T-1",
+            "quantity": "10",
+            "price": "90",
+            "delivery_start": start.strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "delivery_end": end.strftime("%Y-%m-%dT%H:%M:%SZ"),
+        },
     )
     fold = fold_transition([captured, terms], [])
     assert len(fold.positions) == hours

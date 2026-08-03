@@ -36,7 +36,7 @@ def client_with(tmp_path: Path, stdout: str) -> GlasshouseClient:
 
 def _verify_report(tmp_path: Path, replay: dict, tree: dict):  # type: ignore[type-arg, no-untyped-def]
     """The typed `verify` envelope, via a fake binary playing it back."""
-    return client_with(tmp_path, json.dumps({"replay": replay, "tree": tree})).verify()
+    return client_with(tmp_path, json.dumps({"replay": replay, "tree": tree})).audit_verify()
 
 
 def test_the_model_leg_names_both_hashes_on_divergence(tmp_path: Path) -> None:

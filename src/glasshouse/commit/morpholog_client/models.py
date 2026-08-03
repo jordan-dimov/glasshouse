@@ -25,7 +25,7 @@ class GrantCaptureAuthorityRequest:
     org: str
     book: str
 
-    def to_args_named(self) -> dict:
+    def to_args_named(self) -> dict[str, object]:
         return {
             "principal": values.encode_named(self.principal),
             "org": values.encode_named(self.org),
@@ -43,7 +43,7 @@ class GrantCurveAuthorityRequest:
     org: str
     market: str
 
-    def to_args_named(self) -> dict:
+    def to_args_named(self) -> dict[str, object]:
         return {
             "principal": values.encode_named(self.principal),
             "org": values.encode_named(self.org),
@@ -61,7 +61,7 @@ class GrantValuationAuthorityRequest:
     org: str
     book: str
 
-    def to_args_named(self) -> dict:
+    def to_args_named(self) -> dict[str, object]:
         return {
             "principal": values.encode_named(self.principal),
             "org": values.encode_named(self.org),
@@ -87,7 +87,7 @@ class CaptureTradeRequest:
     delivery_start: datetime
     delivery_end: datetime
 
-    def to_args_named(self) -> dict:
+    def to_args_named(self) -> dict[str, object]:
         return {
             "org": values.encode_named(self.org),
             "book": values.encode_named(self.book),
@@ -114,7 +114,7 @@ class RegisterCurveRequest:
     version: str
     payload_hash: str
 
-    def to_args_named(self) -> dict:
+    def to_args_named(self) -> dict[str, object]:
         return {
             "org": values.encode_named(self.org),
             "market": values.encode_named(self.market),
@@ -137,7 +137,7 @@ class CorrectCurveRequest:
     new_version: str
     payload_hash: str
 
-    def to_args_named(self) -> dict:
+    def to_args_named(self) -> dict[str, object]:
         return {
             "org": values.encode_named(self.org),
             "market": values.encode_named(self.market),
@@ -161,7 +161,7 @@ class AdmitValuationRequest:
     mtm: Decimal
     # amount in EUR (the declaration carries the unit)
 
-    def to_args_named(self) -> dict:
+    def to_args_named(self) -> dict[str, object]:
         return {
             "org": values.encode_named(self.org),
             "book": values.encode_named(self.book),
@@ -182,7 +182,7 @@ class MayCaptureTradeClaim:
     book: str
 
     @classmethod
-    def from_named(cls, args: dict) -> "MayCaptureTradeClaim":
+    def from_named(cls, args: dict[str, object]) -> MayCaptureTradeClaim:
         raw = args["actor"]
         actor = raw
         raw = args["org"]
@@ -203,7 +203,7 @@ class MayRegisterCurveClaim:
     market: str
 
     @classmethod
-    def from_named(cls, args: dict) -> "MayRegisterCurveClaim":
+    def from_named(cls, args: dict[str, object]) -> MayRegisterCurveClaim:
         raw = args["actor"]
         actor = raw
         raw = args["org"]
@@ -224,7 +224,7 @@ class MayValueTradeClaim:
     book: str
 
     @classmethod
-    def from_named(cls, args: dict) -> "MayValueTradeClaim":
+    def from_named(cls, args: dict[str, object]) -> MayValueTradeClaim:
         raw = args["actor"]
         actor = raw
         raw = args["org"]
@@ -248,7 +248,7 @@ class TradeCapturedClaim:
     direction: str
 
     @classmethod
-    def from_named(cls, args: dict) -> "TradeCapturedClaim":
+    def from_named(cls, args: dict[str, object]) -> TradeCapturedClaim:
         raw = args["org"]
         org = raw
         raw = args["book"]
@@ -279,7 +279,7 @@ class TradeTermsClaim:
     delivery_end: datetime
 
     @classmethod
-    def from_named(cls, args: dict) -> "TradeTermsClaim":
+    def from_named(cls, args: dict[str, object]) -> TradeTermsClaim:
         raw = args["org"]
         org = raw
         raw = args["trade"]
@@ -308,7 +308,7 @@ class CurveRegisteredClaim:
     payload_hash: str
 
     @classmethod
-    def from_named(cls, args: dict) -> "CurveRegisteredClaim":
+    def from_named(cls, args: dict[str, object]) -> CurveRegisteredClaim:
         raw = args["org"]
         org = raw
         raw = args["market"]
@@ -334,7 +334,7 @@ class OfficialCurveClaim:
     version: str
 
     @classmethod
-    def from_named(cls, args: dict) -> "OfficialCurveClaim":
+    def from_named(cls, args: dict[str, object]) -> OfficialCurveClaim:
         raw = args["org"]
         org = raw
         raw = args["market"]
@@ -356,7 +356,7 @@ class CurveSupersedesClaim:
     prior_version: str
 
     @classmethod
-    def from_named(cls, args: dict) -> "CurveSupersedesClaim":
+    def from_named(cls, args: dict[str, object]) -> CurveSupersedesClaim:
         raw = args["new_version"]
         new_version = raw
         raw = args["prior_version"]
@@ -378,7 +378,7 @@ class TradeValuedClaim:
     # amount in EUR (the declaration carries the unit)
 
     @classmethod
-    def from_named(cls, args: dict) -> "TradeValuedClaim":
+    def from_named(cls, args: dict[str, object]) -> TradeValuedClaim:
         raw = args["org"]
         org = raw
         raw = args["book"]

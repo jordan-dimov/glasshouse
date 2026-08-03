@@ -244,7 +244,7 @@ def checkpoint_command(
     database_url: DatabaseUrl = "",
 ) -> None:
     client = _client(_db(database_url))
-    outcome = client.write_checkpoint(out) if out else client.checkpoint()
+    outcome = client.write_checkpoint(out) if out else client.audit_checkpoint()
     kind = "created" if isinstance(outcome, CheckpointCreated) else "no new rows"
     checkpoint = outcome.checkpoint
     print(f"checkpoint {kind}: tree_size {checkpoint.tree_size}, hash {checkpoint.checkpoint_hash}")
@@ -284,7 +284,7 @@ def evidence_verify_command(
     # a rejected demo password in the environment must not be able to
     # stop a valid pack from being verified.
     client = GlasshouseClient(str(MODEL_FILE), "")
-    verdict = client.evidence_verify(str(pack), anchor_file=str(anchor) if anchor else None)
+    verdict = client.audit_verify_pack(str(pack), anchor_file=str(anchor) if anchor else None)
     intact = isinstance(verdict, TreeIntact)
     print(f"evidence verify: {'intact' if intact else type(verdict).__name__.removeprefix('Tree')}")
     if not intact:

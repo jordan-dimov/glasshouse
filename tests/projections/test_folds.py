@@ -17,16 +17,40 @@ T0 = dt.datetime(2026, 7, 1, tzinfo=dt.UTC)
 SIGN = {"buy": Decimal(1), "sell": Decimal(-1)}
 
 
-def captured(trade: str = "T-1", direction: str = "buy") -> envelopes.ClaimInstance:
-    return envelopes.ClaimInstance(
-        "TradeCaptured", ["acme", "spec-de", trade, "stadtwerk-x", "de-power", direction]
+def _ts(moment: dt.datetime) -> str:
+    """As the named tail spells an instant: RFC 3339, zone-less UTC."""
+    return moment.astimezone(dt.UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+# The named tail carries BARE wire values - decimals and instants as
+# strings, decoded by the generated `from_named`. These fixtures spell
+# them the way the binary does, so a fold that only works on
+# already-typed values cannot pass here.
+def captured(trade: str = "T-1", direction: str = "buy") -> envelopes.NamedClaim:
+    return envelopes.NamedClaim(
+        "TradeCaptured",
+        {
+            "org": "acme",
+            "book": "spec-de",
+            "trade": trade,
+            "counterparty": "stadtwerk-x",
+            "market": "de-power",
+            "direction": direction,
+        },
     )
 
 
-def terms(trade: str = "T-1", quantity: str = "10", hours: int = 3) -> envelopes.ClaimInstance:
-    return envelopes.ClaimInstance(
+def terms(trade: str = "T-1", quantity: str = "10", hours: int = 3) -> envelopes.NamedClaim:
+    return envelopes.NamedClaim(
         "TradeTerms",
-        ["acme", trade, Decimal(quantity), Decimal("86.25"), T0, T0 + dt.timedelta(hours=hours)],
+        {
+            "org": "acme",
+            "trade": trade,
+            "quantity": quantity,
+            "price": "86.25",
+            "delivery_start": _ts(T0),
+            "delivery_end": _ts(T0 + dt.timedelta(hours=hours)),
+        },
     )
 
 
@@ -51,8 +75,15 @@ def test_buy_and_sell_net_to_zero() -> None:
 def test_a_valuation_becomes_one_row() -> None:
     fold = fold_transition(
         [
-            envelopes.ClaimInstance(
-                "TradeValued", ["acme", "spec-de", "T-1", "crv-v1", Decimal("55.00")]
+            envelopes.NamedClaim(
+                "TradeValued",
+                {
+                    "org": "acme",
+                    "book": "spec-de",
+                    "trade": "T-1",
+                    "curve_version": "crv-v1",
+                    "mtm": "55.00",
+                },
             )
         ],
         [],
@@ -64,20 +95,42 @@ def test_a_valuation_becomes_one_row() -> None:
 def test_the_deliberately_ignored_predicates_fold_to_nothing() -> None:
     fold = fold_transition(
         [
-            envelopes.ClaimInstance("MayCaptureTrade", ["alice", "acme", "spec-de"]),
-            envelopes.ClaimInstance(
-                "CurveRegistered",
-                ["acme", "de-power", dt.date(2026, 6, 8), "crv-v2", "sha256:bb"],
+            envelopes.NamedClaim(
+                "MayCaptureTrade", {"actor": "alice", "org": "acme", "book": "spec-de"}
             ),
-            envelopes.ClaimInstance("CurveSupersedes", ["crv-v2", "crv-v1"]),
-            envelopes.ClaimInstance(
-                "OfficialCurve", ["acme", "de-power", dt.date(2026, 6, 8), "crv-v2"]
+            envelopes.NamedClaim(
+                "CurveRegistered",
+                {
+                    "org": "acme",
+                    "market": "de-power",
+                    "as_of": "2026-06-08",
+                    "version": "crv-v2",
+                    "payload_hash": "sha256:bb",
+                },
+            ),
+            envelopes.NamedClaim(
+                "CurveSupersedes", {"new_version": "crv-v2", "prior_version": "crv-v1"}
+            ),
+            envelopes.NamedClaim(
+                "OfficialCurve",
+                {
+                    "org": "acme",
+                    "market": "de-power",
+                    "as_of": "2026-06-08",
+                    "version": "crv-v2",
+                },
             ),
         ],
         # correct_curve retracts the official pointer: a no-op here.
         [
-            envelopes.ClaimInstance(
-                "OfficialCurve", ["acme", "de-power", dt.date(2026, 6, 8), "crv-v1"]
+            envelopes.NamedClaim(
+                "OfficialCurve",
+                {
+                    "org": "acme",
+                    "market": "de-power",
+                    "as_of": "2026-06-08",
+                    "version": "crv-v1",
+                },
             )
         ],
     )
@@ -86,9 +139,9 @@ def test_the_deliberately_ignored_predicates_fold_to_nothing() -> None:
 
 def test_refusals_are_loud() -> None:
     with pytest.raises(ProjectionError, match="append-only TradeValued"):
-        fold_transition([], [envelopes.ClaimInstance("TradeValued", [])])
+        fold_transition([], [envelopes.NamedClaim("TradeValued", {})])
     with pytest.raises(ProjectionError, match="no fold covers"):
-        fold_transition([envelopes.ClaimInstance("BrandNewPredicate", [])], [])
+        fold_transition([envelopes.NamedClaim("BrandNewPredicate", {})], [])
     with pytest.raises(ProjectionError, match="without TradeTerms"):
         fold_transition([captured()], [])
     with pytest.raises(ProjectionError, match="without its TradeCaptured"):
@@ -119,18 +172,33 @@ def trade_books(draw: st.DrawFn) -> list[tuple[str, str, Decimal, int]]:
     ]
 
 
-def _claims(specs: list[tuple[str, str, Decimal, int]]) -> list[envelopes.ClaimInstance]:
-    asserted: list[envelopes.ClaimInstance] = []
+def _claims(specs: list[tuple[str, str, Decimal, int]]) -> list[envelopes.NamedClaim]:
+    asserted: list[envelopes.NamedClaim] = []
     for trade, direction, quantity, hours in specs:
         asserted.append(
-            envelopes.ClaimInstance(
-                "TradeCaptured", ["acme", "spec-de", trade, "cp", "de-power", direction]
+            envelopes.NamedClaim(
+                "TradeCaptured",
+                {
+                    "org": "acme",
+                    "book": "spec-de",
+                    "trade": trade,
+                    "counterparty": "cp",
+                    "market": "de-power",
+                    "direction": direction,
+                },
             )
         )
         asserted.append(
-            envelopes.ClaimInstance(
+            envelopes.NamedClaim(
                 "TradeTerms",
-                ["acme", trade, quantity, Decimal("50"), T0, T0 + dt.timedelta(hours=hours)],
+                {
+                    "org": "acme",
+                    "trade": trade,
+                    "quantity": str(quantity),
+                    "price": "50",
+                    "delivery_start": _ts(T0),
+                    "delivery_end": _ts(T0 + dt.timedelta(hours=hours)),
+                },
             )
         )
     return asserted
@@ -160,21 +228,25 @@ def test_the_fold_conserves_trades_and_signed_hours(
 
 
 def test_the_wire_shape_decodes_into_the_fold() -> None:
-    # As the audit log carries it: tagged args, decoded by the same
-    # codecs the commit zone uses.
+    # As the NAMED audit tail carries it: args keyed by declared field,
+    # values bare (the unit rides on the declaration, not the value), and
+    # from_json decoding nothing - the typing is the generated model's
+    # job. Decoded here through the real envelope rather than a
+    # hand-built NamedClaim, so the fold is exercised against the shape
+    # the binary actually emits.
     wire_terms = {
         "predicate": "TradeTerms",
-        "args": [
-            {"type": "subject", "value": "acme"},
-            {"type": "subject", "value": "T-1"},
-            {"type": "quantity", "value": {"amount": "10", "unit": "MW"}},
-            {"type": "decimal", "value": "86.25"},
-            {"type": "timestamp", "value": "2026-07-01T00:00:00Z"},
-            {"type": "timestamp", "value": "2026-07-01T03:00:00Z"},
-        ],
+        "args": {
+            "org": "acme",
+            "trade": "T-1",
+            "quantity": "10",
+            "price": "86.25",
+            "delivery_start": "2026-07-01T00:00:00Z",
+            "delivery_end": "2026-07-01T03:00:00Z",
+        },
     }
     fold = fold_transition(
-        [captured(), envelopes.ClaimInstance.from_json(wire_terms)],
+        [captured(), envelopes.NamedClaim.from_json(wire_terms)],
         [],
     )
     assert fold.positions[0].delta_mw == Decimal("10")

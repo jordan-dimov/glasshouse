@@ -39,7 +39,7 @@ def anchored() -> GlasshouseClient:
         ),
         Committed,
     )
-    outcome = client.checkpoint()
+    outcome = client.audit_checkpoint()
     assert isinstance(outcome, CheckpointCreated)
     assert outcome.checkpoint.tree_size > 0
     return client
@@ -50,12 +50,12 @@ def test_an_evidence_pack_verifies_intact_offline(
 ) -> None:
     # Export the pack covering a specific checkpoint (no new rows since
     # the fixture, so this names the fixture's checkpoint by tree_size).
-    tree_size = anchored.checkpoint().checkpoint.tree_size
+    tree_size = anchored.audit_checkpoint().checkpoint.tree_size
     pack = tmp_path / "pack.json"
     anchored.export_evidence_pack(pack, tree_size=tree_size)
     assert pack.exists()
     # evidence_verify takes no database - the offline guarantee.
-    assert isinstance(anchored.evidence_verify(str(pack)), TreeIntact)
+    assert isinstance(anchored.audit_verify_pack(str(pack)), TreeIntact)
 
 
 def test_a_tampered_pack_is_caught(anchored: GlasshouseClient, tmp_path: Path) -> None:
@@ -67,7 +67,7 @@ def test_a_tampered_pack_is_caught(anchored: GlasshouseClient, tmp_path: Path) -
     root = data["checkpoints"][0]["root_hash"]
     data["checkpoints"][0]["root_hash"] = root[:-1] + ("0" if root[-1] != "0" else "1")
     pack.write_text(json.dumps(data))
-    assert not isinstance(anchored.evidence_verify(str(pack)), TreeIntact)
+    assert not isinstance(anchored.audit_verify_pack(str(pack)), TreeIntact)
 
 
 def test_the_cli_checkpoints_exports_and_verifies(

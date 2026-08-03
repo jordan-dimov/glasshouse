@@ -64,7 +64,7 @@ def test_verify_passes_the_views_schema_flag_through(tmp_path: Path) -> None:
     )
     binary = fake_binary(tmp_path, report_json)
     client = GlasshouseClient("model.morph", "postgres:///x", binary=str(binary))
-    report = client.verify(views_schema="morpholog_views")
+    report = client.audit_verify(views_schema="morpholog_views")
     assert report.views == envelopes.ViewsIntact(views_checked=10)
     argv = (tmp_path / "argv.txt").read_text().splitlines()
     assert argv[argv.index("--views-schema") + 1] == "morpholog_views"
@@ -82,7 +82,7 @@ def test_verify_without_the_flag_matches_the_generated_call(tmp_path: Path) -> N
     client = GlasshouseClient(
         "model.morph", "postgres:///x", binary=str(fake_binary(tmp_path, report_json))
     )
-    assert client.verify().views is None
+    assert client.audit_verify().views is None
     argv = (tmp_path / "argv.txt").read_text().splitlines()
     assert "--views-schema" not in argv
 
@@ -117,23 +117,59 @@ def test_the_configured_writer_roles_reach_every_audit_tail(tmp_path: Path, call
 
 
 def test_the_configured_writer_roles_reach_both_checkpoint_paths(tmp_path: Path) -> None:
-    # `checkpoint` shares the audit tail's resume horizon, and
-    # `write_checkpoint` builds its own argv - both carry the assertion.
+    # `audit_checkpoint` shares the audit tail's resume horizon, and
+    # `write_checkpoint` builds its own argv - both carry the assertion,
+    # and both must name the same subcommand the binary now answers to.
+    #
+    # The subcommand assertion is not incidental. Our overrides carry the
+    # deployment's writer-role assertion, so when upstream v0.0.8 gathered
+    # the family under `morpholog audit`, the renamed base left our
+    # `checkpoint` override overriding nothing: a dead method, the flag
+    # silently unsent, and mypy content. Pinning the argv here is what
+    # makes that a failing pure test rather than a managed-PostgreSQL
+    # surprise.
     client = GlasshouseClient(
         "model.morph",
         "postgres:///x",
         binary=str(fake_binary(tmp_path, CHECKPOINT)),
         writer_roles=["app_user"],
     )
-    client.checkpoint()
+    client.audit_checkpoint()
     argv = (tmp_path / "argv.txt").read_text().splitlines()
+    assert argv[:2] == ["audit", "checkpoint"]
     assert argv[argv.index("--writer-role") + 1] == "app_user"
 
     anchor = tmp_path / "anchor.json"
     client.write_checkpoint(anchor)
     argv = (tmp_path / "argv.txt").read_text().splitlines()
+    assert argv[:2] == ["audit", "checkpoint"]
     assert argv[argv.index("--writer-role") + 1] == "app_user"
     assert json.loads(anchor.read_text())["tree_size"] == 3
+
+
+def test_the_hand_built_pack_export_names_the_audit_subcommand(tmp_path: Path) -> None:
+    # The other hand-built argv, pinned for the same reason: it is the one
+    # call the generated adapter does not spell for us, so a future
+    # regrouping upstream would otherwise reach it only in a live test.
+    # An empty but well-formed pack: the export path parses once to
+    # refuse malformed bytes, so the payload has to satisfy the envelope.
+    pack = json.dumps(
+        {
+            "manifest": {
+                "pack_format_version": 1,
+                "tree_size": 0,
+                "root_hash": "sha256:00",
+                "checkpoint_hash": "sha256:01",
+            },
+            "checkpoints": [],
+            "rows": [],
+        }
+    )
+    client = GlasshouseClient(
+        "model.morph", "postgres:///x", binary=str(fake_binary(tmp_path, pack))
+    )
+    client.export_evidence_pack(tmp_path / "pack.json")
+    assert (tmp_path / "argv.txt").read_text().splitlines()[:2] == ["audit", "export"]
 
 
 def test_without_configured_roles_the_horizon_stays_the_blessed_default(tmp_path: Path) -> None:
@@ -199,7 +235,7 @@ def test_our_client_redacts_the_database_url_in_errors(tmp_path: Path) -> None:
     secret = "postgresql://user:s3cr3t@db/x"
     client = GlasshouseClient("model.morph", secret, binary=str(binary))
     with pytest.raises(MorphologError) as caught:
-        client.verify()
+        client.audit_verify()
     assert "s3cr3t" not in str(caught.value)
 
 
@@ -211,6 +247,6 @@ def test_a_driver_echoing_the_conninfo_in_stderr_is_redacted(tmp_path: Path) -> 
     binary = fake_binary(tmp_path, "", stderr=f"FATAL: could not connect to {secret}", exit_code=1)
     client = GlasshouseClient("model.morph", secret, binary=str(binary))
     with pytest.raises(MorphologError) as caught:
-        client.verify()
+        client.audit_verify()
     assert "s3cr3t" not in str(caught.value)
     assert "<redacted>" in str(caught.value)

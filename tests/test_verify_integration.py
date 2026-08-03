@@ -104,7 +104,7 @@ def monday(morpholog: GlasshouseClient, engine: sa.Engine, store: CurveStore) ->
     apply_views(engine)
     # Anchor a tamper-evidence checkpoint so the tree leg verifies a real
     # history tree, not a trivially-empty one.
-    morpholog.checkpoint()
+    morpholog.audit_checkpoint()
 
 
 def _leg(report: Any, name: str) -> Any:
@@ -158,7 +158,7 @@ def test_verify_survives_a_failing_verify_call(
     def boom(**_kwargs: object) -> object:
         raise MorphologError("verify exploded")
 
-    monkeypatch.setattr(morpholog, "verify", boom)
+    monkeypatch.setattr(morpholog, "audit_verify", boom)
     report = verify(morpholog, engine, store)
     assert "could not run" in _leg(report, "ledger").detail
     assert not _leg(report, "ledger").ok

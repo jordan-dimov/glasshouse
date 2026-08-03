@@ -95,7 +95,7 @@ def test_the_applied_surface_seals_itself(applied: sa.Engine) -> None:
     # catalogue, seal and live views verifies intact over the whole
     # inventory: nine predicate views plus the catalogue itself.
     client = GlasshouseClient(str(MODEL_FILE), DB, binary=str(BINARY))
-    verdict = client.verify(views_schema=VIEWS_SCHEMA).views
+    verdict = client.audit_verify(views_schema=VIEWS_SCHEMA).views
     assert verdict == envelopes.ViewsIntact(views_checked=10)
 
 
