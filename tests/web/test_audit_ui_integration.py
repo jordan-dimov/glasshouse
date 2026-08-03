@@ -95,5 +95,5 @@ def test_the_evidence_loop_closes_offline(ui: TestClient, tmp_path) -> None:  # 
     anchor_file.write_bytes(anchor.content)
     # The downloads verify offline against each other - no database.
     offline = GlasshouseClient(str(MODEL_FILE), "", binary=str(BINARY))
-    verdict = offline.evidence_verify(str(pack_file), anchor_file=str(anchor_file))
+    verdict = offline.audit_verify_pack(str(pack_file), anchor_file=str(anchor_file))
     assert isinstance(verdict, TreeIntact)

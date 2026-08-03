@@ -160,7 +160,12 @@ def import_trades(
     accepted, quarantined = parse_trades(text, org=org)
     outcomes = list(quarantined)
     if accepted:
-        rows = [
+        # Annotated, not inferred: the batch row is a heterogeneous
+        # envelope (two strings and an argument object), and inference
+        # narrows it to the join of those value types, which no longer
+        # matches the generated `list[dict[str, object]]` under dict
+        # invariance.
+        rows: list[dict[str, object]] = [
             {
                 "transformation": req.TRANSFORMATION,
                 "actor": actor,
