@@ -5,10 +5,10 @@ Six independent legs, each its own verdict:
 
 * **model** - the deployed binary names the same rules as the committed
   client (`morpholog hash` vs the generated `MODEL_HASH`);
-* **ledger** - `morpholog verify`'s replay verdict: the audit log
+* **ledger** - `morpholog audit verify`'s replay verdict: the audit log
   replays to the claims table (two independent records of the same
   history), read from the typed `VerifyReport.replay`;
-* **tree** - the same `verify` call's Merkle history-tree verdict
+* **tree** - the same `audit verify` call's Merkle history-tree verdict
   (`VerifyReport.tree`): the checkpointed prefix is internally
   consistent and unrewritten. Trivially intact until `glasshouse
   checkpoint` has anchored something; meaningful once it has;
