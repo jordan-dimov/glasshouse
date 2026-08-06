@@ -31,7 +31,7 @@ dev = [
     "pytest-randomly>=4.0",
     "hypothesis>=6.161.2",
     "httpx>=0.28",
-    "ruff>=0.15.20",
+    "ruff>=0.16.1",
     "mypy>=2.3.0",
 ]
 
