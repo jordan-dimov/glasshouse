@@ -19,7 +19,7 @@ jobs:
         python-version: ["3.13", "3.14"]
     steps:
       - uses: actions/checkout@v7
-      - uses: astral-sh/setup-uv@v9.0.0
+      - uses: astral-sh/setup-uv@v10.0.1
         with:
           python-version: ${{ matrix.python-version }}
       - run: uv lock --check
@@ -58,7 +58,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - run: ./scripts/install-morpholog.sh "$RUNNER_TEMP/morpholog"
-      - uses: astral-sh/setup-uv@v9.0.0
+      - uses: astral-sh/setup-uv@v10.0.1
         with:
           python-version: "3.13"
       - run: uv sync --dev

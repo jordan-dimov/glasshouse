@@ -47,7 +47,7 @@ jobs:
       # download intact and nothing more; that is the right trade for a
       # job that gates nothing.
       - run: ./scripts/install-morpholog.sh "$RUNNER_TEMP/morpholog" main-latest
-      - uses: astral-sh/setup-uv@v9.0.0
+      - uses: astral-sh/setup-uv@v10.0.1
         with:
           python-version: "3.13"
       - run: uv sync --dev
