@@ -30,7 +30,7 @@ dev = [
     "pytest-cov>=7.0",
     "pytest-randomly>=4.0",
     "hypothesis>=6.161.2",
-    "httpx>=0.28",
+    "httpx2>=2.12",
     "ruff>=0.15.20",
     "mypy>=2.3.0",
 ]
@@ -78,6 +78,22 @@ select = [
     "PLC",  # pylint conventions
     "PLE",  # pylint errors
     "PLW",  # pylint warnings
+    # Added 23/08/2026, each trialled against the codebase first and
+    # every one of them already clean - they cost nothing today and
+    # refuse a regression tomorrow, which is the only reason to take a
+    # rule you are not currently failing.
+    "ASYNC", # blocking calls inside async def
+    "BLE",   # blind except
+    "ICN",   # import naming conventions
+    "LOG",   # logging misuse
+    "PGH",   # blanket noqa / blanket type: ignore
+    "PIE",   # miscellaneous simplifications
+    "PYI",   # stub-file correctness
+    "RSE",   # raise cleanliness
+    "SLOT",  # __slots__ on subclasses of immutables
+    "T10",   # stray debugger imports
+    "TID",   # tidy imports
+    "YTT",   # sys.version misuse
 ]
 ignore = [
     # House doctrine: money and quantities are Decimal FROM STRINGS,
@@ -110,6 +126,20 @@ enable_error_code = [
     "redundant-expr",
     "truthy-bool",
     "possibly-undefined",
+    # Added 23/08/2026, all clean when trialled. `explicit-override` is
+    # the one with a scar behind it: v0.0.8 renamed a generated method
+    # and our override of it silently became a dead function carrying
+    # the deployment's writer-role assertion nowhere (contract doc
+    # section 22). `@override` makes the next such rename a type error.
+    "explicit-override",
+    # A deprecated library API should surface when we upgrade to the
+    # release that deprecates it, not when a later one deletes it.
+    "deprecated",
+    "mutable-override",
+    "truthy-iterable",
+    "unused-awaitable",
+    "exhaustive-match",
+    "narrowed-type-not-subtype",
 ]
 files = ["src", "tests"]
 
@@ -126,12 +156,6 @@ ignore_errors = true
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-q"
-filterwarnings = [
-    # Upstream noise: starlette's testclient warns about its own httpx
-    # dependency when fastapi imports it; the migration (httpx -> httpx2)
-    # is starlette/fastapi's to make, not ours.
-    "ignore::starlette.exceptions.StarletteDeprecationWarning",
-]
 
 # Coverage is opt-in locally (`uv run pytest --cov`) and enforced in
 # CI's integration job, where the full suite runs. The generated client

@@ -2,13 +2,35 @@
 # action majors (the Node-runtime treadmill) and Python dependencies
 # (uv lockfile aware). Updates arrive as PRs and pass the same gates
 # as everything else, including the live integration job.
+#
+# GROUPED, after ungrouped updates taught the lesson (23/08/2026): six
+# open PRs had accumulated, and because each one edits `uv.lock` - the
+# same `requires-dist` block - merging any one of them left the rest
+# conflicting. Clearing the backlog cost a rebase and a full CI cycle
+# per PR, and by the time each landed its own bump was already stale.
+# One PR per group means one lock resolution, one review and one CI run
+# for a whole week's drift.
+#
+# Runtime and development dependencies stay apart on purpose: a bump to
+# what the deployed image installs deserves a different reading from a
+# bump to the linter, even when both are green.
 version: 2
 updates:
   - package-ecosystem: github-actions
     directory: /
     schedule:
       interval: weekly
+    groups:
+      actions:
+        patterns: ["*"]
   - package-ecosystem: uv
     directory: /
     schedule:
       interval: weekly
+    groups:
+      runtime:
+        dependency-type: production
+        patterns: ["*"]
+      development:
+        dependency-type: development
+        patterns: ["*"]

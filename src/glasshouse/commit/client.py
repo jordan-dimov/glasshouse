@@ -39,7 +39,7 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
-from typing import ClassVar, Protocol, Self
+from typing import ClassVar, Protocol, Self, override
 
 from glasshouse.commit.morpholog_client import envelopes
 from glasshouse.commit.morpholog_client.adapter import Morpholog
@@ -96,17 +96,25 @@ class GlasshouseClient(Morpholog):
     # deployment's writer-role assertion stops reaching the binary with
     # nothing failing - the managed-PostgreSQL horizon bug back again, and
     # invisible to every self-hosted test. The v0.0.8 `audit` grouping
-    # renamed `checkpoint` to `audit_checkpoint` and did exactly that;
-    # `tests/commit/test_client.py` pins the argv each one emits, which is
-    # what catches it rather than mypy.
+    # renamed `checkpoint` to `audit_checkpoint` and did exactly that.
+    #
+    # `@override` is the guard that failure earned: mypy now refuses a
+    # method here that overrides nothing, so the next regrouping is a
+    # type error at the moment the client is regenerated rather than a
+    # dead function nobody notices. `tests/commit/test_client.py` still
+    # pins the argv each one emits - the decorator proves the method is
+    # reached, the test proves it sends the flag.
+    @override
     def audit(self, after: str | None = None, *, writer_roles: list[str] | None = None) -> list:  # type: ignore[type-arg]
         return super().audit(after, writer_roles=self._asserted(writer_roles))
 
+    @override
     def audit_named(
         self, after: str | None = None, *, writer_roles: list[str] | None = None
     ) -> list:  # type: ignore[type-arg]
         return super().audit_named(after, writer_roles=self._asserted(writer_roles))
 
+    @override
     def audit_checkpoint(
         self,
         signing_key: str | None = None,

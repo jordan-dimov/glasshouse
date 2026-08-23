@@ -14,8 +14,12 @@ pytestmark = needs_live_stack
 
 def test_readyz_is_200_when_everything_agrees(monkeypatch: pytest.MonkeyPatch) -> None:
     provision()
-    client = GlasshouseClient(str(MODEL_FILE), DB, binary=str(BINARY))
-    assert client.init().status == "initialised"
+    # Two clients, two names: the commit-layer one provisions the ledger
+    # the probe will read, the HTTP one asks the probe. They shared a
+    # name until starlette 1.6 typed TestClient properly and mypy could
+    # finally see the rebind.
+    morpholog = GlasshouseClient(str(MODEL_FILE), DB, binary=str(BINARY))
+    assert morpholog.init().status == "initialised"
 
     monkeypatch.setenv("GLASSHOUSE_DATABASE_URL", DB)
     monkeypatch.setenv("GLASSHOUSE_MORPHOLOG_BIN", str(BINARY))
