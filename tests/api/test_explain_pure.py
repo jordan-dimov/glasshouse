@@ -10,7 +10,7 @@ never reached: explain runs the binary, which here ignores it.
 import json
 from pathlib import Path
 
-import httpx
+import httpx2 as httpx
 import pytest
 from fastapi.testclient import TestClient
 
