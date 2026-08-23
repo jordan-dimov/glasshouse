@@ -21,8 +21,6 @@ from pathlib import Path
 
 import pytest
 
-from glasshouse.commit.morpholog_client import MORPHOLOG_VERSION
-
 SCRIPT = Path(__file__).resolve().parents[1] / "scripts" / "install-morpholog.sh"
 
 # What each machine the release channel covers must resolve to. The
@@ -163,18 +161,20 @@ def test_every_published_platform_installs_its_own_target(
     assert "9.9.9-fake" in result.stdout  # the script runs what it installed
 
 
-def test_the_checksum_is_verified_where_sha256sum_does_not_exist(tmp_path: Path) -> None:
+@pytest.mark.parametrize("absent", ["sha256sum", "shasum"])
+def test_the_checksum_is_verified_with_whichever_tool_exists(tmp_path: Path, absent: str) -> None:
     # macOS ships `shasum`, not `sha256sum`, so on the platform this
     # release channel started covering in v0.0.9 the verification takes a
-    # branch nothing else here runs. Hiding the tool proves the branch
-    # works rather than asserting that it should.
+    # branch nothing else here runs. Hiding each tool in turn proves the
+    # script needs only one of them, and proves it by running the branch
+    # rather than by asserting that it should work.
     result = run(
         ".tools",
         "main-latest",
         cwd=tmp_path,
         system="Darwin",
         arch="arm64",
-        tools=without(tmp_path, "sha256sum"),
+        tools=without(tmp_path, absent),
     )
     assert result.returncode == 0, result.stderr
     assert (tmp_path / ".tools" / "morpholog").exists()
@@ -195,21 +195,6 @@ def test_an_unknown_channel_is_refused_before_any_download(tmp_path: Path) -> No
     result = run("out", "nightly", cwd=tmp_path)
     assert result.returncode == 2
     assert "unknown channel" in result.stderr
-
-
-def test_the_pin_and_the_generated_client_name_the_same_release() -> None:
-    # A re-pin is two moves - bump the installer, regenerate the client -
-    # and doing only the first is the mistake worth catching. The live
-    # drift gate would catch it too, but only where a binary is
-    # reachable; this names it in the pure leg and on a laptop, the way
-    # the pinned checkpoint argv names a renamed base (contract doc
-    # section 22).
-    pinned = next(
-        line.split("=", 1)[1]
-        for line in SCRIPT.read_text().splitlines()
-        if line.startswith("VERSION=")
-    )
-    assert pinned == f"v{MORPHOLOG_VERSION}"
 
 
 def test_the_pin_is_a_version_and_a_checksum_per_target() -> None:

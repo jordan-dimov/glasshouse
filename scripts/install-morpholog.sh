@@ -13,11 +13,12 @@
 # client and the view surface, and let the drift gate prove they agree.
 #
 # The release channel replaces a from-source cargo build. The published
-# artefacts are static musl binaries for linux and a signed-target build
-# for Apple Silicon, so there is no toolchain, no MSRV to track and no
-# build cache to warm - and the checksum, not a mutable git tag, is what
-# makes the pin immutable. Each target carries its own checksum: a pin
-# is per-artefact, so there is no single "the" hash to record.
+# artefacts are static musl binaries for linux and a native build for
+# Apple Silicon, each built and smoke-tested on a runner of its own
+# architecture, so there is no toolchain, no MSRV to track and no build
+# cache to warm - and the checksum, not a mutable git tag, is what makes
+# the pin immutable. Each target carries its own checksum: a pin is
+# per-artefact, so there is no single "the" hash to record.
 #
 # THREE TARGETS, ONE PER LINE BELOW. Upstream published linux arm64 and
 # Apple Silicon in v0.0.9 (morpholog#249, forced by this script having
