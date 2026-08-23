@@ -48,6 +48,18 @@ def morpholog() -> GlasshouseClient:
     return GlasshouseClient(str(MODEL_FILE), DB, binary=str(BINARY))
 
 
+def _contents(root: Path) -> list[str]:
+    """Every regular file under a generated package, not only `*.py`: a
+    marker the generator starts emitting later (a `py.typed`, a manifest)
+    is part of the package the binary produces, and a glob that cannot
+    see it would report a package missing that file as drift-free."""
+    return sorted(
+        str(path.relative_to(root))
+        for path in root.rglob("*")
+        if path.is_file() and "__pycache__" not in path.parts
+    )
+
+
 def test_the_committed_client_is_what_the_binary_generates(tmp_path: Path) -> None:
     # The drift contract: the committed package is byte-identical to
     # what the live binary generates from the committed .morph. (CI has
@@ -61,8 +73,8 @@ def test_the_committed_client_is_what_the_binary_generates(tmp_path: Path) -> No
     assert proc.returncode == 0, proc.stderr
     committed_pkg = MODEL_FILE.parent / "morpholog_client"
     regenerated = tmp_path / "morpholog_client"
-    names = sorted(p.name for p in committed_pkg.glob("*.py"))
-    assert sorted(p.name for p in regenerated.glob("*.py")) == names
+    names = _contents(committed_pkg)
+    assert _contents(regenerated) == names, "the generated package gained or lost a file"
     _, mismatch, errors = filecmp.cmpfiles(committed_pkg, regenerated, names, shallow=False)
     assert (mismatch, errors) == ([], []), f"regenerate the client: {mismatch + errors}"
 

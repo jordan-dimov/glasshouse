@@ -9,22 +9,23 @@
 # Dockerfile, and a re-pin once updated only the first.)
 #
 # Re-pin in the same PR that adopts a new upstream surface, never
-# silently: bump VERSION and SHA256 together, regenerate the client and
-# the view surface, and let the drift gate prove they agree.
+# silently: bump VERSION and every SHA256_* together, regenerate the
+# client and the view surface, and let the drift gate prove they agree.
 #
 # The release channel replaces a from-source cargo build. The published
-# artefact is a static musl x86_64 binary, so there is no toolchain, no
-# MSRV to track and no build cache to warm - and the checksum, not a
-# mutable git tag, is what makes the pin immutable.
+# artefacts are static musl binaries for linux and a native build for
+# Apple Silicon, each built and smoke-tested on a runner of its own
+# architecture, so there is no toolchain, no MSRV to track and no build
+# cache to warm - and the checksum, not a mutable git tag, is what makes
+# the pin immutable. Each target carries its own checksum: a pin is
+# per-artefact, so there is no single "the" hash to record.
 #
-# ONE TARGET, STATED HONESTLY: upstream publishes linux x86_64 only, so
-# this script refuses every other platform by name instead of narrowing
-# what Glasshouse supports by accident. Development on macOS or ARM is
-# still the source build (morpholog's README) with
-# GLASSHOUSE_MORPHOLOG_BIN pointed at the result; only the convenience
-# is missing, not the capability. A release-matrix ask (linux arm64 and
-# macOS) is recorded in contract doc section 20: a public project should
-# not ask contributors to install Rust on the machines they own.
+# THREE TARGETS, ONE PER LINE BELOW. Upstream published linux arm64 and
+# Apple Silicon in v0.0.9 (morpholog#249, forced by this script having
+# to refuse a developer's own machine by name), so the no-toolchain
+# promise now holds wherever Glasshouse is developed. Intel Macs remain
+# the source build: GitHub retired the free Intel runner, and upstream
+# will not publish a binary no runner of that architecture has executed.
 #
 # Usage: install-morpholog.sh <dest-dir> [main-latest]
 #
@@ -36,8 +37,10 @@
 # for the substrate canary, which is deliberately never a merge gate.
 set -eu
 
-VERSION=v0.0.8
-SHA256=b454141daca602c2484dc8eb565840c4fec2b74248257f1c24c2af87fc4dc070
+VERSION=v0.0.10
+SHA256_LINUX_X86_64=dc3bac06d4c9e6df14836ff6548f7958e0f649c0185fc61016f244e3c3fbb487
+SHA256_LINUX_ARM64=e40347cd63ba4a5f5d9818a7758eb8c9b6ac6bc8a7ac3704cbbf1d3424b7b2c9
+SHA256_MACOS_ARM64=4bd9a7bddc48cb3115a4f0d8eaf4a46fbcd6db68ef5b9aca299f9cdecfa88b88
 
 dest=${1:?usage: install-morpholog.sh <dest-dir> [main-latest]}
 channel=${2:-pinned}
@@ -50,14 +53,21 @@ case "$dest" in
 *) dest="$(pwd)/$dest" ;;
 esac
 
-# The release channel publishes one target. Refuse anything else by name
-# rather than download a binary that cannot run here: the source build
-# (see the morpholog README) is the path on other platforms.
-if [ "$(uname -s)" != Linux ] || [ "$(uname -m)" != x86_64 ]; then
+# Select the artefact by machine, and refuse an unpublished platform by
+# name rather than download a binary that cannot run here. Target and
+# checksum are chosen in the same breath, so a target can never be
+# downloaded with no pin of its own to check it against.
+case "$(uname -s)/$(uname -m)" in
+Linux/x86_64) target=x86_64-unknown-linux-musl expected=$SHA256_LINUX_X86_64 ;;
+Linux/aarch64 | Linux/arm64) target=aarch64-unknown-linux-musl expected=$SHA256_LINUX_ARM64 ;;
+Darwin/arm64) target=aarch64-apple-darwin expected=$SHA256_MACOS_ARM64 ;;
+*)
     echo "no prebuilt morpholog for $(uname -s)/$(uname -m) - upstream publishes" \
-        "linux x86_64 only; build from source and point GLASSHOUSE_MORPHOLOG_BIN at it" >&2
+        "linux x86_64, linux arm64 and macOS on Apple Silicon; build from source" \
+        "and point GLASSHOUSE_MORPHOLOG_BIN at it" >&2
     exit 2
-fi
+    ;;
+esac
 
 case "$channel" in
 pinned) tag=$VERSION label=$VERSION ;;
@@ -68,7 +78,7 @@ main-latest) tag=main-latest label=main ;;
     ;;
 esac
 
-tarball="morpholog-${label}-x86_64-unknown-linux-musl.tar.gz"
+tarball="morpholog-${label}-${target}.tar.gz"
 base="https://github.com/jordan-dimov/morpholog/releases/download/${tag}"
 
 work=$(mktemp -d)
@@ -78,13 +88,20 @@ cd "$work"
 curl -fsSL -o "$tarball" "${base}/${tarball}"
 
 if [ "$channel" = pinned ]; then
-    echo "${SHA256}  ${tarball}" > expected.sha256
+    echo "${expected}  ${tarball}" > expected.sha256
 else
     curl -fsSL -o expected.sha256 "${base}/${tarball}.sha256"
 fi
-sha256sum -c expected.sha256
+
+# macOS ships shasum, not sha256sum. Choose before checking rather than
+# falling back after a failure, so a genuine mismatch reports as one.
+if command -v sha256sum > /dev/null 2>&1; then
+    sha256sum -c expected.sha256
+else
+    shasum -a 256 -c expected.sha256
+fi
 
 tar xzf "$tarball"
 mkdir -p "$dest"
-install -m 0755 "morpholog-${label}-x86_64-unknown-linux-musl/morpholog" "${dest}/morpholog"
+install -m 0755 "morpholog-${label}-${target}/morpholog" "${dest}/morpholog"
 "${dest}/morpholog" --version

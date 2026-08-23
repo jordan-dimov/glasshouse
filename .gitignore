@@ -26,6 +26,11 @@ build/
 
 # Local working notes (agent handover; public doctrine lives in DESIGN.md)
 CLAUDE.md
+
+# Local tool output: coverage, mutmut runs, and an in-repo destination
+# for the substrate binary (scripts/install-morpholog.sh takes any path;
+# this one keeps a pinned binary beside the checkout that pins it).
 .coverage
 mutants/
 .mutmut-cache
+.tools/

@@ -99,12 +99,18 @@ def test_the_applied_surface_seals_itself(applied: sa.Engine) -> None:
     assert verdict == envelopes.ViewsIntact(views_checked=10)
 
 
-def test_applying_does_not_leak_autocommit() -> None:
+def test_applying_does_not_leak_autocommit(applied: sa.Engine) -> None:
     # apply_views runs on a pooled connection; setting autocommit by hand
     # would leak the flag to the next checkout and silently break
     # transactions. Force reuse with a single-connection pool and prove a
     # later rollback still takes effect (it undoes the CREATE, so the
     # table is gone - to_regclass returns NULL rather than raising).
+    #
+    # `applied` is taken for its provisioning, not its engine: this test
+    # needs its own single-connection pool, but the views it applies are
+    # defined over the governed tables, so it cannot be the test that
+    # runs first on a dropped schema. Without the dependency the order
+    # pytest-randomly happens to pick decides whether it passes.
     engine = sa.create_engine(engine_url(DB), pool_size=1, max_overflow=0)
     try:
         apply_views(engine)

@@ -36,6 +36,16 @@
 -- Delivery periods are UTC instants (Timestamp), never local civil
 -- time: DST days fall out of timezone arithmetic in the compute zone
 -- and are never special-cased here.
+--
+-- Patterns that read only some of a wide claim's fields name them
+-- (`TradeTerms(quantity: qty, ..)`) rather than counting underscores to
+-- the right position. This is parse-time sugar - a named pattern and
+-- its positional twin share a canonical hash, so the rules identity
+-- pinned as MODEL_HASH is unaffected - and it buys the thing counting
+-- cannot: reordering a predicate's fields can no longer silently bind
+-- the wrong one. Where a hole is the point rather than an omission, it
+-- is named too (`as_of: _` in admit_valuation), so the reader sees the
+-- coordinate deliberately left free instead of inferring it from a gap.
 
 program glasshouse
 
@@ -87,24 +97,27 @@ predicate TradeValued(org: Subject, book: Subject, trade: Subject, curve_version
 
 -- Terms belong to a captured trade, in the same organisation.
 invariant terms_belong_to_captured_trade:
-    TradeTerms(org, trade, _, _, _, _) implies TradeCaptured(org, _, trade, _, _, _)
+    TradeTerms(org: org, trade: trade, ..) implies TradeCaptured(org: org, trade: trade, ..)
 
 -- A trade for nothing, or for negative power, is not a trade.
 invariant quantity_is_positive:
-    TradeTerms(_, _, qty, _, _, _) implies qty > 0 MW
+    TradeTerms(quantity: qty, ..) implies qty > 0 MW
 
 -- A delivery period is a real interval on the timeline.
 invariant delivery_period_is_ordered:
-    TradeTerms(_, _, _, _, delivery_start, delivery_end) implies delivery_start strictly_before delivery_end
+    TradeTerms(delivery_start: delivery_start, delivery_end: delivery_end, ..)
+    implies delivery_start strictly_before delivery_end
 
 -- The official pointer can never name a version that was not
 -- registered for exactly that org, market and as-of date.
 invariant official_curve_is_registered:
-    OfficialCurve(org, market, as_of, version) implies CurveRegistered(org, market, as_of, version, _)
+    OfficialCurve(org, market, as_of, version)
+    implies CurveRegistered(org: org, market: market, as_of: as_of, version: version, ..)
 
 -- A valuation belongs to a captured trade, in the same org and book.
 invariant valued_trade_was_captured:
-    TradeValued(org, book, trade, _, _) implies TradeCaptured(org, book, trade, _, _, _)
+    TradeValued(org: org, book: book, trade: trade, ..)
+    implies TradeCaptured(org: org, book: book, trade: trade, ..)
 
 -- A valuation's curve version exists in the same organisation. (That
 -- it was *official at admission time* is the gate's job, checked when
@@ -112,7 +125,8 @@ invariant valued_trade_was_captured:
 -- corrections - a valuation is a record of what was computed, not a
 -- promise the curve stays current.)
 invariant valuation_curve_is_registered:
-    TradeValued(org, _, _, version, _) implies CurveRegistered(org, _, _, version, _)
+    TradeValued(org: org, curve_version: version, ..)
+    implies CurveRegistered(org: org, version: version, ..)
 
 -- The only ways state may change.
 
@@ -135,7 +149,7 @@ transformation grant_valuation_authority(principal, org, book):
 -- never a silent overwrite).
 transformation capture_trade(org, book, trade, counterparty, market, direction, quantity, price, delivery_start, delivery_end):
     require MayCaptureTrade(actor, org, book)
-    require not TradeCaptured(_, _, trade, _, _, _)
+    require not TradeCaptured(trade: trade, ..)
     admit TradeCaptured(org, book, trade, counterparty, market, direction)
     admit TradeTerms(org, trade, quantity, price, delivery_start, delivery_end)
 
@@ -146,8 +160,8 @@ transformation capture_trade(org, book, trade, counterparty, market, direction, 
 -- replacing.
 transformation register_curve(org, market, as_of, version, payload_hash):
     require MayRegisterCurve(actor, org, market)
-    require not CurveRegistered(_, _, _, version, _)
-    require not OfficialCurve(org, market, as_of, _)
+    require not CurveRegistered(version: version, ..)
+    require not OfficialCurve(org: org, market: market, as_of: as_of, version: _)
     admit CurveRegistered(org, market, as_of, version, payload_hash)
     admit OfficialCurve(org, market, as_of, version)
 
@@ -159,8 +173,8 @@ transformation register_curve(org, market, as_of, version, payload_hash):
 transformation correct_curve(org, market, as_of, prior_version, new_version, payload_hash):
     require MayRegisterCurve(actor, org, market)
     require OfficialCurve(org, market, as_of, prior_version)
-    require not CurveSupersedes(_, prior_version)
-    require not CurveRegistered(_, _, _, new_version, _)
+    require not CurveSupersedes(prior_version: prior_version, ..)
+    require not CurveRegistered(version: new_version, ..)
     admit CurveRegistered(org, market, as_of, new_version, payload_hash)
     admit CurveSupersedes(new_version, prior_version)
     retract OfficialCurve(org, market, as_of, prior_version)
@@ -176,6 +190,7 @@ transformation correct_curve(org, market, as_of, prior_version, new_version, pay
 -- uncommittable, not merely discouraged.
 transformation admit_valuation(org, book, trade, curve_version, mtm):
     require MayValueTrade(actor, org, book)
-    require TradeCaptured(org, book, trade, _, market, _) and OfficialCurve(org, market, _, curve_version)
-    require not TradeValued(_, _, trade, curve_version, _)
+    require TradeCaptured(org: org, book: book, trade: trade, market: market, ..)
+    and OfficialCurve(org: org, market: market, as_of: _, version: curve_version)
+    require not TradeValued(trade: trade, curve_version: curve_version, ..)
     admit TradeValued(org, book, trade, curve_version, mtm)
