@@ -19,8 +19,19 @@ from pathlib import Path
 
 import pytest
 
+from glasshouse.commit.morpholog_client import MORPHOLOG_VERSION
+
 SCRIPT = Path(__file__).resolve().parents[1] / "scripts" / "install-morpholog.sh"
-ROLLING = "morpholog-main-x86_64-unknown-linux-musl"
+
+# What each machine the release channel covers must resolve to. The
+# script selects the artefact by uname, so a wrong row here would be a
+# download that cannot run on the machine that asked for it.
+TARGETS = {
+    ("Linux", "x86_64"): "x86_64-unknown-linux-musl",
+    ("Linux", "aarch64"): "aarch64-unknown-linux-musl",
+    ("Linux", "arm64"): "aarch64-unknown-linux-musl",
+    ("Darwin", "arm64"): "aarch64-apple-darwin",
+}
 
 
 def shim(tmp_path: Path, *, system: str = "Linux", arch: str = "x86_64") -> Path:
@@ -31,14 +42,18 @@ def shim(tmp_path: Path, *, system: str = "Linux", arch: str = "x86_64") -> Path
     path.mkdir(exist_ok=True)
     (path / "uname").write_text(f'#!/bin/sh\n[ "$1" = -m ] && echo {arch} || echo {system}\n')
 
+    # The fabricated release is named for the target this platform must
+    # select: if the script picks another, curl serves it a tarball whose
+    # directory the install step cannot find.
+    rolling = f"morpholog-main-{TARGETS.get((system, arch), 'unsupported')}"
     payload = tmp_path / "payload"
-    (payload / ROLLING).mkdir(parents=True, exist_ok=True)
-    binary = payload / ROLLING / "morpholog"
+    (payload / rolling).mkdir(parents=True, exist_ok=True)
+    binary = payload / rolling / "morpholog"
     binary.write_text("#!/bin/sh\necho morpholog-cli 9.9.9-fake\n")
     binary.chmod(0o755)
-    tarball = tmp_path / f"{ROLLING}.tar.gz"
+    tarball = tmp_path / f"{rolling}.tar.gz"
     with tarfile.open(tarball, "w:gz") as archive:
-        archive.add(payload / ROLLING, arcname=ROLLING)
+        archive.add(payload / rolling, arcname=rolling)
 
     # The real curl's contract, in the two shapes the script uses:
     # `-o <file> <url>` for the tarball and for the checksum beside it.
@@ -69,13 +84,14 @@ def run(*args: str, cwd: Path, **kwargs: str) -> subprocess.CompletedProcess[str
     )
 
 
-@pytest.mark.parametrize(
-    ("system", "arch"), [("Darwin", "arm64"), ("Linux", "aarch64"), ("Darwin", "x86_64")]
-)
-def test_an_unsupported_platform_is_refused_by_name(tmp_path: Path, system: str, arch: str) -> None:
-    # Upstream publishes one target. Refusing by name keeps the narrowing
-    # honest: the message carries the remedy (build from source), and the
-    # script never downloads a binary that cannot run here.
+@pytest.mark.parametrize(("system", "arch"), [("Darwin", "x86_64"), ("Linux", "i686")])
+def test_an_unpublished_platform_is_refused_by_name(tmp_path: Path, system: str, arch: str) -> None:
+    # The release channel covers three machines, not every machine.
+    # Refusing by name keeps the narrowing honest: the message carries
+    # the remedy (build from source), and the script never downloads a
+    # binary that cannot run here. Intel Macs are the live case - GitHub
+    # retired the runner, so upstream will not publish an asset no
+    # machine of that architecture has executed.
     result = run("out", cwd=tmp_path, system=system, arch=arch)
     assert result.returncode == 2
     assert "no prebuilt morpholog" in result.stderr
@@ -83,11 +99,20 @@ def test_an_unsupported_platform_is_refused_by_name(tmp_path: Path, system: str,
     assert not (tmp_path / "out").exists()
 
 
-def test_a_relative_destination_survives_the_temp_directory(tmp_path: Path) -> None:
-    # The script works inside a temp directory its exit trap deletes, so
-    # a destination resolved after that `cd` lands inside it and vanishes
-    # on the way out - a silent no-op install.
-    result = run(".tools", "main-latest", cwd=tmp_path)
+@pytest.mark.parametrize(("system", "arch"), list(TARGETS))
+def test_every_published_platform_installs_its_own_target(
+    tmp_path: Path, system: str, arch: str
+) -> None:
+    # One test, three machines: the developer laptops upstream started
+    # publishing for in v0.0.9 must each get the artefact built for them
+    # (the shim only serves the target this platform is meant to ask
+    # for), and the destination must survive the temp directory.
+    #
+    # The relative destination is the other half of the proof: the script
+    # works inside a temp directory its exit trap deletes, so a path
+    # resolved after that `cd` lands inside it and vanishes on the way
+    # out - a silent no-op install.
+    result = run(".tools", "main-latest", cwd=tmp_path, system=system, arch=arch)
     assert result.returncode == 0, result.stderr
     installed = tmp_path / ".tools" / "morpholog"
     assert installed.exists()
@@ -112,9 +137,28 @@ def test_an_unknown_channel_is_refused_before_any_download(tmp_path: Path) -> No
     assert "unknown channel" in result.stderr
 
 
-def test_the_pin_is_a_version_and_a_checksum() -> None:
-    # The one place the pin lives: if either line is renamed or dropped,
-    # a re-pin could quietly install an unverified binary.
+def test_the_pin_and_the_generated_client_name_the_same_release() -> None:
+    # A re-pin is two moves - bump the installer, regenerate the client -
+    # and doing only the first is the mistake worth catching. The live
+    # drift gate would catch it too, but only where a binary is
+    # reachable; this names it in the pure leg and on a laptop, the way
+    # the pinned checkpoint argv names a renamed base (contract doc
+    # section 22).
+    pinned = next(
+        line.split("=", 1)[1]
+        for line in SCRIPT.read_text().splitlines()
+        if line.startswith("VERSION=")
+    )
+    assert pinned == f"v{MORPHOLOG_VERSION}"
+
+
+def test_the_pin_is_a_version_and_a_checksum_per_target() -> None:
+    # The one place the pin lives: if a line is renamed or dropped, a
+    # re-pin could quietly install an unverified binary. A pin is
+    # per-artefact, so every published target needs its own checksum -
+    # there is no single hash the three of them share.
     text = SCRIPT.read_text()
     assert "\nVERSION=v" in text
-    assert "\nSHA256=" in text
+    assert len({line for line in text.splitlines() if line.startswith("SHA256_")}) == len(
+        set(TARGETS.values())
+    )

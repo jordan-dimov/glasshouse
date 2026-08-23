@@ -8,9 +8,11 @@
 # surface are drift-checked against. It used to be duplicated here and in
 # ci.yml, and a re-pin once updated only one of them.
 #
-# The release is a static musl x86_64 binary, so this stage needs neither
-# a Rust toolchain nor an MSRV to track: a checksummed ~10 MB download
-# replaces a multi-minute cargo build on every image build.
+# The release is a static musl binary, so this stage needs neither a Rust
+# toolchain nor an MSRV to track: a checksummed ~10 MB download replaces
+# a multi-minute cargo build on every image build. The install script
+# selects the artefact by `uname`, so building this image on an arm64
+# host fetches the arm64 musl release rather than failing.
 FROM alpine:3.22 AS morpholog-fetch
 RUN apk add --no-cache curl
 COPY scripts/install-morpholog.sh /tmp/install-morpholog.sh

@@ -16,7 +16,7 @@ if sys.version_info < (3, 10):
 
 PROGRAM = "glasshouse"
 MODEL_HASH = "sha256:7045468e03712a8bdaf66e6f2d43337bbf9b88c0803c6bbb34f597735fcc3897"
-MORPHOLOG_VERSION = "0.0.8"
+MORPHOLOG_VERSION = "0.0.10"
 PYTHON_FLOOR = (3, 10)
 
 from . import envelopes, models, values  # noqa: E402
@@ -26,6 +26,26 @@ from .session import (  # noqa: E402
     MorphologRequestError,
     Session,
 )
+
+def open_session(
+    file: str,
+    database_url: str,
+    *,
+    binary: str | None = None,
+    timeout: float | None = None,
+) -> Session:
+    """Open a session pinned to the programme this package was
+    generated from: a binary serving any other rules is refused at
+    the handshake, before a single proposal is written. Construct
+    ``Session`` directly to open deliberately unpinned."""
+    return Session(
+        file,
+        database_url,
+        binary=binary,
+        timeout=timeout,
+        expected_model_hash=MODEL_HASH,
+    )
+
 
 __all__ = [
     "PROGRAM",
@@ -37,6 +57,7 @@ __all__ = [
     "MorphologOutcomeUnknown",
     "MorphologRequestError",
     "Session",
+    "open_session",
     "envelopes",
     "models",
     "values",

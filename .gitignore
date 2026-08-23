@@ -28,4 +28,5 @@ build/
 CLAUDE.md
 .coverage
 mutants/
+.tools/
 .mutmut-cache
