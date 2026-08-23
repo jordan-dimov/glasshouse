@@ -203,7 +203,11 @@ def test_concurrent_projectors_serialise_and_apply_exactly_once(
     def worker() -> None:
         try:
             applied.append(catch_up(morpholog, engine))
-        except BaseException as failure:
+        # Blind on purpose, and the one place in the tree that is: an
+        # exception a thread does not catch is printed and discarded, so
+        # anything narrower here would let a failure vanish and leave the
+        # race looking clean. The assertions below are what inspect it.
+        except BaseException as failure:  # noqa: BLE001
             errors.append(failure)
 
     workers = [threading.Thread(target=worker) for _ in range(2)]
