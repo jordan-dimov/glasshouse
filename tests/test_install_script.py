@@ -13,6 +13,8 @@ to be reachable. The real download runs in CI's integration leg and the
 Docker build on every push, which is the honest place for that proof.
 """
 
+import hashlib
+import shutil
 import subprocess
 import tarfile
 from pathlib import Path
@@ -57,13 +59,17 @@ def shim(tmp_path: Path, *, system: str = "Linux", arch: str = "x86_64") -> Path
 
     # The real curl's contract, in the two shapes the script uses:
     # `-o <file> <url>` for the tarball and for the checksum beside it.
+    # The digest is computed here and embedded as a literal rather than
+    # shelled out for: macOS ships `shasum`, not `sha256sum`, and a shim
+    # that assumed either one would fail on the very platform half these
+    # cases exist to simulate.
+    digest = hashlib.sha256(tarball.read_bytes()).hexdigest()
     (path / "curl").write_text(
         "#!/bin/sh\n"
         'while [ $# -gt 0 ]; do case "$1" in -o) out=$2; shift 2;; -*) shift;; '
         "*) url=$1; shift;; esac; done\n"
         f'case "$url" in\n'
-        f'*.sha256) echo "$(sha256sum "{tarball}" | cut -d" " -f1)  $(basename "${{url%.sha256}}")"'
-        ' > "$out" ;;\n'
+        f'*.sha256) echo "{digest}  $(basename "${{url%.sha256}}")" > "$out" ;;\n'
         f'*) cp "{tarball}" "$out" ;;\n'
         "esac\n"
     )
@@ -72,15 +78,52 @@ def shim(tmp_path: Path, *, system: str = "Linux", arch: str = "x86_64") -> Path
     return path
 
 
-def run(*args: str, cwd: Path, **kwargs: str) -> subprocess.CompletedProcess[str]:
+#: What the script, the shim's own `curl` and the harness that starts
+#: them shell out to, so a run can be given a PATH holding exactly these
+#: and nothing else.
+NEEDED = (
+    "sh",
+    "mktemp",
+    "rm",
+    "cp",
+    "tar",
+    "gzip",
+    "mkdir",
+    "install",
+    "basename",
+    "sha256sum",
+    "shasum",
+)
+
+
+def without(tmp_path: Path, missing: str) -> Path:
+    """A PATH directory carrying every tool the script needs except one,
+    so a machine that genuinely lacks it can be simulated rather than
+    described. (`command -v` has to find nothing - a stub that exits
+    non-zero would still be found, which is the opposite of absent.)"""
+    tools = tmp_path / f"tools-no-{missing}"
+    tools.mkdir(exist_ok=True)
+    for name in NEEDED:
+        if name == missing:
+            continue
+        found = shutil.which(name)
+        if found is not None:
+            (tools / name).symlink_to(found)
+    return tools
+
+
+def run(
+    *args: str, cwd: Path, tools: Path | None = None, **kwargs: str
+) -> subprocess.CompletedProcess[str]:
     path = shim(cwd, **kwargs)
+    rest = str(tools) if tools is not None else "/usr/bin:/bin"
     return subprocess.run(
         ["sh", str(SCRIPT), *args],
         cwd=cwd,
         capture_output=True,
         text=True,
         check=False,
-        env={"PATH": f"{path}:/usr/bin:/bin", "HOME": str(cwd)},
+        env={"PATH": f"{path}:{rest}", "HOME": str(cwd)},
     )
 
 
@@ -118,6 +161,23 @@ def test_every_published_platform_installs_its_own_target(
     assert installed.exists()
     assert installed.stat().st_mode & 0o111  # executable, as the callers assume
     assert "9.9.9-fake" in result.stdout  # the script runs what it installed
+
+
+def test_the_checksum_is_verified_where_sha256sum_does_not_exist(tmp_path: Path) -> None:
+    # macOS ships `shasum`, not `sha256sum`, so on the platform this
+    # release channel started covering in v0.0.9 the verification takes a
+    # branch nothing else here runs. Hiding the tool proves the branch
+    # works rather than asserting that it should.
+    result = run(
+        ".tools",
+        "main-latest",
+        cwd=tmp_path,
+        system="Darwin",
+        arch="arm64",
+        tools=without(tmp_path, "sha256sum"),
+    )
+    assert result.returncode == 0, result.stderr
+    assert (tmp_path / ".tools" / "morpholog").exists()
 
 
 def test_a_download_that_does_not_match_the_pin_is_refused(tmp_path: Path) -> None:
