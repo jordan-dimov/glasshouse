@@ -4,7 +4,8 @@ The app factory wires one engine (pooled, lazy - no connection until
 first use) and one client (a stateless subprocess wrapper) from settings
 over the app's lifespan: built on startup, the engine pool disposed on
 shutdown (see `app.py`). They are parked on `app.state`; routers take
-them through the `Depends`-compatible accessors below. Tests get fresh
+them through the `Annotated` dependency aliases below (one word per
+parameter, the accessor named once). Tests get fresh
 objects per `create_app()` call - entered through `TestClient` as a
 context manager so the lifespan runs - honouring whatever environment
 they have just monkeypatched, no module-level singletons to reset.
@@ -12,8 +13,10 @@ they have just monkeypatched, no module-level singletons to reset.
 
 from __future__ import annotations
 
+from typing import Annotated
+
 import sqlalchemy as sa
-from fastapi import Request
+from fastapi import Depends, Request
 
 from glasshouse.commit import MODEL_FILE, GlasshouseClient
 from glasshouse.compute.store import CurveStore, engine_url
@@ -60,3 +63,11 @@ def get_projector(request: Request) -> RunningProjector | None:
     projector rather than inventing a verdict for another service."""
     projector: RunningProjector | None = request.app.state.projector
     return projector
+
+
+# The aliases routers spell dependencies with: `engine: EngineDep` reads
+# as a parameter, and the accessor is named in exactly one place.
+EngineDep = Annotated[sa.Engine, Depends(get_engine)]
+ClientDep = Annotated[GlasshouseClient, Depends(get_client)]
+StoreDep = Annotated[CurveStore, Depends(get_store)]
+ProjectorDep = Annotated[RunningProjector | None, Depends(get_projector)]
