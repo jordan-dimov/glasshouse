@@ -19,9 +19,9 @@ from __future__ import annotations
 
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, Header, HTTPException
+from fastapi import APIRouter, Header, HTTPException
 
-from glasshouse.api.deps import get_client
+from glasshouse.api.deps import ClientDep
 from glasshouse.api.schemas import (
     ErrorRejection,
     ExplainRequest,
@@ -31,7 +31,7 @@ from glasshouse.api.schemas import (
     MissingClaim,
     Rejection,
 )
-from glasshouse.commit import GlasshouseClient, MorphologError
+from glasshouse.commit import MorphologError
 from glasshouse.commit.morpholog_client import envelopes
 from glasshouse.logging import get_logger
 
@@ -72,7 +72,7 @@ def _flatten(rejection: object) -> Rejection | None:
 def explain(
     body: ExplainRequest,
     actor: Annotated[str, Header(alias="X-Actor")],
-    client: GlasshouseClient = Depends(get_client),
+    client: ClientDep,
 ) -> ExplainResponse:
     try:
         result = client.explain(body.transformation, actor, body.args)
