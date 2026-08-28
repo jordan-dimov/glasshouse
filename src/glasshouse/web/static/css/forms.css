@@ -96,3 +96,22 @@
   font-size: var(--size-0);
   color: var(--ink-muted);
 }
+
+/* Request state. htmx would inject rules for these classes; base.html
+   turns that off so the component layer stays in one place. The pending
+   note keeps its space (no layout shift) and appears without motion. */
+.htmx-indicator {
+  visibility: hidden;
+  font-size: var(--size-1);
+  color: var(--ink-muted);
+  margin-left: var(--space-2);
+}
+
+.htmx-request .htmx-indicator {
+  visibility: visible;
+}
+
+button:disabled {
+  opacity: 0.6;
+  cursor: progress;
+}

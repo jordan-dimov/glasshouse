@@ -1,0 +1,4 @@
+{# The operational verdict, page or fragment: error.html wraps it in
+   the chrome; a fragment request (an htmx swap into a results panel)
+   gets it bare, so the failure lands where the operator is looking. #}
+<p class="error-detail">{{ message | default("The read model cannot answer right now: the database is unavailable. The governed ledger is unaffected; this screen is a cache of it. Try again shortly.") }}</p>

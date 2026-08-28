@@ -86,6 +86,8 @@ def test_blotter_renders_exact_decimals_and_the_chrome() -> None:
     assert 'class="numeric' in html
     assert 'title="txn-0123456789abcdef"' in html  # the full id one hover away
     assert 'aria-current="page"' in html
+    # htmx's injected indicator stylesheet is off: forms.css owns it.
+    assert """<meta name="htmx-config" content='{"includeIndicatorCSS": false}'>""" in html
 
 
 def test_the_blotter_fragment_is_a_fragment() -> None:
@@ -420,6 +422,11 @@ def test_the_audit_page_is_scoped_by_default_and_says_so() -> None:
     assert "TradeCaptured(org=acme-energy" in html
     assert "glasshouse evidence-verify" in html  # the offline pointer
     assert "whole ledger prefix, every tenant included" in html  # the pack is honest
+    # The verify request: button held while it runs, a pending note in
+    # a live region, and no client-side cut-off for the one long call.
+    assert 'hx-disable="find button"' in html
+    assert 'class="htmx-indicator" role="status"' in html
+    assert """hx-config='{"timeout": 0}'""" in html
 
 
 def test_the_audit_pages_ledger_scope_labels_itself() -> None:

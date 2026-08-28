@@ -14,10 +14,16 @@
 <div class="tiles">
   <section class="tile">
     <h2>Prove it</h2>
+    {# A verify is several bounded subprocess calls, so the button is
+       held disabled while one runs and the pending note shows; the
+       client-side timeout is off because a request cut short would
+       render nothing, and the server bounds each leg itself. #}
     <form method="post" action="/ui/audit/verify"
-          hx-post="/ui/audit/verify" hx-target="#verify-results" hx-swap="innerHTML">
+          hx-post="/ui/audit/verify" hx-target="#verify-results" hx-swap="innerHTML"
+          hx-disable="find button" hx-config='{"timeout": 0}'>
       <input type="hidden" name="org" value="{{ org }}">
       <button type="submit">Run glasshouse verify</button>
+      <span class="htmx-indicator" role="status">Running the six legs...</span>
     </form>
     <p class="tile__note">Six independent read-only legs: model, ledger replay, history tree, projections, payloads, views. Safe to run any time.</p>
   </section>

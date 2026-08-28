@@ -8,9 +8,9 @@ Every handler is a thin composition: parse parameters, call the same
 the typed rows to a template. The org is an explicit query parameter on
 every screen, mirroring the JSON API - no session, no cookie, no
 auto-selection; a screen asked for without one goes to the picker. The
-blotter's filter and pager are the one HTMX use (they swap the results
-fragment in place); everything degrades to ordinary GET navigation with
-JavaScript off.
+blotter's filter and pager and the audit screen's verify button are the
+HTMX uses (they swap a results fragment in place); everything degrades
+to ordinary GET navigation and plain form posts with JavaScript off.
 """
 
 from __future__ import annotations
@@ -60,10 +60,23 @@ router = APIRouter(include_in_schema=False)
 PAGE_SIZE = 50
 
 
+def wants_fragment(request: Request) -> bool:
+    """Whether htmx will place the response inside an element of the
+    page it is on, so the chrome must be left out. `HX-Request` alone
+    is the wrong question: a history restore is an htmx request too,
+    but it targets the body and needs the whole page back, and htmx 4
+    holds no local cache, so every back navigation asks."""
+    return request.headers.get("HX-Request-Type") == "partial"
+
+
 def unavailable_page(request: Request) -> Response:
-    """The HTML face of `ReadUnavailableError`: the app-level handler
-    renders this for `/ui` paths. Database-free by construction."""
-    return templates.TemplateResponse(request, "error.html", {}, status_code=503)
+    """The HTML face of `ReadUnavailableError` and `MorphologError`: the
+    app-level handlers render this for `/ui` paths. Database-free by
+    construction. A fragment request gets a fragment: htmx swaps error
+    responses in, so the verdict lands where the operator is looking
+    rather than nesting a whole page inside a results panel."""
+    template = "partials/unavailable.html" if wants_fragment(request) else "error.html"
+    return templates.TemplateResponse(request, template, {}, status_code=503)
 
 
 def _utc_instant(raw: str | None) -> dt.datetime | None:
@@ -144,7 +157,7 @@ def blotter(
         "prev_offset": max(0, offset - PAGE_SIZE),
         "next_offset": offset + PAGE_SIZE,
     }
-    if request.headers.get("HX-Request"):
+    if wants_fragment(request):
         return templates.TemplateResponse(request, "partials/blotter_table.html", context)
     return templates.TemplateResponse(
         request, "blotter.html", _chrome(engine, org, "blotter") | context
@@ -525,7 +538,7 @@ def audit_verify(
     # Read-only however many times it is pressed; several bounded
     # subprocess calls, so it runs on demand, never on page load.
     report = run_verify(client, engine, store)
-    if request.headers.get("HX-Request"):
+    if wants_fragment(request):
         return templates.TemplateResponse(
             request, "partials/verify_report.html", {"report": report}
         )

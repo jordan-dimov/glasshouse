@@ -72,7 +72,9 @@ def test_the_verify_panel_renders_six_green_legs(ui: TestClient) -> None:
     with ui as client:
         full_page = client.post("/ui/audit/verify", data={"org": ORG})
         fragment = client.post(
-            "/ui/audit/verify", data={"org": ORG}, headers={"HX-Request": "true"}
+            "/ui/audit/verify",
+            data={"org": ORG},
+            headers={"HX-Request": "true", "HX-Request-Type": "partial"},
         )
     assert full_page.status_code == 200
     assert "Verification: consistent" in full_page.text

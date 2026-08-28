@@ -68,10 +68,28 @@ def test_blotter_renders_exact_terms_and_filters_narrow(ui: TestClient) -> None:
 
 def test_the_blotter_fragment_swaps_in_place(ui: TestClient) -> None:
     with ui as client:
-        fragment = client.get("/ui/blotter", params={"org": ORG}, headers={"HX-Request": "true"})
+        fragment = client.get(
+            "/ui/blotter",
+            params={"org": ORG},
+            headers={"HX-Request": "true", "HX-Request-Type": "partial"},
+        )
+        # A back navigation: htmx asks for the page it pushed, targeting
+        # the body, and must get the chrome back with the rows.
+        restored = client.get(
+            "/ui/blotter",
+            params={"org": ORG},
+            headers={
+                "HX-Request": "true",
+                "HX-Request-Type": "full",
+                "HX-History-Restore-Request": "true",
+            },
+        )
     assert fragment.status_code == 200
     assert "T-001" in fragment.text
     assert "<html" not in fragment.text
+    assert restored.status_code == 200
+    assert "T-001" in restored.text
+    assert "<html" in restored.text
 
 
 def test_positions_show_the_short_hour_and_current_marks(ui: TestClient) -> None:
