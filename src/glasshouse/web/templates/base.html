@@ -47,7 +47,7 @@
 {% block content %}{% endblock %}
 </main>
 <footer class="footer">
-  <span>Glasshouse {{ version }}</span>
+  <span>Glasshouse {{ version }}{% if commit %} <span class="mono" title="{{ commit }}">{{ commit[:12] }}</span>{% endif %}</span>
   <span>Every number on these screens is a rendering of a public API query.</span>
 </footer>
 </body>

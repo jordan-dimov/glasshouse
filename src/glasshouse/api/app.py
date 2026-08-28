@@ -30,6 +30,7 @@ from glasshouse.projections.runner import RunningProjector, start_projector_thre
 from glasshouse.web import STATIC_DIR
 from glasshouse.web import routes as web
 from glasshouse.web.routes import unavailable_page
+from glasshouse.web.templating import templates
 
 
 def create_app() -> FastAPI:
@@ -57,7 +58,12 @@ def create_app() -> FastAPI:
                 # PROGRESS, not merely its liveness.
                 projector = start_projector_thread(app.state.client, engine)
                 app.state.projector = projector
-            log.info("api.startup", environment=settings.environment, version=__version__)
+            log.info(
+                "api.startup",
+                environment=settings.environment,
+                version=__version__,
+                commit=settings.git_commit,
+            )
             yield
         finally:
             if projector is not None:
@@ -121,9 +127,15 @@ def create_app() -> FastAPI:
             return unavailable_page(request)
         return JSONResponse({"detail": "commit layer unavailable"}, status_code=503)
 
+    # Every screen's footer names the build too: the deployment identity
+    # belongs where a person looks as much as where a probe does.
+    templates.env.globals["commit"] = settings.git_commit
+
     @app.get("/healthz")
-    def healthz() -> dict[str, str]:
-        return {"status": "ok", "version": __version__}
+    def healthz() -> dict[str, str | None]:
+        # Liveness plus identity: "which build" is the question a green
+        # probe on a stale deployment cannot otherwise answer.
+        return {"status": "ok", "version": __version__, "commit": settings.git_commit}
 
     @app.get("/readyz")
     def readyz(response: Response) -> dict[str, str]:

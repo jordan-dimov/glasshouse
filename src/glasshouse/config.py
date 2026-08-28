@@ -10,7 +10,7 @@ known path.
 import json
 from typing import Annotated, Literal
 
-from pydantic import field_validator
+from pydantic import AliasChoices, Field, field_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 # dev is local; demo and production are hosted (Render), where logs are
@@ -45,6 +45,15 @@ class Settings(BaseSettings):
     # login active, org never comes from a request body.
     demo_org: str = "acme-energy"
     environment: Environment = "dev"
+    # The deployed commit, so a running service can say WHICH build it
+    # is: a month-old deployment answers every health probe as happily
+    # as a fresh one, and only this makes the difference observable.
+    # Render sets RENDER_GIT_COMMIT on every service; any other host
+    # (or a local run) can set the prefixed name. None = unknown.
+    git_commit: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("GLASSHOUSE_GIT_COMMIT", "RENDER_GIT_COMMIT"),
+    )
 
     @field_validator("audit_writer_roles", mode="before")
     @classmethod

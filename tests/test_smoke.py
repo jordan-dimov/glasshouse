@@ -36,7 +36,19 @@ def test_healthz() -> None:
     with TestClient(create_app()) as client:
         response = client.get("/healthz")
     assert response.status_code == 200
-    assert response.json() == {"status": "ok", "version": __version__}
+    # No deployment identity outside a deployment: unknown, never a guess.
+    assert response.json() == {"status": "ok", "version": __version__, "commit": None}
+
+
+@pytest.mark.parametrize("variable", ["RENDER_GIT_COMMIT", "GLASSHOUSE_GIT_COMMIT"])
+def test_healthz_names_the_deployed_commit(monkeypatch: pytest.MonkeyPatch, variable: str) -> None:
+    # A green probe on a month-old build is indistinguishable from a
+    # fresh one without this; the host's own variable is honoured so no
+    # Blueprint plumbing is needed for it to be true in production.
+    monkeypatch.setenv(variable, "b1c8b89d6b3c56fbb5aee2f3ff657fdf38efa312")
+    with TestClient(create_app()) as client:
+        response = client.get("/healthz")
+    assert response.json()["commit"] == "b1c8b89d6b3c56fbb5aee2f3ff657fdf38efa312"
 
 
 def test_openapi_serves() -> None:

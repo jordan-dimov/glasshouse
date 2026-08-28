@@ -31,6 +31,10 @@ services:
     plan: starter
     region: frankfurt
     healthCheckPath: /healthz # exempt from the demo login by design, as is /readyz
+    # Explicit, because an omitted trigger leaves an EXISTING service on
+    # whatever the dashboard holds: deployment policy is repository
+    # state. checksPass = a merge deploys only once CI is green on main.
+    autoDeployTrigger: checksPass
     preDeployCommand: uv run python -m glasshouse.cli provision
     domains:
       - glasshouse.a115.co.uk
@@ -64,6 +68,7 @@ services:
     # is created). No demo password here: seed never needs one.
     dockerCommand: uv run python -m glasshouse.cli seed --reset
     region: frankfurt
+    autoDeployTrigger: checksPass
     envVars:
       - key: GLASSHOUSE_ENVIRONMENT
         value: demo

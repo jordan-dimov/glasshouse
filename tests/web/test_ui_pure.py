@@ -82,6 +82,16 @@ def test_static_assets_are_served() -> None:
     assert script.status_code == 200
 
 
+def test_every_screen_footer_names_the_deployed_commit(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("RENDER_GIT_COMMIT", "b1c8b89d6b3c56fbb5aee2f3ff657fdf38efa312")
+    with TestClient(create_app()) as client:
+        page = client.get("/ui")
+    # The dead database makes this the 503 face, which shares the chrome:
+    # even the unavailable screen says which build is answering.
+    assert page.status_code == 503
+    assert 'title="b1c8b89d6b3c56fbb5aee2f3ff657fdf38efa312">b1c8b89d6b3c<' in page.text
+
+
 def test_the_vendored_htmx_is_the_one_its_record_names() -> None:
     # VENDORED.md records what was fetched; the file is what is served.
     # A replaced file behind a stale record, or a record bumped without
