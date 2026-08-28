@@ -66,8 +66,9 @@ def get_projector(request: Request) -> RunningProjector | None:
 
 
 # The aliases routers spell dependencies with: `engine: EngineDep` reads
-# as a parameter, and the accessor is named in exactly one place.
-EngineDep = Annotated[sa.Engine, Depends(get_engine)]
-ClientDep = Annotated[GlasshouseClient, Depends(get_client)]
-StoreDep = Annotated[CurveStore, Depends(get_store)]
-ProjectorDep = Annotated[RunningProjector | None, Depends(get_projector)]
+# as a parameter, and the accessor is named in exactly one place. PEP 695
+# aliases: FastAPI resolves a `TypeAliasType` at runtime since 0.128.2.
+type EngineDep = Annotated[sa.Engine, Depends(get_engine)]
+type ClientDep = Annotated[GlasshouseClient, Depends(get_client)]
+type StoreDep = Annotated[CurveStore, Depends(get_store)]
+type ProjectorDep = Annotated[RunningProjector | None, Depends(get_projector)]
