@@ -6,12 +6,15 @@ locally.
 
 import base64
 import datetime as dt
+import hashlib
+import re
 from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
 
 from glasshouse.api.app import create_app
+from glasshouse.web import STATIC_DIR
 from glasshouse.web.routes import _utc_instant
 from tests.support import fake_binary
 
@@ -77,6 +80,51 @@ def test_static_assets_are_served() -> None:
     assert css.headers["content-type"].startswith("text/css")
     assert "--accent" in css.text
     assert script.status_code == 200
+
+
+def test_the_vendored_htmx_is_the_one_its_record_names() -> None:
+    # VENDORED.md records what was fetched; the file is what is served.
+    # A replaced file behind a stale record, or a record bumped without
+    # the file, fails here rather than in a browser.
+    vendor = STATIC_DIR / "vendor"
+    record = (vendor / "VENDORED.md").read_text()
+    version = re.search(r"^- Version: (\S+)$", record, re.MULTILINE)
+    digest = re.search(r"^- SHA-256: ([0-9a-f]{64})$", record, re.MULTILINE)
+    assert version is not None
+    assert digest is not None
+    script = (vendor / "htmx.min.js").read_bytes()
+    assert hashlib.sha256(script).hexdigest() == digest.group(1)
+    assert f'version="{version.group(1)}"'.encode() in script
+
+
+def test_a_fragment_request_gets_a_fragment_503_and_a_restore_the_page() -> None:
+    # htmx swaps error responses in, so the 503 must arrive in the shape
+    # the requester will place: bare for a panel swap, whole for a
+    # history restore (an htmx request too, but one targeting the body).
+    with TestClient(create_app()) as client:
+        fragment = client.get(
+            "/ui/blotter",
+            params={"org": "acme-energy"},
+            headers={"HX-Request": "true", "HX-Request-Type": "partial"},
+        )
+        restore = client.get(
+            "/ui/blotter",
+            params={"org": "acme-energy"},
+            headers={
+                "HX-Request": "true",
+                "HX-Request-Type": "full",
+                "HX-History-Restore-Request": "true",
+            },
+        )
+    assert fragment.status_code == 503
+    assert "database is unavailable" in fragment.text
+    assert "<html" not in fragment.text
+    assert restore.status_code == 503
+    assert "database is unavailable" in restore.text
+    assert "<html" in restore.text
+    # Two representations of one URL: a cache must key on the header.
+    assert fragment.headers["vary"] == "HX-Request-Type"
+    assert restore.headers["vary"] == "HX-Request-Type"
 
 
 def test_a_malformed_time_window_is_a_422_not_a_503() -> None:

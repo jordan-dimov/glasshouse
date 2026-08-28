@@ -287,7 +287,7 @@ dev = [
     { name = "pytest", specifier = ">=9.1.1" },
     { name = "pytest-cov", specifier = ">=7.0" },
     { name = "pytest-randomly", specifier = ">=4.0" },
-    { name = "ruff", specifier = ">=0.15.20" },
+    { name = "ruff", specifier = ">=0.16.0" },
 ]
 
 [[package]]

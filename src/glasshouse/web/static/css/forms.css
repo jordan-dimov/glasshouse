@@ -30,8 +30,9 @@
   background: var(--surface);
 }
 
-.filter-bar button,
-.org-form button {
+/* Every action in the Control Room is a form submit; one rule, so a
+   new form cannot fall through to the browser default. */
+form button {
   font: inherit;
   font-size: var(--size-1);
   font-weight: 600;
@@ -75,19 +76,6 @@
   background: var(--surface);
 }
 
-.upload-form button,
-.commit-form button {
-  font: inherit;
-  font-size: var(--size-1);
-  font-weight: 600;
-  color: var(--accent-ink);
-  background: var(--accent);
-  border: 1px solid var(--accent);
-  border-radius: var(--radius);
-  padding: var(--space-1) var(--space-3);
-  cursor: pointer;
-}
-
 .commit-form {
   margin-top: var(--space-4);
 }
@@ -95,4 +83,26 @@
 .org-form__label {
   font-size: var(--size-0);
   color: var(--ink-muted);
+}
+
+/* Request state. htmx would inject rules for these classes; base.html
+   turns that off so the component layer stays in one place; both of
+   htmx's forms are covered (an indicator inside the requesting element,
+   or the requesting element as its own indicator). The pending note
+   keeps its space (no layout shift) and appears without motion. */
+.htmx-indicator {
+  visibility: hidden;
+  font-size: var(--size-1);
+  color: var(--ink-muted);
+  margin-left: var(--space-2);
+}
+
+.htmx-request .htmx-indicator,
+.htmx-request.htmx-indicator {
+  visibility: visible;
+}
+
+button:disabled {
+  opacity: 0.6;
+  cursor: progress;
 }

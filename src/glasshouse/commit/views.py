@@ -52,7 +52,7 @@ def apply_views(engine: sa.Engine) -> None:
     documented upstream path is psql, which never interprets `%`; this
     is the programmatic equivalent, byte-exact.
     """
-    script = VIEWS_FILE.read_text()
+    script = VIEWS_FILE.read_text(encoding="utf-8")
     with engine.connect().execution_options(isolation_level="AUTOCOMMIT") as connection:
         cursor = connection.connection.cursor()
         try:

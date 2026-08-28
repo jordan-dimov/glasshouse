@@ -297,7 +297,7 @@ def accumulate(
         fold = fold_transition(row.asserted_claims, row.retracted_claims)
         for trade in fold.blotter:
             term = fold.terms[trade.trade]
-            blotter[(trade.org, trade.trade)] = (
+            blotter[trade.org, trade.trade] = (
                 trade.org,
                 trade.trade,
                 trade.book,
@@ -317,7 +317,7 @@ def accumulate(
             net = positions[key][0] if key in positions else Decimal(0)
             positions[key] = (net + delta.delta_mw, row.transition_id)
         for valuation in fold.valuations:
-            valuations[(valuation.org, valuation.trade, valuation.curve_version)] = (
+            valuations[valuation.org, valuation.trade, valuation.curve_version] = (
                 valuation.org,
                 valuation.trade,
                 valuation.curve_version,
