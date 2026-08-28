@@ -90,6 +90,9 @@ def test_the_blotter_fragment_swaps_in_place(ui: TestClient) -> None:
     assert restored.status_code == 200
     assert "T-001" in restored.text
     assert "<html" in restored.text
+    # Both representations of the same URL tell caches what they vary on.
+    assert fragment.headers["vary"] == "HX-Request-Type"
+    assert restored.headers["vary"] == "HX-Request-Type"
 
 
 def test_positions_show_the_short_hour_and_current_marks(ui: TestClient) -> None:

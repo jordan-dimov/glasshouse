@@ -122,6 +122,9 @@ def test_a_fragment_request_gets_a_fragment_503_and_a_restore_the_page() -> None
     assert restore.status_code == 503
     assert "database is unavailable" in restore.text
     assert "<html" in restore.text
+    # Two representations of one URL: a cache must key on the header.
+    assert fragment.headers["vary"] == "HX-Request-Type"
+    assert restore.headers["vary"] == "HX-Request-Type"
 
 
 def test_a_malformed_time_window_is_a_422_not_a_503() -> None:

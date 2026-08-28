@@ -86,8 +86,10 @@ form button {
 }
 
 /* Request state. htmx would inject rules for these classes; base.html
-   turns that off so the component layer stays in one place. The pending
-   note keeps its space (no layout shift) and appears without motion. */
+   turns that off so the component layer stays in one place; both of
+   htmx's forms are covered (an indicator inside the requesting element,
+   or the requesting element as its own indicator). The pending note
+   keeps its space (no layout shift) and appears without motion. */
 .htmx-indicator {
   visibility: hidden;
   font-size: var(--size-1);
@@ -95,7 +97,8 @@ form button {
   margin-left: var(--space-2);
 }
 
-.htmx-request .htmx-indicator {
+.htmx-request .htmx-indicator,
+.htmx-request.htmx-indicator {
   visibility: visible;
 }
 

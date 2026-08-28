@@ -27,7 +27,9 @@ templates now rely on, each a documented htmx 4 behaviour:
 - `HX-Request-Type: partial` is the fragment discriminator, not
   `HX-Request`. A history restore is an htmx request too, targets the
   body (`HX-Request-Type: full`) and no longer comes from a local
-  cache, so every back navigation asks the server for the page.
+  cache, so every back navigation asks the server for the page. Those
+  responses carry `Vary: HX-Request-Type`, or an HTTP cache could
+  serve the restore the fragment it stored for a panel swap.
 - Error responses swap (htmx 2 swallowed 4xx/5xx). The 503 face has a
   fragment form, so an unavailable read model is rendered where the
   operator is looking, never a whole page nested inside a panel.

@@ -82,6 +82,7 @@ def test_the_verify_panel_renders_six_green_legs(ui: TestClient) -> None:
         assert leg in full_page.text
     assert "FAIL" not in full_page.text
     assert "<html" not in fragment.text  # the HTMX face is a fragment
+    assert fragment.headers["vary"] == "HX-Request-Type"
 
 
 def test_the_evidence_loop_closes_offline(ui: TestClient, tmp_path) -> None:  # type: ignore[no-untyped-def]
