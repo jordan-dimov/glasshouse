@@ -175,30 +175,30 @@ def trade_books(draw: st.DrawFn) -> list[tuple[str, str, Decimal, int]]:
 def _claims(specs: list[tuple[str, str, Decimal, int]]) -> list[envelopes.NamedClaim]:
     asserted: list[envelopes.NamedClaim] = []
     for trade, direction, quantity, hours in specs:
-        asserted.append(
-            envelopes.NamedClaim(
-                "TradeCaptured",
-                {
-                    "org": "acme",
-                    "book": "spec-de",
-                    "trade": trade,
-                    "counterparty": "cp",
-                    "market": "de-power",
-                    "direction": direction,
-                },
-            )
-        )
-        asserted.append(
-            envelopes.NamedClaim(
-                "TradeTerms",
-                {
-                    "org": "acme",
-                    "trade": trade,
-                    "quantity": str(quantity),
-                    "price": "50",
-                    "delivery_start": _ts(T0),
-                    "delivery_end": _ts(T0 + dt.timedelta(hours=hours)),
-                },
+        asserted.extend(
+            (
+                envelopes.NamedClaim(
+                    "TradeCaptured",
+                    {
+                        "org": "acme",
+                        "book": "spec-de",
+                        "trade": trade,
+                        "counterparty": "cp",
+                        "market": "de-power",
+                        "direction": direction,
+                    },
+                ),
+                envelopes.NamedClaim(
+                    "TradeTerms",
+                    {
+                        "org": "acme",
+                        "trade": trade,
+                        "quantity": str(quantity),
+                        "price": "50",
+                        "delivery_start": _ts(T0),
+                        "delivery_end": _ts(T0 + dt.timedelta(hours=hours)),
+                    },
+                ),
             )
         )
     return asserted

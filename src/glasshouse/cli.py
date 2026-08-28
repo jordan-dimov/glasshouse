@@ -76,7 +76,7 @@ def _client(db: str) -> GlasshouseClient:
 def _run_import(
     *, curves: bool, file: Path, org: str, actor: str, project: bool, preview: bool, db: str
 ) -> None:
-    text = file.read_text()
+    text = file.read_text(encoding="utf-8")
     client = _client(db)
     if not curves:
         report = (preview_trades if preview else import_trades)(client, text, org=org, actor=actor)

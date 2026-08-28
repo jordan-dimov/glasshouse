@@ -94,6 +94,18 @@ select = [
     "T10",   # stray debugger imports
     "TID",   # tidy imports
     "YTT",   # sys.version misuse
+    # Added 28/08/2026: the stable rules ruff 0.16's own recommended
+    # categories carry that our groups do not, taken BY CODE because
+    # each comes from a group refused as a whole (PLR thresholds, TRY003,
+    # bandit, the import-moving half of TC, pydocstyle); these are the
+    # correctness rules inside those groups, all clean when trialled.
+    "PLR0124", "PLR0133", "PLR0206", "PLR0402", "PLR1704", "PLR1708",
+    "PLR1711", "PLR1716", "PLR1722", "PLR1730", "PLR1733", "PLR1736",
+    "PLR2044",
+    "TRY004", "TRY201", "TRY203", "TRY401",
+    "S110", "S112",
+    "TC004", "TC005", "TC007", "TC010",
+    "COM818", "D301", "D419",
 ]
 ignore = [
     # House doctrine: money and quantities are Decimal FROM STRINGS,

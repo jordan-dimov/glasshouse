@@ -24,8 +24,10 @@ jobs:
           python-version: ${{ matrix.python-version }}
       - run: uv lock --check
       - run: uv sync --dev
-      - run: uv run ruff format --check .
-      - run: uv run ruff check .
+      # The github output format turns findings into inline annotations
+      # on the PR diff; the text is otherwise identical.
+      - run: uv run ruff format --check --output-format github .
+      - run: uv run ruff check --output-format github .
       - run: uv run mypy
       - run: uv run pytest
 

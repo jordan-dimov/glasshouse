@@ -30,8 +30,9 @@
   background: var(--surface);
 }
 
-.filter-bar button,
-.org-form button {
+/* Every action in the Control Room is a form submit; one rule, so a
+   new form cannot fall through to the browser default. */
+form button {
   font: inherit;
   font-size: var(--size-1);
   font-weight: 600;
@@ -73,19 +74,6 @@
   border-radius: var(--radius);
   padding: var(--space-1) var(--space-2);
   background: var(--surface);
-}
-
-.upload-form button,
-.commit-form button {
-  font: inherit;
-  font-size: var(--size-1);
-  font-weight: 600;
-  color: var(--accent-ink);
-  background: var(--accent);
-  border: 1px solid var(--accent);
-  border-radius: var(--radius);
-  padding: var(--space-1) var(--space-3);
-  cursor: pointer;
 }
 
 .commit-form {
