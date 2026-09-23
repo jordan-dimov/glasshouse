@@ -17,4 +17,4 @@ Adopters should know where they stand. The readiness ladder (DESIGN.md section 9
 
 ## TimescaleDB licensing note
 
-Glasshouse depends on PostgreSQL with the TimescaleDB extension. The community (TSL-licensed) features it uses (compression, continuous aggregates) are free to self-host and free to use when running your own product; they are not licensed for offering TimescaleDB itself as a managed service. Some managed Postgres providers offer only the Apache-2 subset or no extension at all; adopters on such hosts can run the `timescale/timescaledb` image or install the extension themselves.
+Glasshouse depends on PostgreSQL with the TimescaleDB extension, using core (Apache-2) hypertables only today. The community (TSL-licensed) features it may use later (compression, continuous aggregates) are free to self-host and free to use when running your own product; they are not licensed for offering TimescaleDB itself as a managed service. Some managed Postgres providers offer only the Apache-2 subset or no extension at all; adopters on such hosts can run the `timescale/timescaledb` image or install the extension themselves.
