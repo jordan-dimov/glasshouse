@@ -105,7 +105,14 @@ ERROR_RECEIPTS = "\n".join(
                 "row": 1,
             }
         ),
-        json.dumps({"row": 2, "status": "error", "error": "could not serialize access"}),
+        json.dumps(
+            {
+                "row": 2,
+                "status": "error",
+                "code": "serialization_failure",
+                "error": "could not serialize access",
+            }
+        ),
     ]
 )
 

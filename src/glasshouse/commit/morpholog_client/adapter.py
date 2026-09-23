@@ -17,8 +17,11 @@ from __future__ import annotations
 import json
 import os
 import subprocess
+from typing import Callable, TypeVar
 
 from . import envelopes
+
+_Verdict = TypeVar("_Verdict")
 
 
 # Flags whose VALUE is a credential. It must never appear in a raised
@@ -41,9 +44,58 @@ def _redact_argv(args: list[str]) -> str:
     return " ".join(parts)
 
 
+#: The one-shot ``propose`` exit for a commit whose outcome the runtime
+#: could not prove. Not 2, which is a command-line usage error.
+EXIT_COMMIT_OUTCOME_UNKNOWN = 3
+
+
 class MorphologError(RuntimeError):
     """An operational failure from the CLI - distinct from a lawful
     business rejection, which is a decided outcome on stdout."""
+
+    #: Whether re-submitting the same request is known to be safe. False
+    #: for every error but a ``serialization_failure`` receipt: an
+    #: unknown outcome may already have committed, and any other failure
+    #: needs its cause fixed first. The one retry predicate.
+    retriable: bool = False
+
+
+class MorphologRequestError(MorphologError):
+    """A per-request error receipt with its stable ``code``: the request
+    was received, classified, and refused, and the session (or the
+    one-shot binary) did nothing durable. ``serialization_failure`` is
+    re-submittable as is - ``retriable`` says so; ``not_committed`` once
+    its cause is fixed; every other code is the request's own fault.
+    ``row`` is the session request number, or ``None`` for a one-shot
+    ``transact``."""
+
+    def __init__(self, code: str, error: str, row: int | None = None) -> None:
+        where = f"session request {row}" if row is not None else "request"
+        super().__init__(f"{where} refused ({code}): {error}")
+        self.code = code
+        self.error = error
+        self.row = row
+
+    @property
+    def retriable(self) -> bool:  # type: ignore[override]
+        return self.code == "serialization_failure"
+
+
+class MorphologTimeout(MorphologError):
+    """The binary did not finish within the client's timeout and was
+    killed. Operational for a read; for a proposal the caller must not
+    assume nothing changed, since the kill can land after COMMIT was
+    sent - ``propose`` re-raises it as ``MorphologOutcomeUnknown``."""
+
+
+class MorphologOutcomeUnknown(MorphologError):
+    """A proposal was submitted and its commit outcome cannot be proven.
+    Either no trustworthy response arrived (a session died, hung, or
+    answered garbage after the request was written), or the runtime
+    itself reported ``commit_outcome_unknown``: the database connection
+    failed while COMMIT was in flight, after the server may already have
+    made it durable. Re-submitting blindly can duplicate a business
+    action - read the record first."""
 
 
 class Morpholog:
@@ -93,7 +145,7 @@ class Morpholog:
                 timeout=timeout,
             )
         except subprocess.TimeoutExpired:
-            raise MorphologError(
+            raise MorphologTimeout(
                 f"`{self.binary} {_redact_argv(args)}` timed out after {timeout}s"
             ) from None
 
@@ -204,8 +256,13 @@ class Morpholog:
         explain_on_reject: bool = False,
     ) -> envelopes.Committed | envelopes.Rejected:
         """Propose a change by transformation name: it commits only if
-        every rule holds; a refusal is a lawful outcome, returned as
-        ``Rejected``."""
+        everything it touches still obeys every rule; a refusal is a lawful outcome, returned as
+        ``Rejected``. A database failure before anything was recorded is
+        an operational ``MorphologError`` (nothing changed); a commit
+        whose outcome the runtime could not prove, or a client timeout
+        that killed the binary after the proposal was submitted, raises
+        ``MorphologOutcomeUnknown`` - read the record before
+        re-submitting."""
         args = [
             "propose", self.file, transformation,
             "--actor", actor,
@@ -214,7 +271,28 @@ class Morpholog:
         ]
         if explain_on_reject:
             args.append("--explain-on-reject")
-        return envelopes.parse_run_outcome(self._json(*args))
+        # A timeout kills the child, which may already have sent COMMIT:
+        # the same standing as exit 3. Then the exit code is checked
+        # before the empty-stdout rule, because an unknown commit prints
+        # nothing on stdout too and must never read as an ordinary
+        # operational failure.
+        try:
+            proc = self._run(args, timeout=self.timeout)
+        except MorphologTimeout as exc:
+            raise MorphologOutcomeUnknown(
+                "the proposal timed out after it was submitted; the commit outcome "
+                f"is unknown - read the record before re-submitting. ({exc})"
+            ) from None
+        if proc.returncode == EXIT_COMMIT_OUTCOME_UNKNOWN:
+            raise MorphologOutcomeUnknown(
+                "the commit outcome is unknown - read the record before "
+                f"re-submitting:\n{self._redact_stderr(proc.stderr)}"
+            )
+        if not proc.stdout.strip():
+            raise MorphologError(
+                f"`{_redact_argv(args)}`:\n{self._redact_stderr(proc.stderr)}"
+            )
+        return envelopes.parse_run_outcome(json.loads(proc.stdout))
 
     def submit(
         self, request: object, actor: str, explain_on_reject: bool = False
@@ -263,6 +341,45 @@ class Morpholog:
                 f"{self._redact_stderr(proc.stderr)}"
             )
         return receipts
+
+    def transact(
+        self, acts: list[dict[str, object]], timeout: float | None = None
+    ) -> envelopes.AtomicCommitted | envelopes.AtomicRejected:
+        """Propose several acts as one decision (`transact --acts -`):
+        every act commits or none does. Each act is a dict in the batch
+        row shape; they apply in order, and each sees what the acts
+        before it staged. Returns ``AtomicCommitted`` (one receipt per
+        act) or ``AtomicRejected`` (the refusing act, nothing written) -
+        both lawful outcomes. A known error of the whole batch raises
+        ``MorphologRequestError`` with its code, whose ``retriable`` is
+        true only for ``serialization_failure``; a commit whose outcome
+        the runtime could not prove, or a timeout after submission,
+        raises ``MorphologOutcomeUnknown`` - read the record first,
+        never re-submit blind. ``timeout`` bounds this one call and
+        defaults to unbounded, as for a batch."""
+        ndjson = "".join(json.dumps(act) + "\n" for act in acts)
+        args = ["transact", self.file, "--acts", "-", "--database-url", self.database_url]
+        try:
+            proc = self._run(args, stdin=ndjson, timeout=timeout)
+        except MorphologTimeout as exc:
+            raise MorphologOutcomeUnknown(
+                "the atomic batch timed out after it was submitted; the commit outcome "
+                f"is unknown - read the record before re-submitting. ({exc})"
+            ) from None
+        if proc.returncode == EXIT_COMMIT_OUTCOME_UNKNOWN:
+            raise MorphologOutcomeUnknown(
+                "the commit outcome is unknown - read the record before "
+                f"re-submitting:\n{self._redact_stderr(proc.stderr)}"
+            )
+        if not proc.stdout.strip():
+            raise MorphologError(
+                f"`{_redact_argv(args)}`:\n{self._redact_stderr(proc.stderr)}"
+            )
+        payload = json.loads(proc.stdout)
+        if isinstance(payload, dict) and payload.get("status") == "error":
+            data = envelopes._strict("atomic error", payload, {"status", "code", "error"})
+            raise MorphologRequestError(str(data["code"]), str(data["error"]))
+        return envelopes.parse_atomic_outcome(payload)
 
     def explain(
         self, transformation: str, actor: str, args_named: dict[str, object]
@@ -492,22 +609,39 @@ class Morpholog:
         anchor_file: str | None = None,
         require_signatures: bool = False,
         views_schema: str | None = None,
+        *,
+        require_signatures_from: int | None = None,
+        require_signing_key: str | None = None,
+        trusted_tsa_file: str | None = None,
     ) -> envelopes.VerifyReport:
         """Replay the audit log against the claims table and check the
         audit Merkle tree against its checkpoints (and an external
         ``anchor_file`` if given). ``require_signatures`` is compliance
-        mode: an unsigned checkpoint becomes a failing verdict.
-        ``views_schema`` also verifies the generated SQL view surface
+        mode: an unsigned checkpoint becomes a failing verdict;
+        ``require_signatures_from`` asks only of checkpoints at or after
+        that tree size, and ``require_signing_key`` (a file holding the
+        ``ed25519-pub:<hex>`` key) fails a covered checkpoint with no
+        signature by that key, on top of the key being authorised in
+        the log, never instead of it. ``views_schema`` also verifies the generated SQL view surface
         in that schema against its recorded seals, adding the ``views``
-        verdict to the report. A divergence or tamper is a decided
-        verdict on stdout, not an operational error."""
+        verdict to the report. ``trusted_tsa_file`` (a PEM file of
+        timestamp-authority CA certificates) is what the checkpoints'
+        external witnesses are judged against; without it a sound
+        witness reports ``unverified``. A divergence, tamper, or invalid
+        witness is a decided verdict on stdout, not an operational
+        error."""
         args = ["audit", "verify", "--database-url", self.database_url]
         if anchor_file is not None:
             args.extend(["--anchor-file", str(anchor_file)])
-        if require_signatures:
-            args.append("--require-signatures")
+        args.extend(
+            self._signature_policy_args(
+                require_signatures, require_signatures_from, require_signing_key
+            )
+        )
         if views_schema is not None:
             args.extend(["--views-schema", views_schema])
+        if trusted_tsa_file is not None:
+            args.extend(["--trusted-tsa-file", str(trusted_tsa_file)])
         return envelopes.VerifyReport.from_json(self._json(*args))
 
     def audit_checkpoint(
@@ -516,20 +650,40 @@ class Morpholog:
         key_id: str | None = None,
         *,
         writer_roles: list[str] | None = None,
+        witnesses: list[str] | None = None,
     ) -> envelopes.CheckpointCreated | envelopes.CheckpointNoNewRows:
         """Record a checkpoint over the current stable prefix, or return
         the unchanged head - either way a usable external anchor. Pass
         ``signing_key`` (a PKCS#8 PEM path) and ``key_id`` to sign the new
         tree head, so the anchor is attributable. ``writer_roles`` as on
         ``audit`` - the checkpoint's stable prefix rests on the same
-        resume horizon."""
+        resume horizon. ``witnesses`` (each ``"rfc3161:<url>"``) has those
+        timestamp authorities countersign the new head after the commit;
+        the checkpoint is recorded either way, and a failed submission is
+        an operational error naming ``audit_witness`` to retry."""
         if (signing_key is None) != (key_id is None):
             raise ValueError("signing_key and key_id must be given together")
         args = ["audit", "checkpoint", "--database-url", self.database_url]
         if signing_key is not None:
             args.extend(["--signing-key", str(signing_key), "--key-id", str(key_id)])
         args += self._repeat("--writer-role", writer_roles)
+        args += self._repeat("--witness", witnesses)
         return envelopes.parse_checkpoint_outcome(self._json(*args))
+
+    def audit_witness(self, tree_size: int, witnesses: list[str]) -> envelopes.Checkpoint:
+        """Have timestamp authorities (each ``"rfc3161:<url>"``) witness
+        the checkpoint recorded at ``tree_size``, storing each exact
+        response on it as it arrives. Returns the checkpoint as now
+        stored. Every authority is attempted; a response that is not over
+        this head is refused and stores nothing, and if any authority
+        failed the call is an operational error naming the retry, with
+        the others' witnesses already stored."""
+        if not witnesses:
+            raise ValueError("name at least one witness")
+        args = ["audit", "witness", "--database-url", self.database_url]
+        args.extend(["--tree-size", str(tree_size)])
+        args += self._repeat("--witness", witnesses)
+        return envelopes.Checkpoint.from_json(self._json(*args))
 
     def audit_export(self, tree_size: int | None = None) -> envelopes.EvidencePack:
         """Export a complete-prefix evidence pack covering the latest
@@ -546,13 +700,30 @@ class Morpholog:
         pack_file: str,
         anchor_file: str | None = None,
         require_signatures: bool = False,
-    ) -> envelopes.TreeVerification:
+        *,
+        require_signatures_from: int | None = None,
+        require_signing_key: str | None = None,
+        witnesses: bool = False,
+        trusted_tsa_file: str | None = None,
+    ) -> envelopes.TreeVerification | envelopes.PackVerificationReport[envelopes.TreeVerification]:
         """Verify a prefix evidence pack offline - no database. Returns the
         tamper-evidence verdict; a tamper or malformed pack is a decided
-        verdict on stdout. ``require_signatures`` is compliance mode: an
-        unsigned checkpoint becomes a failing verdict."""
-        return envelopes.parse_tree_verification(
-            self._json(*self._verify_pack_args(pack_file, anchor_file, require_signatures))
+        verdict on stdout. ``require_signatures``, ``require_signatures_from``
+        and ``require_signing_key`` are the verifier's policy, as on
+        ``audit_verify``; the pin needs a complete-prefix pack, and a
+        window or selective pack refuses it as an operational error. With
+        ``witnesses=True`` or a ``trusted_tsa_file`` the result is a
+        ``PackVerificationReport`` carrying this verdict beside what the
+        pack's external witnesses prove."""
+        return self._verify_pack(
+            envelopes.parse_tree_verification,
+            pack_file,
+            anchor_file,
+            require_signatures,
+            require_signatures_from,
+            require_signing_key,
+            witnesses,
+            trusted_tsa_file,
         )
 
     def audit_export_window(
@@ -584,13 +755,28 @@ class Morpholog:
         pack_file: str,
         anchor_file: str | None = None,
         require_signatures: bool = False,
-    ) -> envelopes.WindowVerification:
+        *,
+        require_signatures_from: int | None = None,
+        require_signing_key: str | None = None,
+        witnesses: bool = False,
+        trusted_tsa_file: str | None = None,
+    ) -> envelopes.WindowVerification | envelopes.PackVerificationReport[envelopes.WindowVerification]:
         """Verify a window pack offline - no database. Returns the window
         verdict; a tamper, inconsistent extension, or malformed pack is a
         decided verdict on stdout. ``require_signatures`` is compliance
-        mode, as on ``audit_verify_pack``."""
-        return envelopes.parse_window_verification(
-            self._json(*self._verify_pack_args(pack_file, anchor_file, require_signatures))
+        mode, as on ``audit_verify_pack``. With
+        ``witnesses=True`` or a ``trusted_tsa_file`` the result is a
+        ``PackVerificationReport`` carrying this verdict beside what the
+        pack's external witnesses prove."""
+        return self._verify_pack(
+            envelopes.parse_window_verification,
+            pack_file,
+            anchor_file,
+            require_signatures,
+            require_signatures_from,
+            require_signing_key,
+            witnesses,
+            trusted_tsa_file,
         )
 
     def audit_export_selective(
@@ -618,26 +804,73 @@ class Morpholog:
         pack_file: str,
         anchor_file: str | None = None,
         require_signatures: bool = False,
-    ) -> envelopes.SelectiveVerification:
+        *,
+        require_signatures_from: int | None = None,
+        require_signing_key: str | None = None,
+        witnesses: bool = False,
+        trusted_tsa_file: str | None = None,
+    ) -> envelopes.SelectiveVerification | envelopes.PackVerificationReport[envelopes.SelectiveVerification]:
         """Verify a selective pack offline - no database. Returns the
         selective verdict; a row not included, anchor mismatch, or
         malformed pack is a decided verdict on stdout.
         ``require_signatures`` is compliance mode, as on
-        ``evidence_verify``."""
-        return envelopes.parse_selective_verification(
-            self._json(*self._verify_pack_args(pack_file, anchor_file, require_signatures))
+        ``evidence_verify``. With
+        ``witnesses=True`` or a ``trusted_tsa_file`` the result is a
+        ``PackVerificationReport`` carrying this verdict beside what the
+        pack's external witnesses prove."""
+        return self._verify_pack(
+            envelopes.parse_selective_verification,
+            pack_file,
+            anchor_file,
+            require_signatures,
+            require_signatures_from,
+            require_signing_key,
+            witnesses,
+            trusted_tsa_file,
         )
 
     @staticmethod
-    def _verify_pack_args(
-        pack_file: str, anchor_file: str | None, require_signatures: bool
+    def _signature_policy_args(
+        require_signatures: bool,
+        require_signatures_from: int | None,
+        require_signing_key: str | None,
     ) -> list[str]:
+        args: list[str] = []
+        if require_signatures:
+            args.append("--require-signatures")
+        if require_signatures_from is not None:
+            args.extend(["--require-signatures-from", str(require_signatures_from)])
+        if require_signing_key is not None:
+            args.extend(["--require-signing-key", str(require_signing_key)])
+        return args
+
+    def _verify_pack(
+        self,
+        parse_verdict: Callable[[object], _Verdict],
+        pack_file: str,
+        anchor_file: str | None,
+        require_signatures: bool,
+        require_signatures_from: int | None,
+        require_signing_key: str | None,
+        witnesses: bool,
+        trusted_tsa_file: str | None,
+    ) -> _Verdict | envelopes.PackVerificationReport[_Verdict]:
         args = ["audit", "verify-pack", str(pack_file)]
         if anchor_file is not None:
             args.extend(["--anchor-file", str(anchor_file)])
-        if require_signatures:
-            args.append("--require-signatures")
-        return args
+        args.extend(
+            self._signature_policy_args(
+                require_signatures, require_signatures_from, require_signing_key
+            )
+        )
+        if witnesses:
+            args.append("--witnesses")
+        if trusted_tsa_file is not None:
+            args.extend(["--trusted-tsa-file", str(trusted_tsa_file)])
+        payload = self._json(*args)
+        if witnesses or trusted_tsa_file is not None:
+            return envelopes.PackVerificationReport.from_json(payload, parse_verdict)
+        return parse_verdict(payload)
 
     # ------------------------------------------------------------
     # The outbox lease protocol.

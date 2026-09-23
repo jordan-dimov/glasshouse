@@ -37,7 +37,12 @@ import threading
 import time
 
 from . import envelopes
-from .adapter import MorphologError, _redact_argv
+from .adapter import (
+    MorphologError,
+    MorphologOutcomeUnknown,
+    MorphologRequestError,
+    _redact_argv,
+)
 
 #: The wire version this client speaks; the ready line must agree.
 PROTOCOL = 1
@@ -63,9 +68,28 @@ class _ResponseContract(Exception):
         self.detail = detail
 
 
+def _decode_atomic(payload: object, expected_row: int) -> object:
+    """The transact decoder: the one atomic outcome, matched to the row
+    THIS caller sent (the session adds it beside the outcome)."""
+    if not isinstance(payload, dict) or payload.get("row") != expected_row:
+        raise _ResponseContract(
+            "a transact response did not match the request row",
+            f"session answered row {payload.get('row') if isinstance(payload, dict) else None} "
+            f"to request {expected_row}",
+        )
+    try:
+        return envelopes.parse_atomic_outcome(payload)
+    except envelopes.EnvelopeError as exc:
+        raise _ResponseContract(
+            "a transact response did not match the outcome contract",
+            f"unparseable transact outcome: {exc}",
+        ) from None
+
+
 def _decode_receipt(payload: object, expected_row: int) -> object:
     """The propose decoder: parse the receipt, match it to the row
-    THIS caller sent, and refuse an uncoded error. Every check reads
+    THIS caller sent, and refuse an error receipt where an outcome
+    belongs (errors answer through the session's own path). Every check reads
     the local expected row - never the session's shared counter,
     which a concurrent caller may already have advanced."""
     try:
@@ -82,8 +106,9 @@ def _decode_receipt(payload: object, expected_row: int) -> object:
         )
     if isinstance(receipt.outcome, envelopes.BatchError):
         raise _ResponseContract(
-            "a propose response carried an uncoded error",
-            f"uncoded session error: {receipt.outcome.error}",
+            "a propose response carried an error receipt where an outcome belongs",
+            f"error receipt in an outcome position ({receipt.outcome.code}): "
+            f"{receipt.outcome.error}",
         )
     return receipt.outcome
 
@@ -107,26 +132,6 @@ def _decode_rows(cls: type):
             ) from None
 
     return decode
-
-
-class MorphologRequestError(MorphologError):
-    """A per-request session error receipt: the request was received,
-    classified, and refused, and the session is still healthy. The
-    stable ``code`` says whether re-submitting is safe -
-    ``serialization_failure`` is the one re-submittable code."""
-
-    def __init__(self, code: str, error: str, row: int) -> None:
-        super().__init__(f"session request {row} refused ({code}): {error}")
-        self.code = code
-        self.error = error
-        self.row = row
-
-
-class MorphologOutcomeUnknown(MorphologError):
-    """A propose request was submitted but no trustworthy response
-    arrived: the commit outcome is unknown. The database may have
-    committed before the session died, so re-submitting blindly can
-    duplicate a business action - read the record first."""
 
 
 class Session:
@@ -417,6 +422,13 @@ class Session:
                     if commitful:
                         raise MorphologOutcomeUnknown(message)
                     raise MorphologError(message)
+                if receipt.code == "commit_outcome_unknown":
+                    # The runtime's own verdict of "unknown": the
+                    # response arrived, so the wire is in step and the
+                    # session stays usable - unlike a lost response.
+                    raise MorphologOutcomeUnknown(
+                        f"session request {receipt.row}: {receipt.error}"
+                    )
                 raise MorphologRequestError(receipt.code, receipt.error, receipt.row)
             try:
                 return decode(payload, expected_row)
@@ -452,7 +464,7 @@ class Session:
         explain_on_reject: bool = False,
     ) -> envelopes.Committed | envelopes.Rejected:
         """Propose a change through the session: it commits only if
-        every rule holds; a refusal is a lawful outcome, returned as
+        everything it touches still obeys every rule; a refusal is a lawful outcome, returned as
         ``Rejected``."""
         body: dict[str, object] = {
             "op": "propose",
@@ -463,6 +475,18 @@ class Session:
         if explain_on_reject:
             body["explain_on_reject"] = True
         return self._exchange(body, commitful=True, decode=_decode_receipt)
+
+    def transact(
+        self, acts: list[dict[str, object]]
+    ) -> envelopes.AtomicCommitted | envelopes.AtomicRejected:
+        """Propose several acts as one decision through the session, as
+        on the one-shot client: every act or none, each act seeing what
+        the acts before it staged. A known error of the whole batch - an
+        empty batch included - is a coded ``MorphologRequestError``
+        (``retriable`` only for ``serialization_failure``), exactly as on
+        the one-shot client; the session stays in step."""
+        body: dict[str, object] = {"op": "transact", "acts": [dict(a) for a in acts]}
+        return self._exchange(body, commitful=True, decode=_decode_atomic)
 
     def submit(
         self, request: object, actor: str, explain_on_reject: bool = False
