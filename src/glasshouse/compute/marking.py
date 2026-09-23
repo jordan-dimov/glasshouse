@@ -2,13 +2,16 @@
 
 `register_curve_version` and `correct_curve_version` store the payload
 first and propose the identity claim second, so a committed claim never
-anchors missing content. When the ledger then lawfully REJECTS the
-proposal, the payload this call just stored is discarded again -
-otherwise the rejected version id would be consumed forever (the store
-refuses overwrites) and a later legitimate correction could never reuse
-it. A payload orphaned by a crash between store and proposal remains
-detectable garbage for `glasshouse verify`; a claim without its payload
-would be a lie.
+anchors missing content. Whenever the ledger provably did NOT admit the
+claim, the payload this call just stored is discarded again - otherwise
+the version id would be consumed forever (the store refuses overwrites)
+and a later legitimate correction could never reuse it. Provably means a
+lawful rejection, or an operational failure the substrate classifies as
+a known non-commit (since morpholog v0.0.11 every `MorphologError` from
+a proposal is one, except `MorphologOutcomeUnknown`). An unknown outcome
+keeps the payload: the claim may have committed, and a claim without its
+payload would be a lie. A payload orphaned by a crash between store and
+proposal remains detectable garbage for `glasshouse verify`.
 
 `value_trade` is the killer query's write side: read the trade and the
 official curve back from governed state, load the anchored payload,
@@ -27,7 +30,13 @@ from __future__ import annotations
 
 import datetime as dt
 
-from glasshouse.commit import Committed, GlasshouseClient, Outcome
+from glasshouse.commit import (
+    Committed,
+    GlasshouseClient,
+    MorphologError,
+    MorphologOutcomeUnknown,
+    Outcome,
+)
 from glasshouse.commit.morpholog_client.models import (
     AdmitValuationRequest,
     CorrectCurveRequest,
@@ -59,17 +68,16 @@ def register_curve_version(
     curve: HourlyCurve,
 ) -> Outcome:
     store.save(org=org, version=version, curve=curve)
-    outcome = morpholog.submit(
+    return _propose_anchored(
+        morpholog,
+        store,
         RegisterCurveRequest(
             org=org, market=market, as_of=as_of, version=version, payload_hash=curve.payload_hash()
         ),
         actor=actor,
+        org=org,
+        version=version,
     )
-    if not isinstance(outcome, Committed):
-        # A decided rejection: give the version id back (this call
-        # stored the payload, so this call may discard it).
-        store.discard(org=org, version=version)
-    return outcome
 
 
 def correct_curve_version(
@@ -85,7 +93,9 @@ def correct_curve_version(
     curve: HourlyCurve,
 ) -> Outcome:
     store.save(org=org, version=new_version, curve=curve)
-    outcome = morpholog.submit(
+    return _propose_anchored(
+        morpholog,
+        store,
         CorrectCurveRequest(
             org=org,
             market=market,
@@ -95,9 +105,32 @@ def correct_curve_version(
             payload_hash=curve.payload_hash(),
         ),
         actor=actor,
+        org=org,
+        version=new_version,
     )
+
+
+def _propose_anchored(
+    morpholog: GlasshouseClient,
+    store: CurveStore,
+    request: RegisterCurveRequest | CorrectCurveRequest,
+    *,
+    actor: str,
+    org: str,
+    version: str,
+) -> Outcome:
+    """Propose the claim anchoring a payload this call just stored, and
+    give the version id back whenever the claim provably did not land
+    (this call stored the payload, so this call may discard it)."""
+    try:
+        outcome = morpholog.submit(request, actor=actor)
+    except MorphologOutcomeUnknown:
+        raise  # it may have committed: the payload stays
+    except MorphologError:
+        store.discard(org=org, version=version)  # a known non-commit
+        raise
     if not isinstance(outcome, Committed):
-        store.discard(org=org, version=new_version)
+        store.discard(org=org, version=version)  # a decided rejection
     return outcome
 
 
