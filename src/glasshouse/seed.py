@@ -28,8 +28,9 @@ import sqlalchemy as sa
 
 from alembic import command
 from glasshouse.commit import MODEL_FILE, Committed, GlasshouseClient, apply_views, models
+from glasshouse.commit.morpholog_client.envelopes import AtomicCommitted
 from glasshouse.compute.curves import HourlyCurve
-from glasshouse.compute.marking import correct_curve_version, register_curve_version, value_trade
+from glasshouse.compute.marking import correct_and_remark, register_curve_version, value_trade
 from glasshouse.compute.store import CurveStore, engine_url
 from glasshouse.compute.store import metadata as payload_metadata
 from glasshouse.config import Environment, get_settings
@@ -208,23 +209,23 @@ def seed_demo(client: GlasshouseClient, store: CurveStore, engine: sa.Engine) ->
 
     # The Tuesday correction: v2 supersedes v1 (lineage linked, the old
     # version and its marks stay on the record) and every trade is
-    # re-marked against it - so the demo carries a supersession chain,
-    # valuation history, and a well-defined current mark per trade.
-    _committed(
-        correct_curve_version(
-            client,
-            store,
-            actor="carol",
-            org=ORG,
-            market=MARKET,
-            as_of=AS_OF,
-            prior_version=CURVE_V1,
-            new_version=CURVE_V2,
-            curve=CORRECTED_CURVE,
-        )
+    # re-marked against it, as ONE decision - so the demo carries a
+    # supersession chain, valuation history, and a well-defined current
+    # mark per trade with no moment where a mark names the old curve.
+    corrected = correct_and_remark(
+        client,
+        store,
+        curve_actor="carol",
+        valuation_actor="risk-engine",
+        org=ORG,
+        market=MARKET,
+        as_of=AS_OF,
+        prior_version=CURVE_V1,
+        new_version=CURVE_V2,
+        curve=CORRECTED_CURVE,
     )
-    for trade, book, *_ in _TRADES:
-        _committed(value_trade(client, store, actor="risk-engine", org=ORG, book=book, trade=trade))
+    if not isinstance(corrected, AtomicCommitted) or len(corrected.acts) != 1 + len(_TRADES):
+        raise SeedError(f"the Tuesday correction was not committed whole: {corrected!r}")
 
     rebuild(client, engine)
     return SeedReport(
