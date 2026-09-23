@@ -9,7 +9,7 @@ How a new morpholog release reaches each database Glasshouse uses. The code half
 | Binary | Schema | What happens |
 |---|---|---|
 | new | old (unmigrated) | `propose` refuses by name ("the database schema is behind this binary ... run `morpholog migrate`"). `audit verify` and the audit tail fail with a raw SQL error (`column "arguments_hash" does not exist`). |
-| old | new (migrated) | `propose` fails with a raw SQL error (`no unique or exclusion constraint matching the ON CONFLICT specification`). The old generated client also refuses new audit rows (`unknown key(s) ['parameters']`), so the projector stops. |
+| old | new (migrated) | `propose` fails with a raw SQL error (`no unique or exclusion constraint matching the ON CONFLICT specification`). The old generated client also refuses new audit rows (`unknown key(s) ['parameters']`), so the projector stops. `migrate` refuses by name ("this database records migrations this binary does not know ... upgrade the binary"), so an old `glasshouse provision` fails too. |
 
 Both directions stop the service, so no process may run an older binary against a database a newer one has migrated.
 
@@ -17,7 +17,8 @@ Both directions stop the service, so no process may run an older binary against 
 
 | Database | Owner | Lifetime | Upgrade path |
 |---|---|---|---|
-| Local test DB (`glasshouse-test-db` container, port 5433) | the developer | disposable | Drop and recreate. The live suite provisions from scratch. |
+| Local dev DB (the compose `db` service, port 5432) | the developer | disposable | Run `glasshouse provision` with the new binary (it migrates), or drop the volume and start again. |
+| Test DB (whatever `GLASSHOUSE_TEST_DATABASE_URL` names) | the developer | disposable | None. The live suite drops and re-`init`s the governed schema on every run. |
 | CI `services:` Postgres (integration job, canary) | GitHub Actions | per run | None. Every run starts empty and `init`s with the pinned binary. |
 | Render `glasshouse-db` (demo) | the maintainer | persistent, rebuilt nightly by `seed --reset` | The procedure below. **Ask before touching it.** |
 
@@ -25,7 +26,7 @@ The Render database is written by two services from the **same image**: `glassho
 
 ## Procedure (demo database)
 
-Commit deploys from GitHub have never fired for this repo (see the local deploy notes), so both services are deployed by hand. Do it well clear of 02:30 UTC.
+Render's deploy history for both services shows no GitHub commit trigger ever firing (every deploy is a Blueprint sync, a manual API call or a platform restart), so both services are deployed by hand. Do it well clear of 02:30 UTC.
 
 1. **Merge** the re-pin PR once CI is green on main.
 2. **Look before changing anything.** From a machine with the new binary and the database URL:
@@ -35,14 +36,19 @@ Commit deploys from GitHub have never fired for this repo (see the local deploy 
 3. **Back up.** The demo is rebuilt nightly, so the backup protects the rehearsal, not irreplaceable data. Take one anyway: `pg_dump -Fc "$DATABASE_URL" > demo-$(date -u +%F).dump`. Render's own point-in-time backups depend on the plan and are not relied on here.
 4. **Deploy web**, pinned to the exact commit: `render deploys create <web-id> --commit "$(git rev-parse origin/main)" --wait --confirm`. The pre-deploy `provision` runs `migrate`. Check its log for `migrated (...)`. While the old web instance keeps serving until the swap, its writes (the imports workbench) fail. The window is the length of the deploy.
 5. **Deploy the cron immediately after**, in the same sitting: `render deploys create <cron-id> --wait --confirm`. Cron services refuse `--commit` (HTTP 400) and build the branch head, so confirm the head is the commit web took.
-6. **Verify, read-only**: `morpholog audit verify --database-url "$DATABASE_URL" --views-schema morpholog_views` must report replay `consistent`, tree `intact` and views `intact`. Then run `glasshouse verify` (all six legs), `/readyz` (all verdicts `ok`) and `/healthz` (the `commit` names what you deployed, once deployment identity has landed).
+6. **Verify, read-only**: `morpholog audit verify --database-url "$DATABASE_URL" --views-schema morpholog_views` must report replay `consistent`, tree `intact` and views `intact`. Then run `glasshouse verify` (all six legs) and `/readyz` (all verdicts `ok`), and confirm the deployed commit with `render deploys list <service-id>` for both services. `/healthz` does not name the commit yet.
 7. **Optionally re-seed now** instead of waiting for 02:30: `render jobs create <cron-id> --start-command "uv run python -m glasshouse.cli seed --reset"`. It reports only after all six verify legs pass.
 
 `render deploys create` exits 0 on an API 404/400, so read its output rather than trusting the exit code.
 
 ## Rollback
 
-Migrations are forward-only, and an old binary cannot write a migrated schema, so rolling back is a restore, not a downgrade: redeploy the previous commit on **both** services, then either restore the step-3 dump or run the reset job (the old cron's `seed --reset` re-`init`s the schema at the old binary's version). For the demo, the reset is the simpler path.
+Migrations are forward-only, so rolling back is a rebuild of the schema, never a downgrade. The order matters. The old web's pre-deploy `provision` runs the old binary's `migrate`, which refuses a migrated schema, so Render aborts the web deploy while the schema is still new. Roll back the database first:
+
+1. **Deploy the previous commit to the cron** (it has no pre-deploy step, so nothing refuses) and trigger its reset job. The old binary drops the governed schema and re-`init`s it at its own version, then seeds and verifies. Or restore the step-3 dump.
+2. **Then deploy the previous commit to web.** Its `provision` now meets a schema it knows.
+
+Between the two steps the new web is running against an old schema, which fails as the table above says. Keep the gap short. The demo has no traffic worth fencing, but a real deployment would put a maintenance page in front first.
 
 ## Release-specific notes
 
