@@ -76,3 +76,17 @@ def test_an_unknown_outcome_keeps_the_payload(tmp_path: Path) -> None:
     with pytest.raises(MorphologOutcomeUnknown):
         _register(binary, store)
     assert (store.saved, store.discarded) == (["acme-energy/crv-1"], [])
+
+
+def test_an_undecodable_reply_keeps_the_payload(tmp_path: Path) -> None:
+    # Exit 0 with stdout that is not an outcome envelope: the proposal
+    # may have committed, and the generated one-shot client raises the
+    # decoder's own error rather than `MorphologOutcomeUnknown` (reported
+    # upstream). It is not a `MorphologError`, so it is never read as a
+    # known non-commit: the payload stays.
+    binary = fake_binary(tmp_path, '{"status": "committed"', exit_code=0)
+    store = RecordingStore()
+    with pytest.raises(json.JSONDecodeError) as raised:
+        _register(binary, store)
+    assert not isinstance(raised.value, MorphologError)
+    assert (store.saved, store.discarded) == (["acme-energy/crv-1"], [])
