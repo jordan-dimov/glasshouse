@@ -17,7 +17,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import datetime
 from collections.abc import Set as AbstractSet
-from typing import Callable, TypeVar
+from typing import Callable, Generic, TypeVar
 
 from . import values
 
@@ -197,6 +197,92 @@ def parse_run_outcome(payload: object) -> Committed | Rejected:
         {
             "committed": Committed.from_json,
             "rejected": Rejected.from_json,
+        },
+    )
+
+
+@dataclass(frozen=True)
+class AtomicAct:
+    """One act's receipt inside a committed ``transact``: its 1-based
+    ``row`` and the committed outcome, with its own transition id."""
+
+    row: int
+    outcome: Committed
+
+    @classmethod
+    def from_json(cls, payload: object) -> AtomicAct:
+        # Strict on the wire shape first, so a stray key - `status`
+        # included - is drift, never silently rewritten.
+        data = _strict(
+            "atomic act",
+            payload,
+            {
+                "row",
+                "transition_id",
+                "actor",
+                "asserted_claims",
+                "retracted_claims",
+                "emitted_intents",
+            },
+        )
+        body = {k: v for k, v in data.items() if k != "row"}
+        body["status"] = "committed"
+        return cls(row=int(str(data["row"])), outcome=Committed.from_json(body))
+
+
+@dataclass(frozen=True)
+class AtomicCommitted:
+    """Every act committed, in order, as one decision."""
+
+    acts: list[AtomicAct]
+
+    @classmethod
+    def from_json(cls, payload: object) -> AtomicCommitted:
+        data = _strict("atomic committed", payload, {"status", "acts"}, optional={"row"})
+        raw = data["acts"]
+        if not isinstance(raw, list) or not raw:
+            raise EnvelopeError(f"`acts` must be a non-empty list, got {raw!r}")
+        return cls(acts=[AtomicAct.from_json(a) for a in raw])
+
+
+@dataclass(frozen=True)
+class AtomicRejected:
+    """The first refused act, by 1-based position, and nothing written:
+    the acts before it were staged and rolled back, and get no receipt.
+    ``rule`` and ``witness`` are as on ``Rejected``; the witness may
+    name values the rolled-back prefix staged."""
+
+    act: int
+    reason: str
+    rule: str | None = None
+    witness: list[WitnessBinding] = field(default_factory=list)
+
+    @classmethod
+    def from_json(cls, payload: object) -> AtomicRejected:
+        data = _strict(
+            "atomic rejected",
+            payload,
+            {"status", "act", "reason"},
+            optional={"rule", "witness", "row"},
+        )
+        rule = data.get("rule")
+        return cls(
+            act=int(str(data["act"])),
+            reason=str(data["reason"]),
+            rule=None if rule is None else str(rule),
+            witness=[WitnessBinding.from_json(w) for w in data.get("witness", [])],
+        )
+
+
+def parse_atomic_outcome(payload: object) -> AtomicCommitted | AtomicRejected:
+    """A ``transact`` outcome: committed or rejected. A coded error is
+    not an outcome and is raised by the adapter."""
+    return _by_status(
+        payload,
+        "a transact outcome",
+        {
+            "committed": AtomicCommitted.from_json,
+            "rejected": AtomicRejected.from_json,
         },
     )
 
@@ -664,6 +750,10 @@ class SessionErrorReceipt:
 
 @dataclass(frozen=True)
 class BatchError:
+    """A row that could not be proposed, with the same stable ``code``
+    set a session error receipt carries."""
+
+    code: str
     error: str
 
 
@@ -679,8 +769,8 @@ class BatchReceipt:
         row = payload["row"]
         body = {k: v for k, v in payload.items() if k != "row"}
         if body.get("status") == "error":
-            data = _strict("batch error receipt", body, {"status", "error"})
-            return cls(row=row, outcome=BatchError(error=data["error"]))
+            data = _strict("batch error receipt", body, {"status", "code", "error"})
+            return cls(row=row, outcome=BatchError(code=str(data["code"]), error=str(data["error"])))
         return cls(row=row, outcome=parse_run_outcome(body))
 
 
@@ -835,8 +925,10 @@ class OutboxUpdate:
 
 @dataclass(frozen=True)
 class AuditedInvariantCheck:
-    """One invariant that governed an admission: name plus the
-    version active at commit time."""
+    """One active invariant the transition was admitted under: name
+    plus the version active at commit time. Discharged because the
+    change could not affect it, because every affected case satisfied
+    it, or because the whole invariant held."""
 
     name: str
     version: int
@@ -860,7 +952,26 @@ _AUDIT_ROW_KEYS = {
     "committed_at",
 }
 
-_AUDIT_ROW_OPTIONAL_KEYS = {"attestation"}
+_AUDIT_ROW_OPTIONAL_KEYS = {"attestation", "parameters"}
+
+
+def _parameters_of(data: dict[str, object]) -> list[str] | None:
+    """The stamped parameter names, held to the shapes a row can have:
+    names are strings (leaf-covered evidence, never coerced), only an
+    attested row carries them, and there is one per argument."""
+    raw = data.get("parameters")
+    if raw is None:
+        return None
+    names = _str_list("parameters", raw)
+    if data.get("attestation") is None:
+        raise EnvelopeError("an audit row carries parameter names but no attestation")
+    arguments = data.get("arguments")
+    if not isinstance(arguments, list) or len(names) != len(arguments):
+        raise EnvelopeError(
+            f"an audit row carries {len(names)} parameter names for "
+            f"{len(arguments) if isinstance(arguments, list) else '?'} arguments"
+        )
+    return names
 
 
 @dataclass(frozen=True)
@@ -909,6 +1020,11 @@ class AuditRow:
     emitted_intents: list[IntentInstance]
     committed_at: datetime
     attestation: Attestation | None = None
+    # The transformation's parameter names in declaration order, one
+    # per argument, as the writer stamped them: the row's own signature,
+    # readable after the act is retired. None on rows from before names
+    # were stamped.
+    parameters: list[str] | None = None
 
     @classmethod
     def from_json(cls, payload: object) -> AuditRow:
@@ -927,6 +1043,7 @@ class AuditRow:
             emitted_intents=[IntentInstance.from_json(i) for i in data["emitted_intents"]],
             committed_at=values.parse_timestamp(data["committed_at"]),
             attestation=_attestation_of(data),
+            parameters=_parameters_of(data),
         )
 
 
@@ -948,6 +1065,11 @@ class AuditRowNamed:
     emitted_intents: list[IntentInstance]
     committed_at: datetime
     attestation: Attestation | None = None
+    # The transformation's parameter names in declaration order, one
+    # per argument, as the writer stamped them: the row's own signature,
+    # readable after the act is retired. None on rows from before names
+    # were stamped.
+    parameters: list[str] | None = None
 
     @classmethod
     def from_json(cls, payload: object) -> AuditRowNamed:
@@ -966,6 +1088,7 @@ class AuditRowNamed:
             emitted_intents=[IntentInstance.from_json(i) for i in data["emitted_intents"]],
             committed_at=values.parse_timestamp(data["committed_at"]),
             attestation=_attestation_of(data),
+            parameters=_parameters_of(data),
         )
 
 
@@ -1462,6 +1585,22 @@ class TreeSignatureRequired:
         return cls(tree_size=data["tree_size"])
 
 
+@dataclass(frozen=True)
+class TreeSigningKeyRequired:
+    """`--require-signing-key` pinned a key and this checkpoint carries
+    no signature by it. Policy over an otherwise intact tree, whose
+    signatures are all genuine and authorised: the pin narrows which
+    authorised signer the verifier accepts."""
+
+    tree_size: int
+    public_key: str
+
+    @classmethod
+    def from_json(cls, payload: object) -> TreeSigningKeyRequired:
+        data = _strict("signing-key-required tree", payload, {"status", "tree_size", "public_key"})
+        return cls(tree_size=data["tree_size"], public_key=data["public_key"])
+
+
 TreeVerification = (
     TreeIntact
     | TreeTampered
@@ -1471,6 +1610,7 @@ TreeVerification = (
     | TreeSignatureInvalid
     | TreeUnauthorizedKey
     | TreeSignatureRequired
+    | TreeSigningKeyRequired
 )
 
 
@@ -1489,6 +1629,7 @@ def parse_tree_verification(payload: object) -> TreeVerification:
             "signature_invalid": TreeSignatureInvalid.from_json,
             "unauthorized_key": TreeUnauthorizedKey.from_json,
             "signature_required": TreeSignatureRequired.from_json,
+            "signing_key_required": TreeSigningKeyRequired.from_json,
         },
     )
 
@@ -1551,23 +1692,106 @@ def parse_views_verification(payload: object) -> ViewsVerification:
 
 
 @dataclass(frozen=True)
+class WitnessVerdict:
+    """One stored external witness, judged: ``verified`` (its token
+    chains to a supplied trust anchor), ``untrusted`` (a sound token from
+    an authority you did not name), ``unverified`` (sound, no anchors
+    supplied), ``unsupported`` (this verifier cannot check it), or
+    ``invalid`` (it does not vouch for this checkpoint - the one standing
+    that fails the command). ``attested_at`` is the authority's time,
+    present whenever the token could be read."""
+
+    scheme: str
+    submitted_to: str
+    status: str
+    attested_at: datetime | None = None
+    detail: str | None = None
+
+    @classmethod
+    def from_json(cls, payload: object) -> WitnessVerdict:
+        data = _strict(
+            "witness verdict",
+            payload,
+            {"scheme", "submitted_to", "status"},
+            optional={"attested_at", "detail"},
+        )
+        detail = data.get("detail")
+        return cls(
+            scheme=data["scheme"],
+            submitted_to=data["submitted_to"],
+            status=data["status"],
+            attested_at=_optional_timestamp(data.get("attested_at")),
+            detail=None if detail is None else str(detail),
+        )
+
+
+@dataclass(frozen=True)
+class CheckpointWitnesses:
+    """A checkpoint's witnesses, judged."""
+
+    tree_size: int
+    witnesses: list[WitnessVerdict]
+
+    @classmethod
+    def from_json(cls, payload: object) -> CheckpointWitnesses:
+        data = _strict("checkpoint witnesses", payload, {"tree_size", "witnesses"})
+        raw = data["witnesses"]
+        if not isinstance(raw, list):
+            raise EnvelopeError(f"`witnesses` must be a list, got {raw!r}")
+        return cls(
+            tree_size=data["tree_size"],
+            witnesses=[WitnessVerdict.from_json(w) for w in raw],
+        )
+
+
+@dataclass(frozen=True)
+class WitnessesReport:
+    """What the external witnesses on a chain of checkpoints prove.
+    ``earliest_attested_at`` is the earliest time any VERIFIED witness
+    attests - the figure a "no later than" claim can rest on; absent when
+    none verified."""
+
+    checkpoints: list[CheckpointWitnesses]
+    earliest_attested_at: datetime | None = None
+
+    @classmethod
+    def from_json(cls, payload: object) -> WitnessesReport:
+        data = _strict(
+            "witnesses report", payload, {"checkpoints"}, optional={"earliest_attested_at"}
+        )
+        raw = data["checkpoints"]
+        if not isinstance(raw, list):
+            raise EnvelopeError(f"`checkpoints` must be a list, got {raw!r}")
+        return cls(
+            checkpoints=[CheckpointWitnesses.from_json(c) for c in raw],
+            earliest_attested_at=_optional_timestamp(data.get("earliest_attested_at")),
+        )
+
+
+@dataclass(frozen=True)
 class VerifyReport:
     """The `verify` envelope: the replay verdict beside the
     tamper-evidence verdict, plus the generated-view-surface verdict
-    when the verifier asked for it (`--views-schema`)."""
+    when the verifier asked for it (`--views-schema`), plus what the
+    checkpoints' external witnesses prove when any carries one."""
 
     replay: ReplayConsistent | ReplayDivergent
     tree: TreeVerification
     views: ViewsVerification | None = None
+    witnesses: WitnessesReport | None = None
 
     @classmethod
     def from_json(cls, payload: object) -> VerifyReport:
-        data = _strict("verify report", payload, {"replay", "tree"}, optional={"views"})
+        data = _strict(
+            "verify report", payload, {"replay", "tree"}, optional={"views", "witnesses"}
+        )
         views = data.get("views")
+        witnesses = data.get("witnesses")
         return cls(
             replay=parse_verify_outcome(data["replay"]),
             tree=parse_tree_verification(data["tree"]),
             views=None if views is None else parse_views_verification(views),
+            witnesses=None if witnesses is None else WitnessesReport.from_json(witnesses),
         )
 
 
@@ -1595,6 +1819,30 @@ class TreeHeadSignature:
         )
 
 
+@dataclass(frozen=True)
+class Witness:
+    """One external witness to a tree head: the authority's exact
+    response (`proof`, base64) and where it was obtained. The attested
+    time and whether it verifies are read from the proof by the
+    verifier, never stored."""
+
+    scheme: str
+    proof: str
+    submitted_to: str
+
+    @classmethod
+    def from_json(cls, payload: object) -> Witness:
+        data = _strict("witness", payload, {"scheme", "proof", "submitted_to"})
+        return cls(scheme=data["scheme"], proof=data["proof"], submitted_to=data["submitted_to"])
+
+
+def _parse_witnesses(data: dict[str, object]) -> list[Witness]:
+    raw = data.get("witnesses", [])
+    if not isinstance(raw, list):
+        raise EnvelopeError(f"`witnesses` must be a list, got {raw!r}")
+    return [Witness.from_json(w) for w in raw]
+
+
 def _parse_signatures(data: dict[str, object]) -> list[TreeHeadSignature]:
     raw = data.get("signatures", [])
     if not isinstance(raw, list):
@@ -1614,6 +1862,7 @@ class Checkpoint:
     prev_checkpoint_hash: str | None
     checkpoint_hash: str
     signatures: list[TreeHeadSignature] = field(default_factory=list)
+    witnesses: list[Witness] = field(default_factory=list)
 
     @classmethod
     def from_json(cls, payload: object) -> Checkpoint:
@@ -1621,7 +1870,7 @@ class Checkpoint:
             "checkpoint",
             payload,
             {"tree_size", "root_hash", "prev_checkpoint_hash", "checkpoint_hash"},
-            {"signatures"},
+            {"signatures", "witnesses"},
         )
         return cls(
             tree_size=data["tree_size"],
@@ -1629,6 +1878,7 @@ class Checkpoint:
             prev_checkpoint_hash=data["prev_checkpoint_hash"],
             checkpoint_hash=data["checkpoint_hash"],
             signatures=_parse_signatures(data),
+            witnesses=_parse_witnesses(data),
         )
 
 
@@ -1640,7 +1890,7 @@ def _checkpoint_from_flattened(name: str, payload: object) -> Checkpoint:
         name,
         payload,
         {"status", "tree_size", "root_hash", "prev_checkpoint_hash", "checkpoint_hash"},
-        {"signatures"},
+        {"signatures", "witnesses"},
     )
     return Checkpoint(
         tree_size=data["tree_size"],
@@ -1648,6 +1898,7 @@ def _checkpoint_from_flattened(name: str, payload: object) -> Checkpoint:
         prev_checkpoint_hash=data["prev_checkpoint_hash"],
         checkpoint_hash=data["checkpoint_hash"],
         signatures=_parse_signatures(data),
+        witnesses=_parse_witnesses(data),
     )
 
 
@@ -2151,3 +2402,27 @@ def parse_selective_verification(payload: object) -> SelectiveVerification:
             "malformed": SelectiveMalformed.from_json,
         },
     )
+
+
+_PackVerdict = TypeVar("_PackVerdict")
+
+
+@dataclass(frozen=True)
+class PackVerificationReport(Generic[_PackVerdict]):
+    """`verify-pack` with the witness axis requested: the pack's own
+    verdict beside what its checkpoints' witnesses prove. ``witnesses``
+    is absent when no checkpoint in the pack carries one."""
+
+    verdict: _PackVerdict
+    witnesses: WitnessesReport | None = None
+
+    @classmethod
+    def from_json(
+        cls, payload: object, parse_verdict: Callable[[object], _PackVerdict]
+    ) -> PackVerificationReport[_PackVerdict]:
+        data = _strict("pack verification report", payload, {"verdict"}, optional={"witnesses"})
+        witnesses = data.get("witnesses")
+        return cls(
+            verdict=parse_verdict(data["verdict"]),
+            witnesses=None if witnesses is None else WitnessesReport.from_json(witnesses),
+        )

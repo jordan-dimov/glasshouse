@@ -121,9 +121,10 @@ class GlasshouseClient(Morpholog):
         key_id: str | None = None,
         *,
         writer_roles: list[str] | None = None,
+        witnesses: list[str] | None = None,
     ) -> envelopes.CheckpointCreated | envelopes.CheckpointNoNewRows:
         return super().audit_checkpoint(
-            signing_key, key_id, writer_roles=self._asserted(writer_roles)
+            signing_key, key_id, writer_roles=self._asserted(writer_roles), witnesses=witnesses
         )
 
     def write_checkpoint(

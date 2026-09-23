@@ -23,7 +23,7 @@ from glasshouse.commit.morpholog_client import (
     models,
     values,
 )
-from glasshouse.commit.morpholog_client.adapter import MorphologError
+from glasshouse.commit.morpholog_client.adapter import MorphologError, MorphologOutcomeUnknown
 from glasshouse.commit.morpholog_client.envelopes import Committed, Rejected
 from glasshouse.commit.views import (
     VIEWS_FILE,
@@ -49,6 +49,7 @@ __all__ = [
     "Committed",
     "GlasshouseClient",
     "MorphologError",
+    "MorphologOutcomeUnknown",
     "NamedClaimModel",
     "Outcome",
     "Rejected",

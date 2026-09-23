@@ -105,7 +105,14 @@ ERROR_RECEIPTS = "\n".join(
                 "row": 1,
             }
         ),
-        json.dumps({"row": 2, "status": "error", "error": "could not serialize access"}),
+        json.dumps(
+            {
+                "row": 2,
+                "status": "error",
+                "code": "serialization_failure",
+                "error": "could not serialize access",
+            }
+        ),
     ]
 )
 
@@ -116,7 +123,7 @@ def test_an_error_receipt_is_reported_per_row_not_raised(tmp_path: Path) -> None
     client = GlasshouseClient("model.morph", "postgres:///x", binary=str(binary))
     report = import_trades(client, text, org="acme-energy", actor="alice")
     assert (report.committed, report.errored) == (1, 1)
-    assert "could not serialize" in report.outcomes[1].detail
+    assert report.outcomes[1].detail == "serialization_failure: could not serialize access"
 
 
 def test_an_all_quarantined_file_never_reaches_the_binary(tmp_path: Path) -> None:

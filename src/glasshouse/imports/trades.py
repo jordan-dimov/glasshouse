@@ -136,8 +136,13 @@ def _receipt_outcome(ref: str, outcome: object) -> RowOutcome:
         case envelopes.Rejected(reason=reason, explanation=explanation):
             detail = f"{reason} - {why(explanation)}" if explanation else reason
             return RowOutcome(ref, REJECTED, detail)
-        case envelopes.BatchError(error=error):
-            return RowOutcome(ref, ERROR, error)
+        case envelopes.BatchError(code=code, error=error):
+            # The stable code leads: it is the contract (`not_committed`,
+            # `serialization_failure`, `commit_outcome_unknown`, ...), the
+            # message is prose. A re-import of the file is safe whichever
+            # it is - a row that did commit comes back a lawful duplicate
+            # rejection - so the code informs, it never gates.
+            return RowOutcome(ref, ERROR, f"{code}: {error}")
         case _:
             raise TypeError(f"not a batch outcome: {outcome!r}")
 
