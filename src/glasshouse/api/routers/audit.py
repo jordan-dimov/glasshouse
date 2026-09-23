@@ -12,14 +12,13 @@ work (issue #40).
 
 from __future__ import annotations
 
-from typing import Literal
+from typing import Annotated, Literal
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Query
 
 from glasshouse.api import audit as audit_queries
-from glasshouse.api.deps import get_client
+from glasshouse.api.deps import ClientDep
 from glasshouse.api.schemas import AuditEntry
-from glasshouse.commit import GlasshouseClient
 
 router = APIRouter(tags=["audit"])
 
@@ -27,10 +26,10 @@ router = APIRouter(tags=["audit"])
 @router.get("/audit")
 def audit_log(
     org: str,
+    client: ClientDep,
     scope: Literal["org", "ledger"] = "org",
-    limit: int | None = Query(default=None, ge=1, le=500),
-    offset: int = Query(default=0, ge=0),
-    client: GlasshouseClient = Depends(get_client),
+    limit: Annotated[int | None, Query(ge=1, le=500)] = None,
+    offset: Annotated[int, Query(ge=0)] = 0,
 ) -> list[AuditEntry]:
     entries = audit_queries.list_audit(client)
     if scope == "org":

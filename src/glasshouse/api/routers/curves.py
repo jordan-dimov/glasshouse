@@ -6,19 +6,17 @@ projection table (none exists for curves) and never raw JSONB.
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, HTTPException
 
 from glasshouse.api import curves as curve_queries
-from glasshouse.api.deps import get_client, get_store
+from glasshouse.api.deps import ClientDep, StoreDep
 from glasshouse.api.schemas import CurveDiff, CurveVersion
-from glasshouse.commit import GlasshouseClient
-from glasshouse.compute.store import CurveStore
 
 router = APIRouter(tags=["curves"])
 
 
 @router.get("/markets")
-def list_markets(org: str, client: GlasshouseClient = Depends(get_client)) -> list[str]:
+def list_markets(org: str, client: ClientDep) -> list[str]:
     return curve_queries.list_markets(client, org=org)
 
 
@@ -26,8 +24,8 @@ def list_markets(org: str, client: GlasshouseClient = Depends(get_client)) -> li
 def list_curves(
     org: str,
     market: str,
-    client: GlasshouseClient = Depends(get_client),
-    store: CurveStore = Depends(get_store),
+    client: ClientDep,
+    store: StoreDep,
 ) -> list[CurveVersion]:
     return curve_queries.list_curve_versions(client, store, org=org, market=market)
 
@@ -38,8 +36,8 @@ def diff_curves(
     market: str,
     base: str,
     compare: str,
-    client: GlasshouseClient = Depends(get_client),
-    store: CurveStore = Depends(get_store),
+    client: ClientDep,
+    store: StoreDep,
 ) -> CurveDiff:
     try:
         return curve_queries.curve_diff(

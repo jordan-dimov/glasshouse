@@ -106,6 +106,9 @@ select = [
     "S110", "S112",
     "TC004", "TC005", "TC007", "TC010",
     "COM818", "D301", "D419",
+    # Added 28/08/2026 with the move to `Annotated` dependencies, which
+    # also retired the B008 exemption for calls in argument defaults.
+    "FAST",  # FastAPI idioms
 ]
 ignore = [
     # House doctrine: money and quantities are Decimal FROM STRINGS,
@@ -113,12 +116,6 @@ ignore = [
     # Decimal("10") -> Decimal(10) fix is correct but off-doctrine.
     "FURB157",
 ]
-
-[tool.ruff.lint.flake8-bugbear]
-# FastAPI's dependency idiom puts these calls in argument defaults by
-# design (the call IS the declaration); they are immutable markers, not
-# the mutable-default footgun B008 guards against.
-extend-immutable-calls = ["fastapi.Depends", "fastapi.Query", "fastapi.File", "fastapi.Form"]
 
 [tool.ruff.lint.per-file-ignores]
 # Fixture-dependency parameters and stub signatures are idiomatic in

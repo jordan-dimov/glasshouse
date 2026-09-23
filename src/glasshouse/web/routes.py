@@ -20,10 +20,10 @@ import binascii
 import datetime as dt
 import tempfile
 from pathlib import Path
-from typing import Any
+from typing import Annotated, Any
 
 import sqlalchemy as sa
-from fastapi import APIRouter, Depends, File, Form, Query, Request, Response, UploadFile
+from fastapi import APIRouter, File, Form, Query, Request, Response, UploadFile
 from fastapi.responses import RedirectResponse
 
 from glasshouse.api import audit as audit_queries
@@ -35,10 +35,14 @@ from glasshouse.api.curves import (
     IncomparableCurvesError,
     UnknownCurveVersionError,
 )
-from glasshouse.api.deps import get_client, get_engine, get_projector, get_store
+from glasshouse.api.deps import (
+    ClientDep,
+    EngineDep,
+    ProjectorDep,
+    StoreDep,
+)
 from glasshouse.api.schemas import CurveVersion
-from glasshouse.commit import GlasshouseClient, MorphologError
-from glasshouse.compute.store import CurveStore
+from glasshouse.commit import MorphologError
 from glasshouse.config import get_settings
 from glasshouse.imports import (
     ImportFormatError,
@@ -49,7 +53,6 @@ from glasshouse.imports import (
 )
 from glasshouse.logging import get_logger
 from glasshouse.projections import catch_up
-from glasshouse.projections.runner import RunningProjector
 from glasshouse.verify import verify as run_verify
 from glasshouse.web.templating import templates
 
@@ -120,10 +123,10 @@ def root() -> Response:
 @router.get("/ui")
 def home(
     request: Request,
+    engine: EngineDep,
+    client: ClientDep,
+    projector: ProjectorDep,
     org: str | None = None,
-    engine: sa.Engine = Depends(get_engine),
-    client: GlasshouseClient = Depends(get_client),
-    projector: RunningProjector | None = Depends(get_projector),
 ) -> Response:
     if not org:
         # The organisation picker is this same route without an org.
@@ -142,11 +145,11 @@ def home(
 @router.get("/ui/blotter")
 def blotter(
     request: Request,
+    engine: EngineDep,
     org: str | None = None,
     book: str | None = None,
     market: str | None = None,
-    offset: int = Query(default=0, ge=0),
-    engine: sa.Engine = Depends(get_engine),
+    offset: Annotated[int, Query(ge=0)] = 0,
 ) -> Response:
     if not org:
         return RedirectResponse("/ui", status_code=303)
@@ -199,13 +202,13 @@ def _chains(versions: list[CurveVersion]) -> list[list[str]]:
 @router.get("/ui/curves")
 def curves(
     request: Request,
+    engine: EngineDep,
+    client: ClientDep,
+    store: StoreDep,
     org: str | None = None,
     market: str | None = None,
     base: str | None = None,
     compare: str | None = None,
-    engine: sa.Engine = Depends(get_engine),
-    client: GlasshouseClient = Depends(get_client),
-    store: CurveStore = Depends(get_store),
 ) -> Response:
     if not org:
         return RedirectResponse("/ui", status_code=303)
@@ -343,8 +346,8 @@ def _row_count_refusal(request: Request, org: str, text: str) -> Response | None
 @router.get("/ui/imports")
 def imports_home(
     request: Request,
+    engine: EngineDep,
     org: str | None = None,
-    engine: sa.Engine = Depends(get_engine),
 ) -> Response:
     if not org:
         return RedirectResponse("/ui", status_code=303)
@@ -357,12 +360,12 @@ def imports_home(
 @router.post("/ui/imports/preview")
 def imports_preview(
     request: Request,
-    org: str = Form(),
-    kind: str = Form(),
-    actor: str = Form(default=""),
-    file: UploadFile = File(),
-    engine: sa.Engine = Depends(get_engine),
-    client: GlasshouseClient = Depends(get_client),
+    org: Annotated[str, Form()],
+    kind: Annotated[str, Form()],
+    file: Annotated[UploadFile, File()],
+    engine: EngineDep,
+    client: ClientDep,
+    actor: Annotated[str, Form()] = "",
 ) -> Response:
     fence = _write_fence(request, org)
     if fence:
@@ -406,13 +409,13 @@ def imports_preview(
 @router.post("/ui/imports/commit")
 def imports_commit(
     request: Request,
-    org: str = Form(),
-    kind: str = Form(),
-    actor: str = Form(default=""),
-    text_b64: str = Form(),
-    engine: sa.Engine = Depends(get_engine),
-    client: GlasshouseClient = Depends(get_client),
-    store: CurveStore = Depends(get_store),
+    org: Annotated[str, Form()],
+    kind: Annotated[str, Form()],
+    text_b64: Annotated[str, Form()],
+    engine: EngineDep,
+    client: ClientDep,
+    store: StoreDep,
+    actor: Annotated[str, Form()] = "",
 ) -> Response:
     fence = _write_fence(request, org)
     if fence:
@@ -507,11 +510,11 @@ def imports_commit(
 @router.get("/ui/audit")
 def audit_screen(
     request: Request,
+    engine: EngineDep,
+    client: ClientDep,
     org: str | None = None,
     scope: str = "org",
-    offset: int = Query(default=0, ge=0),
-    engine: sa.Engine = Depends(get_engine),
-    client: GlasshouseClient = Depends(get_client),
+    offset: Annotated[int, Query(ge=0)] = 0,
 ) -> Response:
     if not org:
         return RedirectResponse("/ui", status_code=303)
@@ -544,10 +547,10 @@ def audit_screen(
 @router.post("/ui/audit/verify")
 def audit_verify(
     request: Request,
-    org: str = Form(),
-    engine: sa.Engine = Depends(get_engine),
-    client: GlasshouseClient = Depends(get_client),
-    store: CurveStore = Depends(get_store),
+    org: Annotated[str, Form()],
+    engine: EngineDep,
+    client: ClientDep,
+    store: StoreDep,
 ) -> Response:
     # Read-only however many times it is pressed; several bounded
     # subprocess calls, so it runs on demand, never on page load.
@@ -580,7 +583,7 @@ def audit_verify(
 
 @router.get("/ui/audit/evidence-pack")
 def evidence_pack_download(
-    client: GlasshouseClient = Depends(get_client),
+    client: ClientDep,
 ) -> Response:
     # The binary's exact pack bytes, straight to the operator's machine:
     # a pack is only evidence if it leaves the database's blast radius.
@@ -597,7 +600,7 @@ def evidence_pack_download(
 
 @router.post("/ui/audit/checkpoint")
 def checkpoint_download(
-    client: GlasshouseClient = Depends(get_client),
+    client: ClientDep,
 ) -> Response:
     # A download deliberately, not server-side storage: an anchor only
     # anchors when held outside the database it checks. Re-pressing is
@@ -616,12 +619,12 @@ def checkpoint_download(
 @router.get("/ui/positions")
 def positions(
     request: Request,
+    engine: EngineDep,
     org: str | None = None,
     book: str | None = None,
     market: str | None = None,
     start: str | None = None,
     end: str | None = None,
-    engine: sa.Engine = Depends(get_engine),
 ) -> Response:
     if not org:
         return RedirectResponse("/ui", status_code=303)

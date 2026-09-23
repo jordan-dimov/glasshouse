@@ -19,19 +19,19 @@ unavailability is operational.
 from __future__ import annotations
 
 from datetime import datetime
+from typing import Annotated
 
-import sqlalchemy as sa
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Query
 
 from glasshouse.api import queries
-from glasshouse.api.deps import get_engine
+from glasshouse.api.deps import EngineDep
 from glasshouse.api.schemas import BlotterTrade, OverviewSummary, PositionHour, TradeValuation
 
 router = APIRouter(tags=["reads"])
 
 
 @router.get("/orgs")
-def list_orgs(engine: sa.Engine = Depends(get_engine)) -> list[str]:
+def list_orgs(engine: EngineDep) -> list[str]:
     """Organisations currently represented in the projection read model
     (not a registry - an org absent here is still a valid scope with no
     projected activity yet)."""
@@ -39,18 +39,18 @@ def list_orgs(engine: sa.Engine = Depends(get_engine)) -> list[str]:
 
 
 @router.get("/overview")
-def overview(org: str, engine: sa.Engine = Depends(get_engine)) -> OverviewSummary:
+def overview(org: str, engine: EngineDep) -> OverviewSummary:
     return queries.overview(engine, org=org)
 
 
 @router.get("/trades")
 def list_trades(
     org: str,
+    engine: EngineDep,
     book: str | None = None,
     market: str | None = None,
-    limit: int | None = Query(default=None, ge=1, le=500),
-    offset: int | None = Query(default=None, ge=0),
-    engine: sa.Engine = Depends(get_engine),
+    limit: Annotated[int | None, Query(ge=1, le=500)] = None,
+    offset: Annotated[int | None, Query(ge=0)] = None,
 ) -> list[BlotterTrade]:
     return queries.list_trades(
         engine, org=org, book=book, market=market, limit=limit, offset=offset
@@ -60,11 +60,11 @@ def list_trades(
 @router.get("/positions")
 def list_positions(
     org: str,
+    engine: EngineDep,
     book: str | None = None,
     market: str | None = None,
-    start: datetime | None = Query(default=None, description="period_start >= start (UTC)"),
-    end: datetime | None = Query(default=None, description="period_start < end (UTC)"),
-    engine: sa.Engine = Depends(get_engine),
+    start: Annotated[datetime | None, Query(description="period_start >= start (UTC)")] = None,
+    end: Annotated[datetime | None, Query(description="period_start < end (UTC)")] = None,
 ) -> list[PositionHour]:
     return queries.list_positions(engine, org=org, book=book, market=market, start=start, end=end)
 
@@ -72,15 +72,17 @@ def list_positions(
 @router.get("/valuations")
 def list_valuations(
     org: str,
+    engine: EngineDep,
     trade: str | None = None,
     book: str | None = None,
     market: str | None = None,
-    latest: bool = Query(
-        default=False,
-        description="only each trade's newest admitted mark, never history "
-        "(the newest mark may still be against a superseded curve)",
-    ),
-    engine: sa.Engine = Depends(get_engine),
+    latest: Annotated[
+        bool,
+        Query(
+            description="only each trade's newest admitted mark, never history "
+            "(the newest mark may still be against a superseded curve)"
+        ),
+    ] = False,
 ) -> list[TradeValuation]:
     return queries.list_valuations(
         engine, org=org, trade=trade, book=book, market=market, latest=latest
