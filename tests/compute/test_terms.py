@@ -13,6 +13,7 @@ from glasshouse.commit import models
 from glasshouse.compute.terms import (
     TermsError,
     current_terms,
+    next_version_id,
     terms_in_force_on,
     terms_version_id,
 )
@@ -82,3 +83,17 @@ def test_a_tie_is_refused_not_guessed() -> None:
 def test_version_ids_are_a_readable_per_trade_sequence() -> None:
     assert terms_version_id("T-001", 1) == "T-001/v1"
     assert terms_version_id("T-001", 2) == "T-001/v2"
+
+
+def test_the_next_version_id_skips_names_a_caller_already_used() -> None:
+    # Two versions, one of them named outside the convention and one
+    # named ahead of it: the count-plus-one id would collide.
+    named_ahead = models.TradeTermsClaim(
+        "acme", "T-1", "T-1/v3", Decimal(1), Decimal("50"), T0, T0, D0 + dt.timedelta(days=1)
+    )
+    custom = models.TradeTermsClaim(
+        "acme", "T-1", "desk-rebook", Decimal(1), Decimal("50"), T0, T0, D0 + dt.timedelta(days=2)
+    )
+    assert next_version_id("T-1", [version(1, 0)]) == "T-1/v2"
+    assert next_version_id("T-1", [version(1, 0), named_ahead, custom]) == "T-1/v4"
+    assert next_version_id("T-1", []) == "T-1/v1"

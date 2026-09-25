@@ -7,7 +7,9 @@ convention, and proposes `amend_trade`. There is no payload to store,
 so unlike a curve registration there is nothing to discard on refusal.
 A tip that another amendment beat this one to is a lawful `Rejected`
 from the ledger's no-fork gate, not an error here: the caller re-reads
-and decides again.
+and decides again. The next version id is the first free one in the
+app's convention, so a caller-named version never makes the flow
+propose a collision.
 """
 
 from __future__ import annotations
@@ -21,7 +23,7 @@ from glasshouse.commit.morpholog_client.models import (
     TradeTermsClaim,
     TradeTermsSupersedesClaim,
 )
-from glasshouse.compute.terms import current_terms, terms_version_id
+from glasshouse.compute.terms import current_terms, next_version_id
 
 
 class AmendmentError(RuntimeError):
@@ -64,7 +66,7 @@ def amend_trade(
             org=org,
             trade=trade,
             prior_version=tip.version,
-            new_version=new_version or terms_version_id(trade, len(versions) + 1),
+            new_version=new_version or next_version_id(trade, versions),
             quantity=quantity,
             price=price,
             delivery_start=delivery_start,

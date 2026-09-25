@@ -60,3 +60,17 @@ def terms_version_id(trade: str, ordinal: int) -> str:
     ledger exactly like a curve version id. The ledger never mints
     identifiers; it only refuses a reused one."""
     return f"{trade}/v{ordinal}"
+
+
+def next_version_id(trade: str, versions: Iterable[TradeTermsClaim]) -> str:
+    """The next id in the convention that no existing version of the
+    trade already carries. Versions may have been named by a caller
+    outside the convention (any subject is lawful), so this is the
+    first free ordinal above every version present, not the count plus
+    one: a collision would only be a lawful refusal, but a flow should
+    not propose one it can see coming."""
+    taken = {v.version for v in versions}
+    ordinal = 1 + sum(1 for _ in taken)
+    while terms_version_id(trade, ordinal) in taken:
+        ordinal += 1
+    return terms_version_id(trade, ordinal)

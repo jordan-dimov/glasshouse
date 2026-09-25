@@ -63,10 +63,12 @@ def list_trades(
     )
 
 
-@router.get("/trades/{trade}/terms")
+@router.get("/trades/{trade:path}/terms")
 def list_trade_terms(trade: str, org: str, engine: EngineDep) -> list[TradeTermsVersion]:
     """The amendment trail of one trade: every terms version as
-    admitted, with its lineage and which one is current."""
+    admitted, with its lineage and which one is current. A trade id is
+    an opaque subject and may carry slashes (`desk/T-1`), so the path
+    converter takes the whole segment run."""
     try:
         return queries.list_trade_terms(engine, org=org, trade=trade)
     except queries.UnknownTradeError as unknown:
