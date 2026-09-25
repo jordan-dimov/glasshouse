@@ -15,9 +15,11 @@ from fastapi.testclient import TestClient
 
 from glasshouse.api.app import create_app
 from glasshouse.commit import MODEL_FILE, Committed, GlasshouseClient, models
+from glasshouse.compute.amendment import amend_trade
 from glasshouse.compute.curves import HourlyCurve
 from glasshouse.compute.marking import correct_curve_version, register_curve_version, value_trade
 from glasshouse.compute.store import CurveStore
+from glasshouse.compute.terms import terms_version_id
 from glasshouse.projections import rebuild
 from tests.support import BINARY, DB, needs_live_stack, provision
 
@@ -26,6 +28,9 @@ pytestmark = needs_live_stack
 ORG, BOOK, MARKET = "acme-energy", "spec-de", "de-power"
 AS_OF = dt.date(2026, 6, 8)
 T0 = dt.datetime(2026, 7, 1, tzinfo=dt.UTC)
+# The first terms version's effective date: on or before every curve
+# business date these tests value under.
+TRADE_DATE = dt.date(2026, 6, 1)
 
 
 @pytest.fixture(scope="module")
@@ -53,10 +58,12 @@ def seeded() -> sa.Engine:
                 counterparty="stadtwerk-x",
                 market=MARKET,
                 direction="buy",
+                version=terms_version_id("T-001", 1),
                 quantity=Decimal("10"),
                 price=Decimal("86.25"),
                 delivery_start=T0,
                 delivery_end=T0 + dt.timedelta(hours=3),
+                trade_date=TRADE_DATE,
             ),
             actor="alice",
         ),
@@ -134,6 +141,24 @@ def seeded() -> sa.Engine:
         ),
         Committed,
     )
+    # An amendment with NO revaluation: the price moves (the quantity
+    # stays, so the positions below are unchanged), the blotter shows the
+    # current terms with their trail, and every mark still names the
+    # first version it was struck under.
+    assert isinstance(
+        amend_trade(
+            client,
+            actor="alice",
+            org=ORG,
+            trade="T-001",
+            quantity=Decimal("10"),
+            price=Decimal("85"),
+            delivery_start=T0,
+            delivery_end=T0 + dt.timedelta(hours=3),
+            effective_from=AS_OF,
+        ),
+        Committed,
+    )
     rebuild(client, engine)
     return engine
 
@@ -151,9 +176,29 @@ def test_trades_reads_the_blotter(api: TestClient) -> None:
     assert trade["trade"] == "T-001"
     assert trade["direction"] == "buy"
     assert trade["quantity"] == "10"  # exact, a string, not a JSON float
-    assert trade["price"] == "86.25"
+    assert trade["price"] == "85"  # the amended price: the row carries the current terms
     assert trade["actor"] == "alice"  # the evidence trail rode the read
     assert trade["transition_id"]
+    assert (trade["terms_version"], trade["amendment_count"]) == ("T-001/v2", 1)
+    assert (trade["trade_date"], trade["effective_from"]) == (
+        TRADE_DATE.isoformat(),
+        AS_OF.isoformat(),
+    )
+    assert trade["terms_transition_id"] != trade["transition_id"]
+
+
+def test_the_terms_history_lists_every_version_with_lineage(api: TestClient) -> None:
+    with api as client:
+        versions = client.get("/trades/T-001/terms", params={"org": ORG}).json()
+        unknown = client.get("/trades/T-999/terms", params={"org": ORG})
+        elsewhere = client.get("/trades/T-001/terms", params={"org": "someone-else"})
+    assert [(v["version"], v["prior_version"], v["price"], v["status"]) for v in versions] == [
+        ("T-001/v1", None, "86.25", "superseded"),
+        ("T-001/v2", "T-001/v1", "85", "current"),
+    ]
+    assert [v["effective_from"] for v in versions] == [TRADE_DATE.isoformat(), AS_OF.isoformat()]
+    assert unknown.status_code == 404
+    assert elsewhere.status_code == 404  # the org is the tenancy boundary, so no leak by id
 
 
 def test_trades_are_scoped_to_the_org(api: TestClient) -> None:

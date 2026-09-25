@@ -21,7 +21,13 @@ import io
 from collections.abc import Sequence
 from decimal import Decimal, InvalidOperation
 
-from glasshouse.commit import GlasshouseClient, envelopes, models
+from glasshouse.commit import (
+    GlasshouseClient,
+    MorphologOutcomeUnknown,
+    MorphologRequestError,
+    envelopes,
+    models,
+)
 from glasshouse.compute.curves import CurveError, HourlyCurve
 from glasshouse.compute.marking import register_curve_version
 from glasshouse.compute.store import CurveStore, StoreError
@@ -32,6 +38,7 @@ from glasshouse.imports.report import (
     QUARANTINED,
     REFUSED,
     REJECTED,
+    UNKNOWN,
     ImportReport,
     RowOutcome,
     why,
@@ -125,6 +132,21 @@ def import_curves(
             # The payload store refuses overwrites, so a re-imported
             # version stops here, before the ledger is even asked.
             outcomes.append(RowOutcome(ref, ERROR, str(immutable)))
+            continue
+        except MorphologRequestError as refused:
+            # The binary's own statement that this curve's proposal was
+            # not recorded (the flow has already given the version id
+            # back). Per curve, like every other outcome: the curves
+            # before it stand, the ones after it still run.
+            outcomes.append(RowOutcome(ref, ERROR, f"{refused.code}: {refused}"))
+            continue
+        except MorphologOutcomeUnknown as unknown:
+            # COMMIT may have landed (the payload is kept for that
+            # reason): the row is unknown, never an error, and the
+            # operator reads the record before re-submitting.
+            outcomes.append(
+                RowOutcome(ref, UNKNOWN, f"{unknown} - read the record before re-submitting")
+            )
             continue
         match outcome:
             case envelopes.Committed(transition_id=transition_id):

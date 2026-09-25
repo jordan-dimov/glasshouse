@@ -261,6 +261,24 @@ BATCH_TIMEOUT_SECONDS = 120.0
 IMPORT_KINDS = ("trades", "curves")
 
 
+def _import_failed(request: Request, org: str, kind: str, failure: MorphologError) -> Response:
+    # A WRITE failed operationally - never claim the ledger is
+    # unaffected: a curve import proposes one claim at a time, so part
+    # of the file may already be committed. Honest instructions, not
+    # reassurance.
+    log.warning("web.import_failed", org=org, kind=kind, error=str(failure))
+    return _import_refusal(
+        request,
+        org,
+        500,
+        "The import failed part-way",
+        "The commit layer failed while processing this file, and some rows may "
+        "already be committed. Nothing is lost: check the Audit screen for what "
+        "landed, then re-run the same file - rows already committed come back "
+        "as lawful rejections, never duplicates.",
+    )
+
+
 def _import_refusal(
     request: Request, org: str, status_code: int, title: str, message: str
 ) -> Response:
@@ -488,6 +506,12 @@ def imports_commit(
     except MorphologRequestError as refused:
         # The binary's own statement that the batch was refused before
         # its first row, by published code: nothing ran, nothing landed.
+        # Only the trades path batches; a curves import proposes one
+        # curve at a time and accounts for each, so a request error
+        # cannot reach here from it - and if a future kind did, "nothing
+        # was committed" must not be said of a per-row flow.
+        if kind != "trades":
+            return _import_failed(request, org, kind, refused)
         log.warning("web.import_refused", org=org, kind=kind, code=refused.code)
         return _import_refusal(
             request,
@@ -498,21 +522,7 @@ def imports_commit(
             "nothing was committed. Re-run the same file once the cause is fixed.",
         )
     except MorphologError as failure:
-        # A WRITE failed operationally - never claim the ledger is
-        # unaffected: a curve import proposes one claim at a time, so
-        # part of the file may already be committed. Honest instructions,
-        # not reassurance.
-        log.warning("web.import_failed", org=org, kind=kind, error=str(failure))
-        return _import_refusal(
-            request,
-            org,
-            500,
-            "The import failed part-way",
-            "The commit layer failed while processing this file, and some rows may "
-            "already be committed. Nothing is lost: check the Audit screen for what "
-            "landed, then re-run the same file - rows already committed come back "
-            "as lawful rejections, never duplicates.",
-        )
+        return _import_failed(request, org, kind, failure)
     # The inline projector mode: the screens read projections, so the
     # commit catches them up before showing receipts. A catch-up failure
     # must never cost the operator their receipts: the writes above are

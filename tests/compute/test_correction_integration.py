@@ -17,6 +17,7 @@ from glasshouse.commit.morpholog_client.envelopes import AtomicCommitted, Atomic
 from glasshouse.compute.curves import HourlyCurve
 from glasshouse.compute.marking import correct_and_remark, register_curve_version
 from glasshouse.compute.store import CurveStore, StoreError
+from glasshouse.compute.terms import terms_version_id
 from tests.support import BINARY, DB, needs_live_stack, provision
 
 pytestmark = needs_live_stack
@@ -24,6 +25,9 @@ pytestmark = needs_live_stack
 BOOK, MARKET = "book-a", "de-power"
 AS_OF = dt.date(2026, 7, 1)
 T0 = dt.datetime(2026, 7, 1, tzinfo=dt.UTC)
+# The first terms version's effective date: on or before every curve
+# business date these tests value under.
+TRADE_DATE = dt.date(2026, 6, 1)
 
 
 def _curve(*prices: str) -> HourlyCurve:
@@ -56,10 +60,12 @@ def _desk(client: GlasshouseClient, store: CurveStore, org: str) -> None:
             counterparty="cp",
             market=MARKET,
             direction=direction,
+            version=terms_version_id(f"{org}/{trade}", 1),
             quantity=Decimal("10"),
             price=Decimal("80"),
             delivery_start=T0,
             delivery_end=T0 + dt.timedelta(hours=2),
+            trade_date=TRADE_DATE,
         )
         assert isinstance(client.submit(capture, actor="alice"), Committed)
     registered = register_curve_version(

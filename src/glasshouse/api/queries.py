@@ -27,6 +27,7 @@ from glasshouse.api.schemas import (
     OverviewSummary,
     PositionHour,
     ProjectionCursor,
+    TradeTermsVersion,
     TradeValuation,
     ValuationSummary,
 )
@@ -35,6 +36,7 @@ from glasshouse.projections.tables import (
     blotter_trade,
     position_hour,
     projection_progress,
+    trade_terms_version,
     trade_valuation,
 )
 
@@ -85,6 +87,34 @@ def list_trades(
     if offset is not None:
         statement = statement.offset(offset)
     return [BlotterTrade.model_validate(row) for row in _rows(engine, statement)]
+
+
+class UnknownTradeError(Exception):
+    """No projected trade of that id in the organisation."""
+
+
+def list_trade_terms(engine: sa.Engine, *, org: str, trade: str) -> list[TradeTermsVersion]:
+    """Every version of one trade's terms, oldest effective date first:
+    the amendment trail. The version with the latest effective date is
+    `current` and the rest `superseded` - by date, which is the rule the
+    ledger's own selector and the blotter projection apply, never by
+    lineage order or wall clock. As-of viewing (which version governed a
+    past date) waits on #41."""
+    statement = (
+        sa.select(trade_terms_version)
+        .where(trade_terms_version.c.org == org, trade_terms_version.c.trade == trade)
+        .order_by(trade_terms_version.c.effective_from, trade_terms_version.c.version)
+    )
+    rows = _rows(engine, statement)
+    if not rows:
+        raise UnknownTradeError(f"no trade {trade!r} in {org}")
+    current = max(row["effective_from"] for row in rows)
+    return [
+        TradeTermsVersion.model_validate(
+            {**row, "status": "current" if row["effective_from"] == current else "superseded"}
+        )
+        for row in rows
+    ]
 
 
 def list_positions(

@@ -6,12 +6,19 @@ overlap itself, and repeats cleanly (the nightly-cron semantics).
 Same gating and provisioning contract as the other integration legs.
 """
 
+from decimal import Decimal
+
 import pytest
 import sqlalchemy as sa
 
 from glasshouse import cli
 from glasshouse.compute.store import engine_url
-from glasshouse.projections.tables import blotter_trade, position_hour, trade_valuation
+from glasshouse.projections.tables import (
+    blotter_trade,
+    position_hour,
+    trade_terms_version,
+    trade_valuation,
+)
 from glasshouse.seed import SEED_LOCK_KEY
 from tests.support import BINARY, DB, needs_live_stack, provision
 
@@ -47,7 +54,19 @@ def test_seed_reset_seeds_verifies_and_repeats(capsys: pytest.CaptureFixture[str
             sa.select(sa.func.count()).where(trade_valuation.c.mtm < 0)
         ).scalar()
         marks = connection.execute(sa.select(sa.func.count()).select_from(trade_valuation))
-        assert marks.scalar() == 12  # two marks per trade: v1 and the corrected v2
+        # Two marks per trade (v1 and the corrected v2) plus T-003's
+        # re-mark under its amended terms.
+        assert marks.scalar() == 13
+        amended = connection.execute(
+            sa.select(blotter_trade).where(blotter_trade.c.trade == "T-003")
+        ).one()
+        assert (amended.quantity, amended.terms_version, amended.amendment_count) == (
+            Decimal("8"),
+            "T-003/v2",
+            1,
+        )
+        versions = connection.execute(sa.select(sa.func.count()).select_from(trade_terms_version))
+        assert versions.scalar() == 7  # six first versions and one amendment
 
     # Plain seed is idempotent by refusal: any ledger history refuses.
     assert cli.main(["seed", "--database-url", DB]) == 1

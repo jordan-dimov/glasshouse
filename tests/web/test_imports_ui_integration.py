@@ -24,9 +24,9 @@ from tests.support import BINARY, DB, needs_live_stack, provision
 pytestmark = needs_live_stack
 
 TRADES_CSV = (
-    "book,trade,counterparty,market,direction,quantity,price,delivery_start,delivery_end\n"
-    "spec-de,T-100,stadtwerk-x,de-power,buy,5,80,2026-07-01T08:00:00Z,2026-07-01T10:00:00Z\n"
-    "spec-de,T-101,nordkraft,sell,not-a-market,x,y,z,w\n"
+    "book,trade,trade_date,counterparty,market,direction,quantity,price,delivery_start,delivery_end\n"
+    "spec-de,T-100,2026-06-30,stadtwerk-x,de-power,buy,5,80,2026-07-01T08:00:00Z,2026-07-01T10:00:00Z\n"
+    "spec-de,T-101,2026-06-30,nordkraft,sell,not-a-market,x,y,z,w\n"
 )
 
 CURVES_CSV = (

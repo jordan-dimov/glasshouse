@@ -136,3 +136,17 @@ def test_a_second_org_is_empty_but_visible(ui: TestClient) -> None:
     # on an empty screen.
     assert '<option value="someone-else" selected>' in response.text
     assert f'<option value="{ORG}" ' in response.text
+
+
+def test_the_blotter_and_marks_show_the_amendment(ui: TestClient) -> None:
+    # The seed amends T-003 (5 -> 8 MW) and re-marks it: the blotter row
+    # carries the current version with its badge, and the latest mark
+    # names the terms it was struck under (law 5, in place).
+    with ui as client:
+        blotter = client.get("/ui/blotter", params={"org": ORG, "book": "hedge-de"})
+        positions = client.get("/ui/positions", params={"org": ORG, "book": "hedge-de"})
+    assert "T-003/v2" in blotter.text
+    assert "1 amendment" in blotter.text
+    assert 'class="numeric">8<' in blotter.text
+    assert "T-003/v2" in positions.text
+    assert 'class="numeric">120<' in positions.text  # 8 MW * 15 EUR over hours 00-06

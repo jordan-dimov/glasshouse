@@ -50,8 +50,8 @@ INVARIANT_REJECTED = json.dumps(
         "verdict": {
             "rejected": {
                 "kind": "invariant",
-                "name": "trade_terms_unique_by_trade",
-                "rule": "TradeTerms unique by (trade)",
+                "name": "trade_terms_unique_by_version",
+                "rule": "TradeTerms unique by (version)",
             }
         },
     }
@@ -109,8 +109,8 @@ def test_invariant_rejection_is_flattened(tmp_path: Path, monkeypatch: pytest.Mo
     rejection = response.json()["rejection"]
     assert rejection == {
         "kind": "invariant",
-        "name": "trade_terms_unique_by_trade",
-        "rule": "TradeTerms unique by (trade)",
+        "name": "trade_terms_unique_by_version",
+        "rule": "TradeTerms unique by (version)",
     }
 
 

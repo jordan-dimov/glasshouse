@@ -23,11 +23,14 @@ superseded curve. Atomically there is no such state to observe: every
 act commits or none does.
 
 `value_trade` is the killer query's write side: read the trade and the
-official curve back from governed state, load the anchored payload,
-re-hash it against the claimed hash (`glasshouse verify` in miniature,
-on the read path where it is nearly free), compute the MTM, and propose
-the result through `admit_valuation` - where the ledger, not this code,
-decides whether the curve used is officially in force.
+official curve back from governed state, pick the terms version in
+force on the curve's business date (the same rule the ledger's generated
+selector applies), load the anchored payload, re-hash it against the
+claimed hash (`glasshouse verify` in miniature, on the read path where
+it is nearly free), compute the MTM, and propose the result through
+`admit_valuation` - where the ledger, not this code, decides whether
+the curve used is officially in force and the terms used were in force
+on its date. The mark is pinned to both versions.
 
 Single-row lookups here are licensed by the model's invariants (one
 capture per trade, one official curve per org/market/as-of), the same
@@ -59,7 +62,11 @@ from glasshouse.commit.morpholog_client.models import (
 )
 from glasshouse.compute.curves import HourlyCurve
 from glasshouse.compute.store import CurveStore
+from glasshouse.compute.terms import terms_in_force_on
 from glasshouse.compute.valuation import mark_to_market
+from glasshouse.logging import get_logger
+
+log = get_logger("glasshouse.marking")
 
 
 class MarkingError(RuntimeError):
@@ -165,10 +172,6 @@ def value_trade(
         ],
         f"captured trade {trade!r} in {org}/{book}",
     )
-    terms = _one(
-        [t for t in morpholog.read(TradeTermsClaim) if t.org == org and t.trade == trade],
-        f"terms for trade {trade!r}",
-    )
     officials = [
         o
         for o in morpholog.read(OfficialCurveClaim)
@@ -176,6 +179,8 @@ def value_trade(
     ]
     _refuse_several_business_dates(officials, org=org, market=captured.market)
     official = _one(officials, f"official curve for {org}/{captured.market}")
+    versions = [t for t in morpholog.read(TradeTermsClaim) if t.org == org and t.trade == trade]
+    terms = _in_force(versions, trade=trade, as_of=official.as_of)
     registered = _one(
         [
             r
@@ -199,6 +204,7 @@ def value_trade(
             book=book,
             trade=trade,
             curve_version=official.version,
+            terms_version=terms.version,
             mtm=_mtm(captured, terms, curve),
         ),
         actor=actor,
@@ -227,18 +233,33 @@ def correct_and_remark(
 
     The trades are read before the decision, so a trade captured while
     this runs is corrected under but not re-marked - exactly what the
-    one-by-one flow does to it, and `value_trade` marks it afterwards."""
+    one-by-one flow does to it, and `value_trade` marks it afterwards.
+    Each trade is re-marked under the terms in force on the correction's
+    business date; a trade none of whose versions is yet in force on it
+    is skipped and logged, since the ledger's own rule says it is not
+    valuable as of that date, and refusing the whole correction would
+    punish it for a trade booked after the curve's date."""
     officials = [
         o for o in morpholog.read(OfficialCurveClaim) if o.org == org and o.market == market
     ]
     _refuse_several_business_dates(officials, org=org, market=market)
-    terms = {t.trade: t for t in morpholog.read(TradeTermsClaim) if t.org == org}
+    versions: dict[str, list[TradeTermsClaim]] = {}
+    for version in morpholog.read(TradeTermsClaim):
+        if version.org == org:
+            versions.setdefault(version.trade, []).append(version)
     captured = sorted(
         (c for c in morpholog.read(TradeCapturedClaim) if c.org == org and c.market == market),
         key=lambda c: c.trade,
     )
-    if missing := [c.trade for c in captured if c.trade not in terms]:
+    if missing := [c.trade for c in captured if c.trade not in versions]:
         raise MarkingError(f"captured trades without terms: {', '.join(missing)}")
+    in_force: dict[str, TradeTermsClaim] = {}
+    for c in captured:
+        terms = terms_in_force_on(versions[c.trade], as_of)
+        if terms is None:
+            log.warning("marking.remark_skipped_not_in_force", org=org, trade=c.trade, as_of=as_of)
+            continue
+        in_force[c.trade] = terms
     acts = [
         _act(
             CorrectCurveRequest(
@@ -258,11 +279,13 @@ def correct_and_remark(
                     book=c.book,
                     trade=c.trade,
                     curve_version=new_version,
-                    mtm=_mtm(c, terms[c.trade], curve),
+                    terms_version=in_force[c.trade].version,
+                    mtm=_mtm(c, in_force[c.trade], curve),
                 ),
                 valuation_actor,
             )
             for c in captured
+            if c.trade in in_force
         ),
     ]
     store.save(org=org, version=new_version, curve=curve)
@@ -315,6 +338,22 @@ def _refuse_several_business_dates(
             f"(as-of dates: {dates}); choosing between business dates is not yet "
             "modelled - see glasshouse#44"
         )
+
+
+def _in_force(versions: list[TradeTermsClaim], *, trade: str, as_of: dt.date) -> TradeTermsClaim:
+    """The terms version the ledger's selector will name for this date,
+    or a named refusal when none is yet effective (the gate would refuse
+    the mark; saying so here spares the ledger a doomed proposal)."""
+    if not versions:
+        raise MarkingError(f"expected at least one terms version for trade {trade!r}, found 0")
+    terms = terms_in_force_on(versions, as_of)
+    if terms is None:
+        earliest = min(v.effective_from for v in versions)
+        raise MarkingError(
+            f"no terms of trade {trade!r} are in force on {as_of}: the first version is "
+            f"effective from {earliest}"
+        )
+    return terms
 
 
 def _one[T](rows: list[T], description: str) -> T:

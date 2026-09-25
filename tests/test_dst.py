@@ -21,10 +21,11 @@ from zoneinfo import ZoneInfo
 
 import pytest
 
-from glasshouse.commit import envelopes
+from glasshouse.commit import envelopes, models
 from glasshouse.compute.curves import HOUR, HourlyCurve
 from glasshouse.compute.valuation import mark_to_market
 from glasshouse.projections import fold_transition
+from glasshouse.projections.projector import open_row, terms_delta
 
 BERLIN = ZoneInfo("Europe/Berlin")
 LONDON = ZoneInfo("Europe/London")
@@ -110,14 +111,37 @@ def test_the_fold_makes_one_position_hour_per_real_hour(
         {
             "org": "acme",
             "trade": "T-1",
+            "version": "T-1/v1",
             "quantity": "10",
             "price": "90",
             "delivery_start": start.strftime("%Y-%m-%dT%H:%M:%SZ"),
             "delivery_end": end.strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "effective_from": "2026-01-01",
         },
     )
     fold = fold_transition([captured, terms], [])
-    assert len(fold.positions) == hours
-    assert {delta.period_start for delta in fold.positions} == {
-        start + i * HOUR for i in range(hours)
-    }
+    (capture,) = fold.captures
+    _row, deltas = open_row(capture, start, "tid", "alice")
+    assert len(deltas) == hours
+    assert {delta.period_start for delta in deltas} == {start + i * HOUR for i in range(hours)}
+
+
+@pytest.mark.parametrize(("zone", "day", "hours"), DST_DAYS)
+def test_an_amendment_across_a_dst_day_re_signs_exactly_the_real_hours(
+    zone: ZoneInfo, day: dt.date, hours: int
+) -> None:
+    # An amendment that halves the quantity over the same local day
+    # touches exactly the day's real hours once each, by the same
+    # instant arithmetic, with no special case for the day's length.
+    start, end = utc_window(zone, day)
+    identity = models.TradeCapturedClaim("acme", "spec-de", "T-1", "cp", "de-power", "sell")
+    v1 = models.TradeTermsClaim(
+        "acme", "T-1", "T-1/v1", Decimal("10"), Decimal("90"), start, end, dt.date(2026, 1, 1)
+    )
+    v2 = models.TradeTermsClaim(
+        "acme", "T-1", "T-1/v2", Decimal("5"), Decimal("90"), start, end, dt.date(2026, 1, 2)
+    )
+    deltas = terms_delta(identity, v1, v2)
+    assert len(deltas) == hours
+    assert {delta.period_start for delta in deltas} == {start + i * HOUR for i in range(hours)}
+    assert {delta.delta_mw for delta in deltas} == {Decimal("5")}  # a sell shrinking is +5

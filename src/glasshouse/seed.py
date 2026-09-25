@@ -2,9 +2,11 @@
 
 One organisation (acme-energy), two books, six trades across two
 counterparties with buys and sells, one official 24-hour curve, one
-admitted mark per trade, projections rebuilt from zero - enough for
+admitted mark per trade, a curve correction with its re-marks, one
+amendment with its re-mark, projections rebuilt from zero - enough for
 every screen to show a negative somewhere (a net-short delivery hour, a
-negative mark) without fabricating anything. Business values are
+negative mark) and a supersession of each kind, without fabricating
+anything. Business values are
 deterministic constants; transition ids and commit instants are
 intentionally fresh on every run.
 
@@ -29,10 +31,12 @@ import sqlalchemy as sa
 from alembic import command
 from glasshouse.commit import MODEL_FILE, Committed, GlasshouseClient, apply_views, models
 from glasshouse.commit.morpholog_client.envelopes import AtomicCommitted
+from glasshouse.compute.amendment import amend_trade
 from glasshouse.compute.curves import HourlyCurve
 from glasshouse.compute.marking import correct_and_remark, register_curve_version, value_trade
 from glasshouse.compute.store import CurveStore, engine_url
 from glasshouse.compute.store import metadata as payload_metadata
+from glasshouse.compute.terms import terms_version_id
 from glasshouse.config import Environment, get_settings
 from glasshouse.projections import rebuild
 from glasshouse.projections.tables import metadata as projection_metadata
@@ -55,6 +59,19 @@ CURVE_V1 = "crv-2026-07-01-v1"
 CURVE_V2 = "crv-2026-07-01-v2"
 AS_OF = dt.date(2026, 7, 1)
 DAY = dt.datetime(2026, 7, 1, tzinfo=dt.UTC)
+# Struck the day before delivery: the first terms version is effective
+# from the trade date, and a version must be effective on or before the
+# curve's business date to be valued under it.
+TRADE_DATE = dt.date(2026, 6, 30)
+
+# The Wednesday amendment: T-003 is re-booked from 5 to 8 MW effective on
+# the curve's business date (strictly after its trade date, as the rule
+# requires), then re-marked - so the demo carries a terms supersession
+# beside the curve one, and a mark pinned to a second terms version. 8
+# rather than 7.5 so the number aliases no other trade's quantity.
+AMENDED_TRADE = "T-003"
+AMENDED_QUANTITY = Decimal("8")
+AMENDMENT_EFFECTIVE = AS_OF
 
 # The official curve: 24 hourly prices, 70 EUR/MWh at midnight rising by
 # one each hour - dull on purpose, so every mark is checkable by eye.
@@ -98,13 +115,14 @@ class SeedReport:
     books: int
     trades: int
     curves: int
+    amendments: int
     valuations: int
 
     def render(self) -> str:
         return (
             f"seeded {self.org}: {self.books} book(s), {self.trades} trade(s), "
-            f"{self.curves} curve version(s), {self.valuations} valuation(s); "
-            "verify: consistent"
+            f"{self.curves} curve version(s), {self.amendments} amendment(s), "
+            f"{self.valuations} valuation(s); verify: consistent"
         )
 
 
@@ -188,10 +206,12 @@ def seed_demo(client: GlasshouseClient, store: CurveStore, engine: sa.Engine) ->
                     counterparty=counterparty,
                     market=MARKET,
                     direction=direction,
+                    version=terms_version_id(trade, 1),
                     quantity=Decimal(quantity),
                     price=Decimal(price),
                     delivery_start=DAY + dt.timedelta(hours=start),
                     delivery_end=DAY + dt.timedelta(hours=end),
+                    trade_date=TRADE_DATE,
                 ),
                 actor="alice",
             )
@@ -232,9 +252,36 @@ def seed_demo(client: GlasshouseClient, store: CurveStore, engine: sa.Engine) ->
     if not isinstance(corrected, AtomicCommitted) or len(corrected.acts) != 1 + len(_TRADES):
         raise SeedError(f"the Tuesday correction was not committed whole: {corrected!r}")
 
+    # The Wednesday amendment: a new terms version supersedes T-003's,
+    # lineage linked, and the trade is re-marked under it against the
+    # corrected curve - so the record carries both kinds of supersession
+    # and a mark pinned to each version pair.
+    (trade, book, _counterparty, _direction, _quantity, price, start, end) = next(
+        row for row in _TRADES if row[0] == AMENDED_TRADE
+    )
+    _committed(
+        amend_trade(
+            client,
+            actor="alice",
+            org=ORG,
+            trade=trade,
+            quantity=AMENDED_QUANTITY,
+            price=Decimal(price),
+            delivery_start=DAY + dt.timedelta(hours=start),
+            delivery_end=DAY + dt.timedelta(hours=end),
+            effective_from=AMENDMENT_EFFECTIVE,
+        )
+    )
+    _committed(value_trade(client, store, actor="risk-engine", org=ORG, book=book, trade=trade))
+
     rebuild(client, engine)
     return SeedReport(
-        org=ORG, books=len(BOOKS), trades=len(_TRADES), curves=2, valuations=2 * len(_TRADES)
+        org=ORG,
+        books=len(BOOKS),
+        trades=len(_TRADES),
+        curves=2,
+        amendments=1,
+        valuations=2 * len(_TRADES) + 1,
     )
 
 

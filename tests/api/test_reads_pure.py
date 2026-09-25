@@ -13,7 +13,7 @@ from glasshouse.api.app import create_app
 
 DEAD_DB = "postgresql://127.0.0.1:1/nowhere"
 
-ENDPOINTS = ("/trades", "/positions", "/valuations", "/overview")
+ENDPOINTS = ("/trades", "/trades/T-1/terms", "/positions", "/valuations", "/overview")
 
 
 @pytest.fixture(autouse=True)
