@@ -247,10 +247,10 @@ def test_browser_writes_are_fenced_off_in_production(monkeypatch: pytest.MonkeyP
 
 THREE_GOOD_ROWS = "\n".join(
     [
-        "book,trade,counterparty,market,direction,quantity,price,delivery_start,delivery_end",
-        "spec-de,T-1,cp,de-power,buy,10,86.25,2026-07-01T00:00:00Z,2026-07-02T00:00:00Z",
-        "spec-de,T-2,cp,de-power,buy,10,86.25,2026-07-01T00:00:00Z,2026-07-02T00:00:00Z",
-        "spec-de,T-3,cp,de-power,buy,10,86.25,2026-07-01T00:00:00Z,2026-07-02T00:00:00Z",
+        "book,trade,trade_date,counterparty,market,direction,quantity,price,delivery_start,delivery_end",
+        "spec-de,T-1,2026-06-30,cp,de-power,buy,10,86.25,2026-07-01T00:00:00Z,2026-07-02T00:00:00Z",
+        "spec-de,T-2,2026-06-30,cp,de-power,buy,10,86.25,2026-07-01T00:00:00Z,2026-07-02T00:00:00Z",
+        "spec-de,T-3,2026-06-30,cp,de-power,buy,10,86.25,2026-07-01T00:00:00Z,2026-07-02T00:00:00Z",
     ]
 )
 ONE_RECEIPT = (
@@ -313,7 +313,7 @@ def test_the_browser_row_cap_points_at_the_cli() -> None:
     # explain per row on preview, one batch on commit): the browser path
     # refuses and names the CLI, database-free.
     many_rows = (
-        "book,trade,counterparty,market,direction,quantity,price,delivery_start,delivery_end\n"
+        "book,trade,trade_date,counterparty,market,direction,quantity,price,delivery_start,delivery_end\n"
         + "b,t,c,m,buy,1,1,x,y\n" * 2001
     )
     with TestClient(create_app()) as client:

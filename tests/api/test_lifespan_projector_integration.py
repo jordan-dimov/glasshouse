@@ -14,11 +14,16 @@ from fastapi.testclient import TestClient
 
 from glasshouse.api.app import create_app
 from glasshouse.commit import MODEL_FILE, Committed, GlasshouseClient, models
+from glasshouse.compute.terms import terms_version_id
 from glasshouse.projections.runner import start_projector_thread
 from glasshouse.projections.tables import blotter_trade
 from glasshouse.seed import ORG as SEED_ORG
 from glasshouse.seed import run_seed
 from tests.support import BINARY, DB, needs_live_stack, provision
+
+# The first terms version's effective date: on or before every curve
+# business date these tests value under.
+TRADE_DATE = dt.date(2026, 6, 1)
 
 pytestmark = needs_live_stack
 
@@ -55,10 +60,12 @@ def test_a_write_becomes_visible_without_manual_catch_up(
                     counterparty="cp",
                     market=MARKET,
                     direction="buy",
+                    version=terms_version_id("TH-1", 1),
                     quantity=Decimal("1"),
                     price=Decimal("80"),
                     delivery_start=day,
                     delivery_end=day + dt.timedelta(hours=1),
+                    trade_date=TRADE_DATE,
                 ),
                 actor="alice",
             ),

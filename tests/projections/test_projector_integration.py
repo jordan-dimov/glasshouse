@@ -20,9 +20,11 @@ import sqlalchemy as sa
 
 from glasshouse import cli
 from glasshouse.commit import MODEL_FILE, Committed, GlasshouseClient, MorphologError, models
+from glasshouse.compute.amendment import amend_trade
 from glasshouse.compute.curves import HourlyCurve
 from glasshouse.compute.marking import correct_curve_version, register_curve_version, value_trade
 from glasshouse.compute.store import CurveStore
+from glasshouse.compute.terms import terms_version_id
 from glasshouse.projections import (
     ProjectionError,
     accumulate,
@@ -31,6 +33,7 @@ from glasshouse.projections import (
     position_hour,
     projection_progress,
     rebuild,
+    trade_terms_version,
     trade_valuation,
 )
 from tests.support import BINARY, DB, needs_live_stack, provision
@@ -38,8 +41,11 @@ from tests.support import BINARY, DB, needs_live_stack, provision
 ORG, BOOK, MARKET = "acme-energy", "spec-de", "de-power"
 AS_OF = dt.date(2026, 6, 8)
 T0 = dt.datetime(2026, 7, 1, tzinfo=dt.UTC)
+# The first terms version's effective date: on or before every curve
+# business date these tests value under.
+TRADE_DATE = dt.date(2026, 6, 1)
 
-TABLES = (blotter_trade, position_hour, trade_valuation, projection_progress)
+TABLES = (blotter_trade, trade_terms_version, position_hour, trade_valuation, projection_progress)
 
 
 pytestmark = [needs_live_stack, pytest.mark.usefixtures("cli_binary")]
@@ -78,10 +84,12 @@ def history(morpholog: GlasshouseClient, engine: sa.Engine) -> tuple[int, str]:
             counterparty="stadtwerk-x",
             market=MARKET,
             direction="buy",
+            version=terms_version_id("T-001", 1),
             quantity=Decimal("10"),
             price=Decimal("86.25"),
             delivery_start=T0,
             delivery_end=T0 + dt.timedelta(hours=3),
+            trade_date=TRADE_DATE,
         ),
         actor="alice",
     )
@@ -129,7 +137,27 @@ def history(morpholog: GlasshouseClient, engine: sa.Engine) -> tuple[int, str]:
         value_trade(morpholog, store, actor="risk-engine", org=ORG, book=BOOK, trade="T-001"),
         Committed,
     )
-    return 8, captured.transition_id
+    # The amendment: 4 MW over two hours instead of 10 over three,
+    # effective on the curve's date, then re-marked under it.
+    assert isinstance(
+        amend_trade(
+            morpholog,
+            actor="alice",
+            org=ORG,
+            trade="T-001",
+            quantity=Decimal("4"),
+            price=Decimal("86.25"),
+            delivery_start=T0,
+            delivery_end=T0 + dt.timedelta(hours=2),
+            effective_from=AS_OF,
+        ),
+        Committed,
+    )
+    assert isinstance(
+        value_trade(morpholog, store, actor="risk-engine", org=ORG, book=BOOK, trade="T-001"),
+        Committed,
+    )
+    return 10, captured.transition_id
 
 
 def _rows(engine: sa.Engine) -> dict[str, list[tuple[object, ...]]]:
@@ -157,17 +185,42 @@ def test_the_projector_replays_the_monday_morning_loop(
     (blotter,) = rows["blotter_trade"]
     assert blotter[:3] == (ORG, "T-001", BOOK)
     assert capture_tid in blotter
-    assert blotter[-1] == "alice"  # the evidence trail: who captured it
+    row = dict(zip((c.name for c in blotter_trade.c), blotter, strict=True))
+    assert row["actor"] == "alice"  # the evidence trail: who captured it
+    # The row carries the CURRENT terms (the amendment) with their own
+    # provenance, and the capture's provenance untouched beside them.
+    assert (row["terms_version"], row["quantity"], row["amendment_count"]) == (
+        "T-001/v2",
+        Decimal("4"),
+        1,
+    )
+    assert row["transition_id"] == capture_tid
+    assert row["terms_transition_id"] != capture_tid
+    assert (row["trade_date"], row["effective_from"]) == (TRADE_DATE, AS_OF)
 
+    # The trail: both versions, the amendment naming what it superseded.
+    trail = [(r[2], r[3]) for r in rows["trade_terms_version"]]
+    assert trail == [("T-001/v1", None), ("T-001/v2", "T-001/v1")]
+
+    # Positions after the amendment: 4 MW on the two hours it keeps, and
+    # the vacated third hour netted to zero (the row stays, at zero).
     positions = rows["position_hour"]
-    assert [(row[3], row[4]) for row in positions] == [
-        (T0 + dt.timedelta(hours=h), Decimal("10")) for h in range(3)
+    assert [(r[3], r[4]) for r in positions] == [
+        (T0, Decimal("4")),
+        (T0 + dt.timedelta(hours=1), Decimal("4")),
+        (T0 + dt.timedelta(hours=2), Decimal("0")),
     ]
 
-    # Both marks stand after the correction, each pinned to its version.
-    marks = {row[2]: row[4] for row in rows["trade_valuation"]}
-    assert marks == {"crv-v1": Decimal("55.00"), "crv-v2": Decimal("85.00")}
-    assert {row[-1] for row in rows["trade_valuation"]} == {"risk-engine"}
+    # Every mark stands, each pinned to its curve AND terms version:
+    # 10 MW under v1 (55.00, 85.00), then 4 MW over two hours under the
+    # amended terms against v2 (4 * (4.75 + 2.75) = 30.00).
+    marks = {(r[2], r[-1]): r[4] for r in rows["trade_valuation"]}
+    assert marks == {
+        ("crv-v1", "T-001/v1"): Decimal("55.00"),
+        ("crv-v2", "T-001/v1"): Decimal("85.00"),
+        ("crv-v2", "T-001/v2"): Decimal("30.00"),
+    }
+    assert {r[7] for r in rows["trade_valuation"]} == {"risk-engine"}
 
     # The in-memory replay (verify's projection leg) lands on exactly
     # the rows the SQL applier produced - memory and SQL agree.
@@ -232,6 +285,7 @@ def test_accumulate_stops_at_the_cursor_and_refuses_an_unknown_one(
     first = morpholog.audit()[0]
     partial = accumulate(morpholog, up_to=first.transition_id)
     assert partial["blotter_trade"] == set()
+    assert partial["trade_terms_version"] == set()
     assert partial["position_hour"] == set()
     assert partial["trade_valuation"] == set()
     ((name, _, tid),) = partial["projection_progress"]

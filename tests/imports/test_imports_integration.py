@@ -19,11 +19,11 @@ ORG, BOOK, MARKET = "acme-energy", "spec-de", "de-power"
 
 TRADES = "\n".join(
     [
-        "book,trade,counterparty,market,direction,quantity,price,delivery_start,delivery_end",
-        f"{BOOK},T-1,stadtwerk-x,{MARKET},buy,10,86.25,2026-07-01T00:00:00Z,2026-07-02T00:00:00Z",
-        f"{BOOK},T-2,stadtwerk-x,{MARKET},sell,5,84.00,2026-07-01T00:00:00Z,2026-07-02T00:00:00Z",
-        f"{BOOK},T-3,stadtwerk-x,{MARKET},long,5,84.00,2026-07-01T00:00:00Z,2026-07-02T00:00:00Z",
-        f"{BOOK},T-1,stadtwerk-x,{MARKET},buy,10,86.25,2026-07-01T00:00:00Z,2026-07-02T00:00:00Z",
+        "book,trade,trade_date,counterparty,market,direction,quantity,price,delivery_start,delivery_end",
+        f"{BOOK},T-1,2026-06-30,stadtwerk-x,{MARKET},buy,10,86.25,2026-07-01T00:00:00Z,2026-07-02T00:00:00Z",
+        f"{BOOK},T-2,2026-06-30,stadtwerk-x,{MARKET},sell,5,84.00,2026-07-01T00:00:00Z,2026-07-02T00:00:00Z",
+        f"{BOOK},T-3,2026-06-30,stadtwerk-x,{MARKET},long,5,84.00,2026-07-01T00:00:00Z,2026-07-02T00:00:00Z",
+        f"{BOOK},T-1,2026-06-30,stadtwerk-x,{MARKET},buy,10,86.25,2026-07-01T00:00:00Z,2026-07-02T00:00:00Z",
     ]
 )
 

@@ -17,7 +17,12 @@ from glasshouse.commit import MODEL_FILE, Committed, GlasshouseClient, models
 from glasshouse.compute.curves import HourlyCurve
 from glasshouse.compute.marking import MarkingError, register_curve_version, value_trade
 from glasshouse.compute.store import CurveStore
+from glasshouse.compute.terms import terms_version_id
 from tests.support import BINARY, DB, needs_live_stack, provision
+
+# The first terms version's effective date: on or before every curve
+# business date these tests value under.
+TRADE_DATE = dt.date(2026, 6, 1)
 
 pytestmark = needs_live_stack
 
@@ -61,10 +66,12 @@ def test_two_official_dates_are_a_named_refusal_not_a_crash(
                 counterparty="cp",
                 market=MARKET,
                 direction="buy",
+                version=terms_version_id("DB-1", 1),
                 quantity=Decimal("5"),
                 price=Decimal("82"),
                 delivery_start=day_one + dt.timedelta(hours=8),
                 delivery_end=day_one + dt.timedelta(hours=10),
+                trade_date=TRADE_DATE,
             ),
             actor="alice",
         ),
@@ -113,10 +120,12 @@ def test_two_official_dates_are_a_named_refusal_not_a_crash(
                 counterparty="cp",
                 market=MARKET,
                 direction="buy",
+                version=terms_version_id("DB-2", 1),
                 quantity=Decimal("5"),
                 price=Decimal("82"),
                 delivery_start=day_one + dt.timedelta(hours=8),
                 delivery_end=day_one + dt.timedelta(hours=10),
+                trade_date=TRADE_DATE,
             ),
             actor="alice",
         ),

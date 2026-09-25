@@ -35,11 +35,15 @@ from glasshouse.compute.marking import (
     value_trade,
 )
 from glasshouse.compute.store import CurveStore, StoreError
+from glasshouse.compute.terms import terms_version_id
 from tests.support import BINARY, DB, needs_live_stack, provision
 
 ORG, BOOK, MARKET = "acme-energy", "spec-de", "de-power"
 AS_OF = dt.date(2026, 6, 8)
 T0 = dt.datetime(2026, 7, 1, tzinfo=dt.UTC)
+# The first terms version's effective date: on or before every curve
+# business date these tests value under.
+TRADE_DATE = dt.date(2026, 6, 1)
 
 
 pytestmark = needs_live_stack
@@ -88,10 +92,12 @@ def monday(morpholog: GlasshouseClient, store: CurveStore) -> None:
                 counterparty="stadtwerk-x",
                 market=MARKET,
                 direction="buy",
+                version=terms_version_id("T-001", 1),
                 quantity=Decimal("10"),
                 price=Decimal("86.25"),
                 delivery_start=T0,
                 delivery_end=T0 + dt.timedelta(hours=3),
+                trade_date=TRADE_DATE,
             ),
             actor="alice",
         ),

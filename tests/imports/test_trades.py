@@ -16,16 +16,24 @@ from glasshouse.imports import ImportFormatError, ImportIncompleteError, import_
 from glasshouse.imports.trades import COLUMNS
 from tests.support import fake_binary
 
-HEADER = "book,trade,counterparty,market,direction,quantity,price,delivery_start,delivery_end"
-GOOD = "spec-de,T-{n},stadtwerk-x,de-power,buy,10,86.25,2026-07-01T00:00:00Z,2026-07-02T00:00:00Z"
+HEADER = (
+    "book,trade,trade_date,counterparty,market,direction,quantity,price,delivery_start,delivery_end"
+)
+GOOD = (
+    "spec-de,T-{n},2026-06-30,stadtwerk-x,de-power,buy,10,86.25,"
+    "2026-07-01T00:00:00Z,2026-07-02T00:00:00Z"
+)
 
 MIXED = "\n".join(
     [
         HEADER,
         GOOD.format(n=1),  # line 2: reaches the batch
-        "spec-de,T-2,cp,de-power,buy,10,86.25,2026-07-01T00:00:00,2026-07-02T00:00:00Z",  # naive
-        "spec-de,T-3,cp,de-power,buy,ten,86.25,2026-07-01T00:00:00Z,2026-07-02T00:00:00Z",  # qty
-        "spec-de,T-4,cp,de-power,long,10,86.25,2026-07-01T00:00:00Z,2026-07-02T00:00:00Z",  # dir
+        # line 3: a naive instant
+        "spec-de,T-2,2026-06-30,cp,de-power,buy,10,86.25,2026-07-01T00:00:00,2026-07-02T00:00:00Z",
+        # line 4: a quantity that is not a decimal
+        "spec-de,T-3,2026-06-30,cp,de-power,buy,ten,86.25,2026-07-01T00:00:00Z,2026-07-02T00:00:00Z",
+        # line 5: a direction the MTM does not know
+        "spec-de,T-4,2026-06-30,cp,de-power,long,10,86.25,2026-07-01T00:00:00Z,2026-07-02T00:00:00Z",
         GOOD.format(n=5),  # line 6: reaches the batch
     ]
 )
@@ -141,7 +149,7 @@ def test_a_batch_that_stops_accounts_for_every_row(tmp_path: Path) -> None:
         [
             HEADER,
             GOOD.format(n=1),
-            "spec-de,T-Q,cp,de-power,buy,ten,86.25,2026-07-01T00:00:00Z,2026-07-02T00:00:00Z",
+            "spec-de,T-Q,2026-06-30,cp,de-power,buy,ten,86.25,2026-07-01T00:00:00Z,2026-07-02T00:00:00Z",
             GOOD.format(n=2),
             GOOD.format(n=3),
         ]
@@ -167,8 +175,8 @@ def test_an_all_quarantined_file_never_reaches_the_binary(tmp_path: Path) -> Non
     text = "\n".join(
         [
             HEADER,
-            "spec-de,T-1,cp,de-power,long,10,86.25,2026-07-01T00:00:00Z,2026-07-02T00:00:00Z",
-            "spec-de,T-2,cp,de-power,buy,ten,86.25,2026-07-01T00:00:00Z,2026-07-02T00:00:00Z",
+            "spec-de,T-1,2026-06-30,cp,de-power,long,10,86.25,2026-07-01T00:00:00Z,2026-07-02T00:00:00Z",
+            "spec-de,T-2,2026-06-30,cp,de-power,buy,ten,86.25,2026-07-01T00:00:00Z,2026-07-02T00:00:00Z",
         ]
     )
     binary = fake_binary(tmp_path, "")
@@ -204,7 +212,7 @@ def test_every_input_row_is_accounted_for_exactly_once(rows: list[dict[str, str]
 
 def test_an_unparseable_instant_quarantines_with_the_format_named() -> None:
     text = "\n".join(
-        [HEADER, "spec-de,T-1,cp,de-power,buy,10,86.25,yesterday,2026-07-02T00:00:00Z"]
+        [HEADER, "spec-de,T-1,2026-06-30,cp,de-power,buy,10,86.25,yesterday,2026-07-02T00:00:00Z"]
     )
     accepted, quarantined = parse_trades(text, org="acme-energy")
     assert not accepted

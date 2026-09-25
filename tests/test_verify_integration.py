@@ -20,15 +20,20 @@ from glasshouse.commit import (
     apply_views,
     models,
 )
+from glasshouse.compute.amendment import amend_trade
 from glasshouse.compute.curves import HourlyCurve
 from glasshouse.compute.marking import register_curve_version, value_trade
 from glasshouse.compute.store import CurveStore
+from glasshouse.compute.terms import terms_version_id
 from glasshouse.projections import catch_up
 from glasshouse.verify import verify
 from tests.support import BINARY, DB, needs_live_stack, provision
 
 ORG, BOOK, MARKET = "acme-energy", "spec-de", "de-power"
 T0 = dt.datetime(2026, 7, 1, tzinfo=dt.UTC)
+# The first terms version's effective date: on or before every curve
+# business date these tests value under.
+TRADE_DATE = dt.date(2026, 6, 1)
 
 pytestmark = [needs_live_stack, pytest.mark.usefixtures("cli_binary")]
 
@@ -67,10 +72,12 @@ def monday(morpholog: GlasshouseClient, engine: sa.Engine, store: CurveStore) ->
                 counterparty="stadtwerk-x",
                 market=MARKET,
                 direction="buy",
+                version=terms_version_id("T-001", 1),
                 quantity=Decimal("10"),
                 price=Decimal("86.25"),
                 delivery_start=T0,
                 delivery_end=T0 + dt.timedelta(hours=3),
+                trade_date=TRADE_DATE,
             ),
             actor="alice",
         ),
@@ -91,6 +98,26 @@ def monday(morpholog: GlasshouseClient, engine: sa.Engine, store: CurveStore) ->
                     for i, p in enumerate(map(Decimal, ["90", "88", "86.25"]))
                 )
             ),
+        ),
+        Committed,
+    )
+    assert isinstance(
+        value_trade(morpholog, store, actor="risk-engine", org=ORG, book=BOOK, trade="T-001"),
+        Committed,
+    )
+    # An amendment and its re-mark, so the projection leg covers the
+    # terms trail and a mark pinned to a second terms version.
+    assert isinstance(
+        amend_trade(
+            morpholog,
+            actor="alice",
+            org=ORG,
+            trade="T-001",
+            quantity=Decimal("6"),
+            price=Decimal("86.25"),
+            delivery_start=T0,
+            delivery_end=T0 + dt.timedelta(hours=3),
+            effective_from=dt.date(2026, 6, 8),
         ),
         Committed,
     )

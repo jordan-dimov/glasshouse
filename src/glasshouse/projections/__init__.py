@@ -25,6 +25,7 @@ from glasshouse.projections.tables import (
     blotter_trade,
     position_hour,
     projection_progress,
+    trade_terms_version,
     trade_valuation,
 )
 
@@ -39,5 +40,6 @@ __all__ = [
     "projection_progress",
     "rebuild",
     "start_projector_thread",
+    "trade_terms_version",
     "trade_valuation",
 ]

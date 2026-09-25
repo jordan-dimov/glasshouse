@@ -61,6 +61,13 @@ def _sell(trade: str = "T-002") -> BlotterTrade:
         captured_at=T0,
         transition_id="txn-0123456789abcdef",
         actor="alice",
+        trade_date=dt.date(2026, 6, 30),
+        terms_version=f"{trade}/v2",
+        effective_from=dt.date(2026, 7, 1),
+        amendment_count=1,
+        terms_at=T0,
+        terms_transition_id="txn-fedcba9876543210",
+        terms_actor="alice",
     )
 
 
@@ -137,12 +144,14 @@ def test_negatives_are_loud_on_positions_and_marks() -> None:
                 valued_at=T0,
                 transition_id="txn-2",
                 actor="risk-engine",
+                terms_version="T-002/v1",
             )
         ],
     )
     assert 'class="numeric neg">-7.5' in html
     assert 'class="numeric neg">-101.25' in html
     assert "crv-v2" in html  # the mark's in-place explanation
+    assert "T-002/v1" in html  # and the terms it was struck under
 
 
 def test_overview_renders_the_tiles_and_health() -> None:
@@ -258,7 +267,11 @@ def test_curves_render_status_lineage_and_the_diff() -> None:
                 delta=Decimal("-2.5"),
             )
         ],
-        base_marks=[VersionMark(trade="T-001", book="spec-de", mtm=Decimal("-220"))],
+        base_marks=[
+            VersionMark(
+                trade="T-001", book="spec-de", terms_version="T-001/v1", mtm=Decimal("-220")
+            )
+        ],
         compare_marks=[],
     )
     html = _render(
@@ -302,7 +315,8 @@ def test_the_imports_page_states_the_contracts_truthfully() -> None:
     # import layer enforces - the template's canonical order is display,
     # this test keeps it honest against the frozensets.
     trades_line = (
-        "book,trade,counterparty,market,direction,quantity,price,delivery_start,delivery_end"
+        "book,trade,trade_date,counterparty,market,direction,quantity,price,"
+        "delivery_start,delivery_end"
     )
     curves_line = "market,as_of,version,period_start,price"
     assert trades_line in html

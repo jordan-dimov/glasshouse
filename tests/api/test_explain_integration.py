@@ -14,12 +14,16 @@ from fastapi.testclient import TestClient
 
 from glasshouse.api.app import create_app
 from glasshouse.commit import MODEL_FILE, Committed, GlasshouseClient, models
+from glasshouse.compute.terms import terms_version_id
 from tests.support import BINARY, DB, needs_live_stack, provision
 
 pytestmark = needs_live_stack
 
 ORG, BOOK, MARKET = "acme-energy", "spec-de", "de-power"
 T0 = dt.datetime(2026, 7, 1, tzinfo=dt.UTC)
+# The first terms version's effective date: on or before every curve
+# business date these tests value under.
+TRADE_DATE = dt.date(2026, 6, 1)
 
 
 def _capture_args(actor_trade: str) -> dict[str, object]:
@@ -30,10 +34,12 @@ def _capture_args(actor_trade: str) -> dict[str, object]:
         counterparty="stadtwerk-x",
         market=MARKET,
         direction="buy",
+        version=terms_version_id(actor_trade, 1),
         quantity=Decimal("10"),
         price=Decimal("86.25"),
         delivery_start=T0,
         delivery_end=T0 + dt.timedelta(hours=3),
+        trade_date=TRADE_DATE,
     ).to_args_named()
 
 

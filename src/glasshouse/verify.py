@@ -213,9 +213,16 @@ def _projection_leg(client: GlasshouseClient, engine: sa.Engine) -> Leg:
         return Leg("projections", False, str(corruption))
 
     problems = []
-    for name, expected_rows in expected.items():
-        missing = len(expected_rows - actual[name])
-        unexpected = len(actual[name] - expected_rows)
+    # Every table in the app schema's projection metadata is compared,
+    # never only the ones the replay happened to return: a projection the
+    # replay does not cover is a table nothing can vouch for, which is a
+    # failed leg, not a silent pass.
+    for name in projection_metadata.tables:
+        if name not in expected:
+            problems.append(f"{name}: not covered by the replay")
+            continue
+        missing = len(expected[name] - actual[name])
+        unexpected = len(actual[name] - expected[name])
         if missing or unexpected:
             problems.append(f"{name}: {missing} missing, {unexpected} unexpected")
     if problems:

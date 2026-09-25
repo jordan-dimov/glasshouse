@@ -81,11 +81,13 @@ class CaptureTradeRequest:
     counterparty: str
     market: str
     direction: str
+    version: str
     quantity: Decimal
     # amount in MW (the declaration carries the unit)
     price: Decimal
     delivery_start: datetime
     delivery_end: datetime
+    trade_date: date
 
     def to_args_named(self) -> dict[str, object]:
         return {
@@ -95,10 +97,43 @@ class CaptureTradeRequest:
             "counterparty": values.encode_named(self.counterparty),
             "market": values.encode_named(self.market),
             "direction": values.encode_named(self.direction),
+            "version": values.encode_named(self.version),
             "quantity": values.encode_named(self.quantity),
             "price": values.encode_named(self.price),
             "delivery_start": values.encode_named(self.delivery_start),
             "delivery_end": values.encode_named(self.delivery_end),
+            "trade_date": values.encode_named(self.trade_date),
+        }
+
+
+@dataclass(frozen=True)
+class AmendTradeRequest:
+    """Arguments for `amend_trade`."""
+
+    TRANSFORMATION: ClassVar[str] = "amend_trade"
+
+    org: str
+    trade: str
+    prior_version: str
+    new_version: str
+    quantity: Decimal
+    # amount in MW (the declaration carries the unit)
+    price: Decimal
+    delivery_start: datetime
+    delivery_end: datetime
+    effective_from: date
+
+    def to_args_named(self) -> dict[str, object]:
+        return {
+            "org": values.encode_named(self.org),
+            "trade": values.encode_named(self.trade),
+            "prior_version": values.encode_named(self.prior_version),
+            "new_version": values.encode_named(self.new_version),
+            "quantity": values.encode_named(self.quantity),
+            "price": values.encode_named(self.price),
+            "delivery_start": values.encode_named(self.delivery_start),
+            "delivery_end": values.encode_named(self.delivery_end),
+            "effective_from": values.encode_named(self.effective_from),
         }
 
 
@@ -158,6 +193,7 @@ class AdmitValuationRequest:
     book: str
     trade: str
     curve_version: str
+    terms_version: str
     mtm: Decimal
     # amount in EUR (the declaration carries the unit)
 
@@ -167,6 +203,7 @@ class AdmitValuationRequest:
             "book": values.encode_named(self.book),
             "trade": values.encode_named(self.trade),
             "curve_version": values.encode_named(self.curve_version),
+            "terms_version": values.encode_named(self.terms_version),
             "mtm": values.encode_named(self.mtm),
         }
 
@@ -272,11 +309,13 @@ class TradeTermsClaim:
 
     org: str
     trade: str
+    version: str
     quantity: Decimal
     # amount in MW (the declaration carries the unit)
     price: Decimal
     delivery_start: datetime
     delivery_end: datetime
+    effective_from: date
 
     @classmethod
     def from_named(cls, args: dict[str, object]) -> TradeTermsClaim:
@@ -284,6 +323,8 @@ class TradeTermsClaim:
         org = raw
         raw = args["trade"]
         trade = raw
+        raw = args["version"]
+        version = raw
         raw = args["quantity"]
         quantity = values.parse_decimal(raw)
         raw = args["price"]
@@ -292,7 +333,27 @@ class TradeTermsClaim:
         delivery_start = values.parse_timestamp(raw)
         raw = args["delivery_end"]
         delivery_end = values.parse_timestamp(raw)
-        return cls(org=org, trade=trade, quantity=quantity, price=price, delivery_start=delivery_start, delivery_end=delivery_end)
+        raw = args["effective_from"]
+        effective_from = values.parse_date(raw)
+        return cls(org=org, trade=trade, version=version, quantity=quantity, price=price, delivery_start=delivery_start, delivery_end=delivery_end, effective_from=effective_from)
+
+
+@dataclass(frozen=True)
+class TradeTermsSupersedesClaim:
+    """One admitted `TradeTermsSupersedes` claim, decoded by declared kind."""
+
+    PREDICATE: ClassVar[str] = "TradeTermsSupersedes"
+
+    new_version: str
+    prior_version: str
+
+    @classmethod
+    def from_named(cls, args: dict[str, object]) -> TradeTermsSupersedesClaim:
+        raw = args["new_version"]
+        new_version = raw
+        raw = args["prior_version"]
+        prior_version = raw
+        return cls(new_version=new_version, prior_version=prior_version)
 
 
 @dataclass(frozen=True)
@@ -374,6 +435,7 @@ class TradeValuedClaim:
     book: str
     trade: str
     curve_version: str
+    terms_version: str
     mtm: Decimal
     # amount in EUR (the declaration carries the unit)
 
@@ -387,9 +449,11 @@ class TradeValuedClaim:
         trade = raw
         raw = args["curve_version"]
         curve_version = raw
+        raw = args["terms_version"]
+        terms_version = raw
         raw = args["mtm"]
         mtm = values.parse_decimal(raw)
-        return cls(org=org, book=book, trade=trade, curve_version=curve_version, mtm=mtm)
+        return cls(org=org, book=book, trade=trade, curve_version=curve_version, terms_version=terms_version, mtm=mtm)
 
 
 INTENT_PAYLOADS = {

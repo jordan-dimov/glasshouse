@@ -21,11 +21,17 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Annotated
 
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, HTTPException, Query
 
 from glasshouse.api import queries
 from glasshouse.api.deps import EngineDep
-from glasshouse.api.schemas import BlotterTrade, OverviewSummary, PositionHour, TradeValuation
+from glasshouse.api.schemas import (
+    BlotterTrade,
+    OverviewSummary,
+    PositionHour,
+    TradeTermsVersion,
+    TradeValuation,
+)
 
 router = APIRouter(tags=["reads"])
 
@@ -55,6 +61,18 @@ def list_trades(
     return queries.list_trades(
         engine, org=org, book=book, market=market, limit=limit, offset=offset
     )
+
+
+@router.get("/trades/{trade:path}/terms")
+def list_trade_terms(trade: str, org: str, engine: EngineDep) -> list[TradeTermsVersion]:
+    """The amendment trail of one trade: every terms version as
+    admitted, with its lineage and which one is current. A trade id is
+    an opaque subject and may carry slashes (`desk/T-1`), so the path
+    converter takes the whole segment run."""
+    try:
+        return queries.list_trade_terms(engine, org=org, trade=trade)
+    except queries.UnknownTradeError as unknown:
+        raise HTTPException(status_code=404, detail=str(unknown)) from unknown
 
 
 @router.get("/positions")

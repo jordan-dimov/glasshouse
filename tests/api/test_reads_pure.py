@@ -13,7 +13,15 @@ from glasshouse.api.app import create_app
 
 DEAD_DB = "postgresql://127.0.0.1:1/nowhere"
 
-ENDPOINTS = ("/trades", "/positions", "/valuations", "/overview")
+# A trade id is an opaque subject: one with slashes must route too.
+ENDPOINTS = (
+    "/trades",
+    "/trades/T-1/terms",
+    "/trades/desk/T-1/terms",
+    "/positions",
+    "/valuations",
+    "/overview",
+)
 
 
 @pytest.fixture(autouse=True)

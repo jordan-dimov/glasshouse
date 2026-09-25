@@ -31,10 +31,14 @@ from glasshouse.commit import (
     values,
 )
 from glasshouse.commit.morpholog_client.envelopes import GateRejection, InvariantRejection
+from glasshouse.compute.terms import terms_version_id
 from tests.support import BINARY, DB, needs_live_stack
 
 ORG, BOOK, MARKET = "acme-energy", "spec-de", "de-power"
 AS_OF = dt.date(2026, 6, 8)
+# The first terms version's effective date: on or before every curve
+# business date these tests value under.
+TRADE_DATE = dt.date(2026, 6, 1)
 
 
 pytestmark = needs_live_stack
@@ -79,6 +83,25 @@ def test_the_committed_client_is_what_the_binary_generates(tmp_path: Path) -> No
     assert (mismatch, errors) == ([], []), f"regenerate the client: {mismatch + errors}"
 
 
+def test_the_model_stays_compiled() -> None:
+    # Every invariant is on the compiled route: the amendment's in-force
+    # rule lives in the gates (contract section 26), because a record
+    # invariant over the generated selector both refused intra-day
+    # amendments of a marked trade and put the whole programme on the
+    # interpreted route (morpholog#407). Parsed from the verbose text
+    # summary, because `check --json` carries no plan field; a future
+    # invariant falling out of the fragment fails here by name.
+    proc = subprocess.run(
+        [str(BINARY), "check", "--verbose", str(MODEL_FILE)],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert proc.returncode == 0, proc.stderr
+    plan = proc.stdout.split("invariant checks:", 1)[1].strip()
+    assert plan == "compiled", plan
+
+
 def test_the_needle_lifecycle(morpholog: GlasshouseClient) -> None:
     # Day zero: the binary provisions the exact schema its build expects.
     assert morpholog.init().status == "initialised"
@@ -112,10 +135,12 @@ def test_the_needle_lifecycle(morpholog: GlasshouseClient) -> None:
         counterparty="stadtwerk-x",
         market=MARKET,
         direction="buy",
+        version=terms_version_id("T-bad", 1),
         quantity=Decimal("10"),
         price=Decimal("86.25"),
         delivery_start=dt.datetime(2026, 7, 1),  # noqa: DTZ001 - the refusal under test
         delivery_end=dt.datetime(2026, 10, 1, tzinfo=dt.UTC),
+        trade_date=TRADE_DATE,
     )
     with pytest.raises(values.CodecError, match="naive"):
         naive.to_args_named()
@@ -127,10 +152,12 @@ def test_the_needle_lifecycle(morpholog: GlasshouseClient) -> None:
         counterparty="stadtwerk-x",
         market=MARKET,
         direction="buy",
+        version=terms_version_id("T-001", 1),
         quantity=Decimal("10"),
         price=Decimal("86.25"),
         delivery_start=dt.datetime(2026, 7, 1, tzinfo=dt.UTC),
         delivery_end=dt.datetime(2026, 10, 1, tzinfo=dt.UTC),
+        trade_date=TRADE_DATE,
     )
 
     # Without the capability claim, capture is a lawful rejection.
@@ -143,7 +170,7 @@ def test_the_needle_lifecycle(morpholog: GlasshouseClient) -> None:
     # Tagged quantities decode to the bare exact amount: the declaration
     # fixes the unit, the wire never re-states it.
     terms = next(c for c in captured.asserted_claims if c.predicate == "TradeTerms")
-    assert terms.args[2] == Decimal("10")
+    assert terms.args[3] == Decimal("10")
 
     # A duplicate capture is refused, carrying its own same-snapshot
     # explanation.
@@ -166,7 +193,12 @@ def test_the_needle_lifecycle(morpholog: GlasshouseClient) -> None:
     # which claim is missing and which transformations could supply it.
     refused = morpholog.submit(
         models.AdmitValuationRequest(
-            org=ORG, book=BOOK, trade="T-001", curve_version="crv-v0", mtm=Decimal("99")
+            org=ORG,
+            book=BOOK,
+            trade="T-001",
+            curve_version="crv-v0",
+            terms_version="T-001/v1",
+            mtm=Decimal("99"),
         ),
         actor="risk-engine",
         explain_on_reject=True,
@@ -187,6 +219,7 @@ def test_the_needle_lifecycle(morpholog: GlasshouseClient) -> None:
             book=BOOK,
             trade="T-001",
             curve_version="crv-v1",
+            terms_version="T-001/v1",
             mtm=Decimal("-1250.50"),
         ),
         actor="risk-engine",
@@ -213,7 +246,12 @@ def test_the_needle_lifecycle(morpholog: GlasshouseClient) -> None:
     # against the new official version it is admissible.
     stale = morpholog.submit(
         models.AdmitValuationRequest(
-            org=ORG, book=BOOK, trade="T-001", curve_version="crv-v1", mtm=Decimal("0")
+            org=ORG,
+            book=BOOK,
+            trade="T-001",
+            curve_version="crv-v1",
+            terms_version="T-001/v1",
+            mtm=Decimal("0"),
         ),
         actor="risk-engine",
     )
@@ -224,11 +262,93 @@ def test_the_needle_lifecycle(morpholog: GlasshouseClient) -> None:
             book=BOOK,
             trade="T-001",
             curve_version="crv-v2",
+            terms_version="T-001/v1",
             mtm=Decimal("-1180.00"),
         ),
         actor="risk-engine",
     )
     assert isinstance(revalued, Committed)
+
+    # The amendment: a new terms version alongside the old, lineage
+    # linked, effective on the curve's business date (strictly after the
+    # trade date). Direction and counterparty are identity and cannot
+    # move; quantity, price and the window can.
+    amended = morpholog.submit(
+        models.AmendTradeRequest(
+            org=ORG,
+            trade="T-001",
+            prior_version="T-001/v1",
+            new_version="T-001/v2",
+            quantity=Decimal("8"),
+            price=Decimal("86.25"),
+            delivery_start=dt.datetime(2026, 7, 1, tzinfo=dt.UTC),
+            delivery_end=dt.datetime(2026, 9, 1, tzinfo=dt.UTC),
+            effective_from=AS_OF,
+        ),
+        actor="alice",
+    )
+    assert isinstance(amended, Committed)
+    assert {c.predicate for c in amended.asserted_claims} == {"TradeTerms", "TradeTermsSupersedes"}
+
+    # A mark under the superseded terms is refused at the selector: the
+    # ledger, not this code, knows which version is in force on the
+    # curve's date.
+    stale_terms = morpholog.submit(
+        models.AdmitValuationRequest(
+            org=ORG,
+            book=BOOK,
+            trade="T-001",
+            curve_version="crv-v2",
+            terms_version="T-001/v1",
+            mtm=Decimal("0"),
+        ),
+        actor="risk-engine",
+        explain_on_reject=True,
+    )
+    assert isinstance(stale_terms, Rejected)
+    assert stale_terms.explanation is not None
+    assert isinstance(stale_terms.explanation.rejection, GateRejection)
+    remarked = morpholog.submit(
+        models.AdmitValuationRequest(
+            org=ORG,
+            book=BOOK,
+            trade="T-001",
+            curve_version="crv-v2",
+            terms_version="T-001/v2",
+            mtm=Decimal("-944.00"),
+        ),
+        actor="risk-engine",
+    )
+    assert isinstance(remarked, Committed)
+
+    # Lineage is a chain: a second amendment off the superseded version
+    # is a fork, refused at the no-fork gate; one effective on or before
+    # its prior is refused at the ordering gate; one by an actor without
+    # the book's capture capability is refused at the capability gate.
+    later = AS_OF + dt.timedelta(days=1)
+    for prior, new, effective, actor in (
+        ("T-001/v1", "T-001/v3", later, "alice"),
+        ("T-001/v2", "T-001/v3", AS_OF, "alice"),
+        ("T-001/v2", "T-001/v3", later, "mallory"),
+    ):
+        refused_amendment = morpholog.submit(
+            models.AmendTradeRequest(
+                org=ORG,
+                trade="T-001",
+                prior_version=prior,
+                new_version=new,
+                quantity=Decimal("8"),
+                price=Decimal("86.25"),
+                delivery_start=dt.datetime(2026, 7, 1, tzinfo=dt.UTC),
+                delivery_end=dt.datetime(2026, 9, 1, tzinfo=dt.UTC),
+                effective_from=effective,
+            ),
+            actor=actor,
+            explain_on_reject=True,
+        )
+        assert isinstance(refused_amendment, Rejected), (prior, new, effective, actor)
+        assert refused_amendment.explanation is not None
+        assert isinstance(refused_amendment.explanation.rejection, GateRejection)
 
     # The adversarial leg: every authored invariant reachable through a
     # current transformation refuses an attempted violation by name.
@@ -244,10 +364,12 @@ def test_the_needle_lifecycle(morpholog: GlasshouseClient) -> None:
                 counterparty="stadtwerk-x",
                 market=MARKET,
                 direction="buy",
+                version=terms_version_id("T-zero", 1),
                 quantity=Decimal("0"),
                 price=Decimal("86.25"),
                 delivery_start=dt.datetime(2026, 7, 1, tzinfo=dt.UTC),
                 delivery_end=dt.datetime(2026, 10, 1, tzinfo=dt.UTC),
+                trade_date=TRADE_DATE,
             ),
             "quantity_is_positive",
         ),
@@ -259,10 +381,41 @@ def test_the_needle_lifecycle(morpholog: GlasshouseClient) -> None:
                 counterparty="stadtwerk-x",
                 market=MARKET,
                 direction="buy",
+                version=terms_version_id("T-backwards", 1),
                 quantity=Decimal("10"),
                 price=Decimal("86.25"),
                 delivery_start=dt.datetime(2026, 10, 1, tzinfo=dt.UTC),
                 delivery_end=dt.datetime(2026, 7, 1, tzinfo=dt.UTC),
+                trade_date=TRADE_DATE,
+            ),
+            "delivery_period_is_ordered",
+        ),
+        # The same two value rules reach an amendment's version too.
+        (
+            models.AmendTradeRequest(
+                org=ORG,
+                trade="T-001",
+                prior_version="T-001/v2",
+                new_version="T-001/v-zero",
+                quantity=Decimal("0"),
+                price=Decimal("86.25"),
+                delivery_start=dt.datetime(2026, 7, 1, tzinfo=dt.UTC),
+                delivery_end=dt.datetime(2026, 9, 1, tzinfo=dt.UTC),
+                effective_from=AS_OF + dt.timedelta(days=1),
+            ),
+            "quantity_is_positive",
+        ),
+        (
+            models.AmendTradeRequest(
+                org=ORG,
+                trade="T-001",
+                prior_version="T-001/v2",
+                new_version="T-001/v-backwards",
+                quantity=Decimal("8"),
+                price=Decimal("86.25"),
+                delivery_start=dt.datetime(2026, 9, 1, tzinfo=dt.UTC),
+                delivery_end=dt.datetime(2026, 7, 1, tzinfo=dt.UTC),
+                effective_from=AS_OF + dt.timedelta(days=1),
             ),
             "delivery_period_is_ordered",
         ),
@@ -279,10 +432,16 @@ def test_the_needle_lifecycle(morpholog: GlasshouseClient) -> None:
     (official,) = morpholog.read(models.OfficialCurveClaim)
     assert official.version == "crv-v2"
     assert official.as_of == AS_OF
-    (term_row,) = morpholog.read(models.TradeTermsClaim)
-    assert term_row.quantity == Decimal("10")  # bare amount; the declaration fixes MW
-    assert term_row.price == Decimal("86.25")
-    assert term_row.delivery_start == dt.datetime(2026, 7, 1, tzinfo=dt.UTC)
+    first, second = sorted(morpholog.read(models.TradeTermsClaim), key=lambda t: t.effective_from)
+    assert first.quantity == Decimal("10")  # bare amount; the declaration fixes MW
+    assert first.price == Decimal("86.25")
+    assert first.delivery_start == dt.datetime(2026, 7, 1, tzinfo=dt.UTC)
+    assert (first.version, first.effective_from) == ("T-001/v1", TRADE_DATE)  # a date, not text
+    assert (second.version, second.effective_from, second.quantity) == (
+        "T-001/v2",
+        AS_OF,
+        Decimal("8"),
+    )
 
     # As-of the registration transition, v1 was the official curve.
     (was_official,) = morpholog.read(models.OfficialCurveClaim, as_of=registered.transition_id)
@@ -300,6 +459,6 @@ def test_the_needle_lifecycle(morpholog: GlasshouseClient) -> None:
     # no invariant's condition has gone unexercised by committed history.
     report = morpholog.coverage()
     in_programme = [t for t in report.transformations if not t.not_in_programme]
-    assert len(in_programme) == 7
+    assert len(in_programme) == 8
     assert all(t.transitions > 0 for t in in_programme)
     assert not [i.invariant for i in report.invariants if i.verdict == "never_fired"]

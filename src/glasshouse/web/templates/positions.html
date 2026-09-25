@@ -4,7 +4,7 @@
 {% block content %}
 <div class="page-header">
   <h1>Positions &amp; P&amp;L</h1>
-  <p class="page-header__note">Net MW per UTC delivery hour (buy +, sell -), and each trade's latest admitted mark.</p>
+  <p class="page-header__note">Net MW per UTC delivery hour (buy +, sell -) under each trade's current terms (the latest effective version), and each trade's latest admitted mark.</p>
 </div>
 
 <form class="filter-bar" method="get" action="/ui/positions">
@@ -58,6 +58,7 @@
           <th scope="col">Trade</th>
           <th scope="col">Book</th>
           <th scope="col">Curve version</th>
+          <th scope="col">Terms</th>
           <th scope="col" class="numeric">MtM (EUR)</th>
           <th scope="col">Valued at</th>
           <th scope="col">Actor</th>
@@ -70,6 +71,7 @@
           <td class="mono">{{ mark.trade }}</td>
           <td>{{ mark.book }}</td>
           <td class="mono">{{ mark.curve_version }}</td>
+          <td class="mono">{{ mark.terms_version }}</td>
           {{ num_cell(mark.mtm) }}
           <td>{{ mark.valued_at | utc }}</td>
           <td>{{ mark.actor }}</td>
@@ -79,7 +81,7 @@
       </tbody>
     </table>
   </div>
-  <p class="tile__note">The curve version beside each mark is the number's in-place explanation - a mark against a superseded curve stays the latest until the trade is revalued. Valuation history stays on the API (`/valuations`) and joins the evidence screens later.</p>
+  <p class="tile__note">The curve version and the terms version beside each mark are the number's in-place explanation - a mark against a superseded curve, or superseded terms, stays the latest until the trade is revalued. Valuation history stays on the API (`/valuations`) and joins the evidence screens later.</p>
   {% else %}
   {{ empty_state("No marks in this view.") }}
   {% endif %}

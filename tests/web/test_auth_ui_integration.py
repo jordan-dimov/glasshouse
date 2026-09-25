@@ -21,8 +21,8 @@ pytestmark = needs_live_stack
 
 PASSWORD = "integration-demo-pw"
 CSV = (
-    "book,trade,counterparty,market,direction,quantity,price,delivery_start,delivery_end\n"
-    "spec-de,T-500,nordkraft,de-power,buy,2,79,2026-07-01T06:00:00Z,2026-07-01T08:00:00Z\n"
+    "book,trade,trade_date,counterparty,market,direction,quantity,price,delivery_start,delivery_end\n"
+    "spec-de,T-500,2026-06-30,nordkraft,de-power,buy,2,79,2026-07-01T06:00:00Z,2026-07-01T08:00:00Z\n"
 )
 
 
@@ -81,8 +81,8 @@ def test_an_authenticated_import_carries_the_derived_actor(ui: TestClient) -> No
 
 
 TAMPER_CSV = (
-    "book,trade,counterparty,market,direction,quantity,price,delivery_start,delivery_end\n"
-    "spec-de,T-501,nordkraft,de-power,buy,1,77,2026-07-01T03:00:00Z,2026-07-01T04:00:00Z\n"
+    "book,trade,trade_date,counterparty,market,direction,quantity,price,delivery_start,delivery_end\n"
+    "spec-de,T-501,2026-06-30,nordkraft,de-power,buy,1,77,2026-07-01T03:00:00Z,2026-07-01T04:00:00Z\n"
 )
 
 

@@ -200,18 +200,18 @@ def curve_diff(
         periods=_diff_periods(base_curve, compare_curve),
         base_marks=sorted(
             (
-                VersionMark(trade=m.trade, book=m.book, mtm=m.mtm)
+                VersionMark(trade=m.trade, book=m.book, terms_version=m.terms_version, mtm=m.mtm)
                 for m in marks
                 if m.curve_version == base
             ),
-            key=lambda m: m.trade,
+            key=lambda m: (m.trade, m.terms_version),
         ),
         compare_marks=sorted(
             (
-                VersionMark(trade=m.trade, book=m.book, mtm=m.mtm)
+                VersionMark(trade=m.trade, book=m.book, terms_version=m.terms_version, mtm=m.mtm)
                 for m in marks
                 if m.curve_version == compare
             ),
-            key=lambda m: m.trade,
+            key=lambda m: (m.trade, m.terms_version),
         ),
     )

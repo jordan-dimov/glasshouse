@@ -41,6 +41,36 @@ class BlotterTrade(BaseModel):
     captured_at: datetime
     transition_id: str
     actor: str  # who captured it - the evidence trail rides the read
+    # The current terms version (the latest effective date on the
+    # record) and its own provenance: an amendment moves these, never
+    # the capture's.
+    trade_date: date
+    terms_version: str
+    effective_from: date
+    amendment_count: int
+    terms_at: datetime
+    terms_transition_id: str
+    terms_actor: str
+
+
+class TradeTermsVersion(BaseModel):
+    """One version of a trade's terms, as admitted: the amendment
+    trail. `status` is by effective date (the latest version on the
+    record is current), never by as-of - as-of viewing waits on #41."""
+
+    org: str
+    trade: str
+    version: str
+    prior_version: str | None
+    quantity: ExactDecimal  # MW
+    price: ExactDecimal  # EUR/MWh
+    delivery_start: datetime
+    delivery_end: datetime
+    effective_from: date
+    committed_at: datetime
+    transition_id: str
+    actor: str
+    status: Literal["current", "superseded"]
 
 
 class PositionHour(BaseModel):
@@ -55,8 +85,9 @@ class PositionHour(BaseModel):
 
 
 class TradeValuation(BaseModel):
-    """One admitted mark, pinned to the curve version it was struck
-    against - both marks survive a correction, exactly as stored."""
+    """One admitted mark, pinned to the curve version AND the terms
+    version it was struck against - every mark survives a correction or
+    an amendment, exactly as stored."""
 
     org: str
     trade: str
@@ -66,6 +97,7 @@ class TradeValuation(BaseModel):
     valued_at: datetime
     transition_id: str
     actor: str  # who admitted it
+    terms_version: str
 
 
 class BookSummary(BaseModel):
@@ -132,10 +164,13 @@ class CurveDiffPeriod(BaseModel):
 
 
 class VersionMark(BaseModel):
-    """One admitted mark, as evidence of which trades a version touched."""
+    """One admitted mark, as evidence of which trades a version touched,
+    naming the terms version it was struck under: a trade amended and
+    re-marked appears once per terms version."""
 
     trade: str
     book: str
+    terms_version: str
     mtm: ExactDecimal
 
 

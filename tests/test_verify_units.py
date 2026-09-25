@@ -20,12 +20,14 @@ from glasshouse.commit.morpholog_client.envelopes import (
     ViewsNotSealed,
     ViewsTampered,
 )
+from glasshouse.projections import accumulate
+from glasshouse.projections.tables import metadata as projection_metadata
 from glasshouse.verify import Leg, VerifyReport, _ledger_leg, _model_leg, _tree_leg, _views_leg
 from tests.support import fake_binary
 
 INTACT_TREE = {"status": "intact", "checkpoints": 0, "tree_size": 0}
 CONSISTENT_REPLAY = {"status": "consistent", "transitions": 8, "claims": 12}
-INTACT_SEAL = ViewsIntact(views_checked=10)
+INTACT_SEAL = ViewsIntact(views_checked=11)
 
 
 def client_with(tmp_path: Path, stdout: str) -> GlasshouseClient:
@@ -38,6 +40,15 @@ def _verify_report(tmp_path: Path, replay: dict, tree: dict):  # type: ignore[ty
     """The typed `verify` envelope, via a fake binary playing it back."""
     report = {"replay": replay, "tree": tree, "role_rebindings": {"status": "not_evaluated"}}
     return client_with(tmp_path, json.dumps(report)).audit_verify()
+
+
+def test_the_replay_covers_every_projection_table(tmp_path: Path) -> None:
+    # The projection leg compares every table in the projection metadata,
+    # so a table the replay forgot to return would fail the leg rather
+    # than pass unverified. This pins the other half: the replay returns
+    # exactly that set, over an empty tail.
+    replay = accumulate(client_with(tmp_path, ""))  # an empty tail
+    assert set(replay) == set(projection_metadata.tables)
 
 
 def test_the_model_leg_names_both_hashes_on_divergence(tmp_path: Path) -> None:
@@ -99,7 +110,7 @@ def test_the_views_leg_passes_when_the_catalogue_and_seal_agree(
     monkeypatch.setattr(verify_module, "missing_catalogued_views", lambda _engine: ())
     leg = _views_leg(_dead_engine(), INTACT_SEAL)
     assert leg.ok
-    assert "seal intact over 10 view(s)" in leg.detail
+    assert "seal intact over 11 view(s)" in leg.detail
 
 
 def test_the_views_leg_names_both_hashes_on_drift(monkeypatch: pytest.MonkeyPatch) -> None:

@@ -70,8 +70,8 @@ def test_the_fence_rules() -> None:
 
 
 def test_the_report_renders_stably() -> None:
-    report = SeedReport(org="acme-energy", books=2, trades=6, curves=1, valuations=6)
+    report = SeedReport(org="acme-energy", books=2, trades=6, curves=2, amendments=1, valuations=13)
     assert report.render() == (
-        "seeded acme-energy: 2 book(s), 6 trade(s), 1 curve version(s), "
-        "6 valuation(s); verify: consistent"
+        "seeded acme-energy: 2 book(s), 6 trade(s), 2 curve version(s), 1 amendment(s), "
+        "13 valuation(s); verify: consistent"
     )

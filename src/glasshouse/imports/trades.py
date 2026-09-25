@@ -1,4 +1,4 @@
-"""Trades CSV in, one `run --batch` invocation out, per-row receipts back.
+"""Trades CSV in, one `propose --batch` invocation out, per-row receipts back.
 
 The column contract is exact and validation never coerces: a file whose
 header does not match refuses whole; a row that cannot honestly become a
@@ -30,6 +30,7 @@ from glasshouse.commit import (
     models,
     values,
 )
+from glasshouse.compute.terms import terms_version_id
 from glasshouse.imports.report import (
     ADMISSIBLE,
     COMMITTED,
@@ -51,6 +52,7 @@ COLUMNS = frozenset(
     {
         "book",
         "trade",
+        "trade_date",
         "counterparty",
         "market",
         "direction",
@@ -97,6 +99,10 @@ def _request(row: dict[str, str], org: str) -> models.CaptureTradeRequest:
             f"quantity/price must be exact decimals, got {row['quantity']!r}/{row['price']!r}"
         ) from None
     try:
+        trade_date = dt.date.fromisoformat(row["trade_date"])
+    except ValueError:
+        raise ValueError(f"trade_date must be an ISO date, got {row['trade_date']!r}") from None
+    try:
         delivery_start = dt.datetime.fromisoformat(row["delivery_start"])
         delivery_end = dt.datetime.fromisoformat(row["delivery_end"])
     except ValueError:
@@ -104,6 +110,9 @@ def _request(row: dict[str, str], org: str) -> models.CaptureTradeRequest:
             "delivery_start/delivery_end must be RFC 3339 instants, got "
             f"{row['delivery_start']!r}/{row['delivery_end']!r}"
         ) from None
+    # The first terms version is effective from the trade date and takes
+    # the app's version id convention; neither is a column, because
+    # neither is the file's to choose.
     request = models.CaptureTradeRequest(
         org=org,
         book=row["book"],
@@ -111,10 +120,12 @@ def _request(row: dict[str, str], org: str) -> models.CaptureTradeRequest:
         counterparty=row["counterparty"],
         market=row["market"],
         direction=row["direction"],
+        version=terms_version_id(row["trade"], 1),
         quantity=quantity,
         price=price,
         delivery_start=delivery_start,
         delivery_end=delivery_end,
+        trade_date=trade_date,
     )
     request.to_args_named()  # the codec is the final validator (naive instants, ...)
     return request
@@ -158,12 +169,24 @@ def _receipt_outcome(ref: str, outcome: object) -> RowOutcome:
         case envelopes.Rejected(reason=reason, explanation=explanation):
             detail = f"{reason} - {why(explanation)}" if explanation else reason
             return RowOutcome(ref, REJECTED, detail)
+        case envelopes.BatchError(code="commit_outcome_unknown", error=error):
+            # The one code that is not a non-commit: COMMIT was sent and
+            # the reply never came. The generated batch parser files it
+            # as a finished receipt (the one-shot and session paths raise
+            # `MorphologOutcomeUnknown` instead - recorded upstream), so
+            # it is the import's job to say what the row's state is.
+            return RowOutcome(
+                ref,
+                UNKNOWN,
+                f"commit_outcome_unknown: {error} - it may have committed; read the record "
+                "before re-submitting",
+            )
         case envelopes.BatchError(code=code, error=error):
             # The stable code leads: it is the contract (`not_committed`,
-            # `serialization_failure`, `commit_outcome_unknown`, ...), the
-            # message is prose. A re-import of the file is safe whichever
-            # it is - a row that did commit comes back a lawful duplicate
-            # rejection - so the code informs, it never gates.
+            # `serialization_failure`, ...), the message is prose. A
+            # re-import of the file is safe whichever it is - a row that
+            # did commit comes back a lawful duplicate rejection - so the
+            # code informs, it never gates.
             return RowOutcome(ref, ERROR, f"{code}: {error}")
         case _:
             raise TypeError(f"not a batch outcome: {outcome!r}")

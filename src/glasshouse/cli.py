@@ -107,8 +107,8 @@ def _run_import(
 
 @app.command(
     "import-trades",
-    help="Import a trades CSV (book,trade,counterparty,market,direction,quantity,price,"
-    "delivery_start,delivery_end).",
+    help="Import a trades CSV (book,trade,trade_date,counterparty,market,direction,quantity,"
+    "price,delivery_start,delivery_end).",
 )
 def import_trades_command(
     file: Annotated[Path, typer.Argument(help="the CSV file")],

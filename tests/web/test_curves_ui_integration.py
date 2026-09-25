@@ -67,7 +67,14 @@ def test_the_diff_shows_exactly_the_revised_hours_and_each_versions_marks(
     deltas = [p["delta"] for p in json_diff["periods"] if p["delta"] != "0"]
     assert deltas == ["3", "3", "3", "3"]  # exact strings on the wire
     assert len(json_diff["base_marks"]) == 6
-    assert len(json_diff["compare_marks"]) == 6
+    # T-003 was re-marked on the corrected curve under its amended
+    # terms, so the correction carries seven marks: one per trade, and
+    # T-003 once per terms version, each named.
+    assert len(json_diff["compare_marks"]) == 7
+    assert [m["terms_version"] for m in json_diff["compare_marks"] if m["trade"] == "T-003"] == [
+        "T-003/v1",
+        "T-003/v2",
+    ]
 
 
 def test_an_unknown_version_is_a_named_404(ui: TestClient) -> None:

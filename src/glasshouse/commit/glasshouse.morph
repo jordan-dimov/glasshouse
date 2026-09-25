@@ -23,8 +23,9 @@
 --     is a declared `current pointer` with its supersession lineage.
 --
 -- Claim-shape law (identity uniqueness, the singleton pointer, no-fork
--- lineage, append-only records) is declared on the predicates as
--- disciplines; morpholog generates and enforces the invariants and
+-- lineage, effective dating, append-only records) is declared on the
+-- predicates as disciplines; morpholog generates and enforces the
+-- invariants (and, for effective dating, the in-force selector) and
 -- `inspect guarantees` traces each back to its clause. Only
 -- referential and value law remains authored by hand below.
 --
@@ -44,22 +45,29 @@
 -- pinned as MODEL_HASH is unaffected - and it buys the thing counting
 -- cannot: reordering a predicate's fields can no longer silently bind
 -- the wrong one. Where a hole is the point rather than an omission, it
--- is named too (`as_of: _` in admit_valuation), so the reader sees the
--- coordinate deliberately left free instead of inferring it from a gap.
+-- is named too, so the reader sees the coordinate deliberately left
+-- free instead of inferring it from a gap.
 
 program glasshouse
 
--- The vocabulary. `TradeCaptured` is the trade's immutable identity;
--- its economic terms live in `TradeTerms` (one version in v0, so
--- `unique by (trade)`; amendment, when it arrives, will loosen this
--- to `(trade, effective_from)` and version terms the way the curve is
--- versioned, rather than ever editing them). `CurveRegistered` is a
+-- The vocabulary. `TradeCaptured` is the trade's immutable identity
+-- (direction and counterparty included: those are what the trade IS);
+-- its economic terms live in `TradeTerms`, versioned the way the curve
+-- is versioned rather than ever edited. Each version carries the
+-- business date it takes effect from, and `effective by (trade) on
+-- (effective_from)` makes morpholog write the selector every temporal
+-- programme used to hand-roll: `trade_terms_in_force_on(trade, as_of,
+-- ..)` names the version whose date is the latest not after `as_of`.
+-- An amendment is a new version alongside the old with its lineage
+-- linked in `TradeTermsSupersedes`; the old terms, and any valuation
+-- computed under them, stay on the record. `CurveRegistered` is a
 -- curve version's identity including the hash anchoring its payload;
 -- `OfficialCurve` is the current pointer naming the version in force
 -- for a market and as-of date, superseded along the `CurveSupersedes`
 -- lineage. `TradeValued` records one mark-to-market result, pinned to
--- the exact curve version it was computed against, so a later
--- correction never silently re-writes a number anyone saw.
+-- the exact curve version AND the exact terms version it was computed
+-- against, so neither a curve correction nor an amendment ever
+-- silently re-writes a number anyone saw.
 --
 -- The capability predicates carry no discipline on purpose: they are
 -- only ever admitted in v0, and revocation, when it arrives, is a
@@ -76,8 +84,12 @@ predicate MayValueTrade(actor: Subject, org: Subject, book: Subject)
 predicate TradeCaptured(org: Subject, book: Subject, trade: Subject, counterparty: Subject, market: Subject, direction: Subject)
     unique by (trade)
     append only
-predicate TradeTerms(org: Subject, trade: Subject, quantity: Decimal[MW], price: Decimal, delivery_start: Timestamp, delivery_end: Timestamp)
-    unique by (trade)
+predicate TradeTerms(org: Subject, trade: Subject, version: Subject, quantity: Decimal[MW], price: Decimal, delivery_start: Timestamp, delivery_end: Timestamp, effective_from: Date)
+    unique by (version)
+    effective by (trade) on (effective_from) partial
+    append only
+predicate TradeTermsSupersedes(new_version: Subject, prior_version: Subject)
+    unique by (prior_version)
     append only
 predicate CurveRegistered(org: Subject, market: Subject, as_of: Date, version: Subject, payload_hash: Subject)
     unique by (version)
@@ -87,8 +99,8 @@ predicate OfficialCurve(org: Subject, market: Subject, as_of: Date, version: Sub
     superseded via CurveSupersedes
 predicate CurveSupersedes(new_version: Subject, prior_version: Subject)
     append only
-predicate TradeValued(org: Subject, book: Subject, trade: Subject, curve_version: Subject, mtm: Decimal[EUR])
-    unique by (trade, curve_version)
+predicate TradeValued(org: Subject, book: Subject, trade: Subject, curve_version: Subject, terms_version: Subject, mtm: Decimal[EUR])
+    unique by (trade, curve_version, terms_version)
     append only
 
 -- The referential and value rules that must always hold, by any path.
@@ -128,6 +140,32 @@ invariant valuation_curve_is_registered:
     TradeValued(org: org, curve_version: version, ..)
     implies CurveRegistered(org: org, version: version, ..)
 
+-- A valuation's terms version is a registered version of that trade,
+-- in the same organisation.
+invariant valuation_terms_version_is_registered:
+    TradeValued(org: org, trade: trade, terms_version: version, ..)
+    implies TradeTerms(org: org, trade: trade, version: version, ..)
+
+-- Lineage never crosses trades: a version amends a version of the
+-- same trade.
+invariant terms_lineage_stays_within_the_trade:
+    TradeTermsSupersedes(new_version, prior_version)
+    and TradeTerms(org: org, trade: trade, version: new_version, ..)
+    implies TradeTerms(org: org, trade: trade, version: prior_version, ..)
+
+-- That a mark's terms version was *in force on the curve's date at
+-- admission time* is the gate's job, exactly as officialness is for
+-- the curve: a valuation is a record of what was computed, and an
+-- amendment effective on a date already marked supersedes the mark
+-- by re-marking, never by making the old record unlawful. (A record
+-- invariant saying "every mark names the terms in force on its
+-- curve's date" was tried and refused every intra-day amendment of a
+-- marked trade; it is the analogue of "every mark names the official
+-- curve", which this model deliberately does not have. The
+-- effective-dated predicate is therefore declared `partial`: where no
+-- version is in force the selector matches nothing, and the gate is
+-- what refuses a mark there.)
+
 -- The only ways state may change.
 
 -- Authority grants are ungated in v0: bootstrap seeds capabilities at
@@ -143,15 +181,32 @@ transformation grant_curve_authority(principal, org, market):
 transformation grant_valuation_authority(principal, org, book):
     admit MayValueTrade(principal, org, book)
 
--- Capture a trade: identity and terms in one transition. The gate
--- ties the actor's capability to this org and this book; the trade id
--- is fixed once captured (a change of terms will be an amendment,
--- never a silent overwrite).
-transformation capture_trade(org, book, trade, counterparty, market, direction, quantity, price, delivery_start, delivery_end):
+-- Capture a trade: identity and the first version of its terms in one
+-- transition, effective from the trade date. The gate ties the actor's
+-- capability to this org and this book; the trade id is fixed once
+-- captured (a change of terms is an amendment, never an overwrite).
+-- The version id is the caller's, like a curve version's.
+transformation capture_trade(org, book, trade, counterparty, market, direction, version, quantity, price, delivery_start, delivery_end, trade_date):
     require MayCaptureTrade(actor, org, book)
     require not TradeCaptured(trade: trade, ..)
+    require not TradeTerms(version: version, ..)
     admit TradeCaptured(org, book, trade, counterparty, market, direction)
-    admit TradeTerms(org, trade, quantity, price, delivery_start, delivery_end)
+    admit TradeTerms(org, trade, version, quantity, price, delivery_start, delivery_end, trade_date)
+
+-- Amend the economic terms the honest way: a new version alongside the
+-- old, lineage linked, effective strictly after the version it amends,
+-- so the chain, the timeline and the log agree on which terms are
+-- current. Direction and counterparty are identity and stay on
+-- `TradeCaptured`. The capture capability for the trade's book is the
+-- amendment capability: whoever may book a trade may re-book its terms.
+transformation amend_trade(org, trade, prior_version, new_version, quantity, price, delivery_start, delivery_end, effective_from):
+    require TradeCaptured(org: org, trade: trade, book: book, ..) and MayCaptureTrade(actor, org, book)
+    require TradeTerms(org: org, trade: trade, version: prior_version, effective_from: prior_from, ..)
+    and effective_from after prior_from
+    require not TradeTermsSupersedes(prior_version: prior_version, ..)
+    require not TradeTerms(version: new_version, ..)
+    admit TradeTerms(org, trade, new_version, quantity, price, delivery_start, delivery_end, effective_from)
+    admit TradeTermsSupersedes(new_version, prior_version)
 
 -- Register a curve version and make it official in one move. This is
 -- the first-registration path: if a curve is already official for
@@ -186,11 +241,18 @@ transformation correct_curve(org, market, as_of, prior_version, new_version, pay
 -- valuation capability for this book, the trade exists here, and -
 -- the rule this product is built around - the curve version used is
 -- the one officially in force for the trade's market, at admission
--- time. An MTM against a stale or unofficial curve is structurally
--- uncommittable, not merely discouraged.
-transformation admit_valuation(org, book, trade, curve_version, mtm):
+-- time, and the terms version used is the one in force on that
+-- curve's business date. An MTM against a stale or unofficial curve,
+-- or against terms that were not in force, is structurally
+-- uncommittable, not merely discouraged. The three claim patterns
+-- share one `require` because bindings flow only within a
+-- conjunction: the curve's `as_of` binds in the pointer and feeds the
+-- selector, whose payload holes are wildcarded positionally
+-- (definitions take parameters, not fields, so they cannot be named).
+transformation admit_valuation(org, book, trade, curve_version, terms_version, mtm):
     require MayValueTrade(actor, org, book)
     require TradeCaptured(org: org, book: book, trade: trade, market: market, ..)
-    and OfficialCurve(org: org, market: market, as_of: _, version: curve_version)
-    require not TradeValued(trade: trade, curve_version: curve_version, ..)
-    admit TradeValued(org, book, trade, curve_version, mtm)
+    and OfficialCurve(org: org, market: market, as_of: as_of, version: curve_version)
+    and trade_terms_in_force_on(trade, as_of, org, terms_version, _, _, _, _)
+    require not TradeValued(trade: trade, curve_version: curve_version, terms_version: terms_version, ..)
+    admit TradeValued(org, book, trade, curve_version, terms_version, mtm)

@@ -102,11 +102,11 @@
       <div class="table-scroll">
         <table class="data-table" aria-label="Marks struck on {{ diff.base if side == 'base' else diff.compare }}">
           <thead>
-            <tr><th scope="col">Trade</th><th scope="col">Book</th><th scope="col" class="numeric">MtM (EUR)</th></tr>
+            <tr><th scope="col">Trade</th><th scope="col">Book</th><th scope="col">Terms</th><th scope="col" class="numeric">MtM (EUR)</th></tr>
           </thead>
           <tbody>
             {% for mark in marks %}
-            <tr><td class="mono">{{ mark.trade }}</td><td>{{ mark.book }}</td>{{ num_cell(mark.mtm) }}</tr>
+            <tr><td class="mono">{{ mark.trade }}</td><td>{{ mark.book }}</td><td class="mono">{{ mark.terms_version }}</td>{{ num_cell(mark.mtm) }}</tr>
             {% endfor %}
           </tbody>
         </table>

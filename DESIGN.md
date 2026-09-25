@@ -171,7 +171,7 @@ Server-rendered **Jinja2 + HTMX** (Alpine.js permitted only for tiny local inter
 
 **The six screens** (demo scope; everything else waits):
 1. **Overview** — the operational landing page, answering "can I start my day?": business date, books, latest official curves, open import quarantines, recent corrections, latest P&L run, system health.
-2. **Blotter** — the centrepiece: dense filterable table, sticky header, row drawer with the full amendment trail, export-current-view. No editable cells.
+2. **Blotter** — the centrepiece: dense filterable table, sticky header, every row under its current terms with the amendment count beside the version, the full amendment trail on the read API (`/trades/{trade}/terms`) and as a per-trade page in the next slice, export-current-view. No editable cells: an amendment is a governed proposal that supersedes the terms.
 3. **Curves** — market-data operations, not a generic list: version, official status, input hash, shape profile, supersedes chain; the money interaction is *select v1 and v2, see what changed and which books' P&L it touched*.
 4. **Positions & P&L** — the killer query as a screen: book x delivery period x net MWh x curve used x P&L, groupable, as-of selectable, every material number one click from its evidence drawer.
 5. **Imports** — the adoption workbench: upload CSV, preview, validate, quarantine with reasons, accept the good rows, download a corrected template. A prospect should be able to bring their own spreadsheet to the demo.
