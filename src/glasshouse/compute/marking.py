@@ -7,10 +7,11 @@ claim, the payload this call just stored is discarded again - otherwise
 the version id would be consumed forever (the store refuses overwrites)
 and a later legitimate correction could never reuse it. Provably means a
 lawful rejection, or an operational failure the substrate classifies as
-a known non-commit (since morpholog v0.0.11 every `MorphologError` from
-a proposal is one, except `MorphologOutcomeUnknown`). An unknown outcome
-keeps the payload: the claim may have committed, and a claim without its
-payload would be a lie. A payload orphaned by a crash between store and
+a known non-commit (since morpholog v0.0.12 the binary states one by
+published code, and every other ending of a proposal - a timeout, a
+crash, a reply that does not decode - is `MorphologOutcomeUnknown`). An
+unknown outcome keeps the payload: the claim may have committed, and a
+claim without its payload would be a lie. A payload orphaned by a crash between store and
 proposal remains detectable garbage for `glasshouse verify`.
 
 `correct_and_remark` is the correction as the desk means it: the new

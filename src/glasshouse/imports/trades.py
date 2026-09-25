@@ -22,14 +22,23 @@ import io
 from collections.abc import Sequence
 from decimal import Decimal, InvalidOperation
 
-from glasshouse.commit import GlasshouseClient, envelopes, models, values
+from glasshouse.commit import (
+    GlasshouseClient,
+    MorphologBatchIncomplete,
+    MorphologError,
+    envelopes,
+    models,
+    values,
+)
 from glasshouse.imports.report import (
     ADMISSIBLE,
     COMMITTED,
     ERROR,
+    NOT_ATTEMPTED,
     QUARANTINED,
     REFUSED,
     REJECTED,
+    UNKNOWN,
     ImportReport,
     RowOutcome,
     why,
@@ -129,6 +138,19 @@ def parse_trades(
     return accepted, quarantined
 
 
+class ImportIncompleteError(MorphologError):
+    """The batch stopped before every row had a trustworthy receipt. It
+    is still an operational failure (the caller must not report success),
+    but `report` accounts for every row of the file: the receipts that
+    arrived, the row that may have committed, the rows that never ran,
+    and the quarantined ones - so the operator reads the ledger for
+    exactly the rows named `unknown`, not the whole file."""
+
+    def __init__(self, report: ImportReport, cause: MorphologBatchIncomplete) -> None:
+        super().__init__(str(cause))
+        self.report = report
+
+
 def _receipt_outcome(ref: str, outcome: object) -> RowOutcome:
     match outcome:
         case envelopes.Committed(transition_id=transition_id):
@@ -178,12 +200,55 @@ def import_trades(
             }
             for _, req in accepted
         ]
-        for receipt in client.propose_batch(rows, timeout=timeout, explain_on_reject=explain):
+        try:
+            receipts = client.propose_batch(rows, timeout=timeout, explain_on_reject=explain)
+        except MorphologBatchIncomplete as stopped:
+            # The batch stopped, and the generated client says which rows
+            # finished, which one was in flight (it may have committed)
+            # and which never ran. Account for all of them in file order,
+            # then fail: the report is what the operator acts on.
+            for receipt in stopped.receipts:
+                line, _ = accepted[receipt.row - 1]
+                outcomes.append((line, _receipt_outcome(f"line {line}", receipt.outcome)))
+            for row in stopped.unknown_rows:
+                line, _ = accepted[row - 1]
+                outcomes.append(
+                    (
+                        line,
+                        RowOutcome(
+                            f"line {line}",
+                            UNKNOWN,
+                            "in flight when the batch stopped: it may have committed - "
+                            "read the record before re-submitting",
+                        ),
+                    )
+                )
+            for row in stopped.not_attempted:
+                line, _ = accepted[row - 1]
+                outcomes.append(
+                    (
+                        line,
+                        RowOutcome(
+                            f"line {line}", NOT_ATTEMPTED, "the batch stopped before this row"
+                        ),
+                    )
+                )
+            report = _in_file_order(outcomes)
+            log.warning(
+                "imports.trades_incomplete",
+                org=org,
+                actor=actor,
+                committed=report.committed,
+                unknown=report.unknown,
+                not_attempted=report.not_attempted,
+            )
+            raise ImportIncompleteError(report, stopped) from stopped
+        for receipt in receipts:
             # receipt.row indexes the batch, which excludes quarantined
             # CSV rows; map it back to the file's own line number.
             line, _ = accepted[receipt.row - 1]
             outcomes.append((line, _receipt_outcome(f"line {line}", receipt.outcome)))
-    report = ImportReport(tuple(outcome for _, outcome in sorted(outcomes, key=lambda o: o[0])))
+    report = _in_file_order(outcomes)
     log.info(
         "imports.trades_imported",
         org=org,
@@ -194,6 +259,10 @@ def import_trades(
         quarantined=report.quarantined,
     )
     return report
+
+
+def _in_file_order(outcomes: list[tuple[int, RowOutcome]]) -> ImportReport:
+    return ImportReport(tuple(outcome for _, outcome in sorted(outcomes, key=lambda o: o[0])))
 
 
 def preview_trades(client: GlasshouseClient, text: str, *, org: str, actor: str) -> ImportReport:
@@ -209,4 +278,4 @@ def preview_trades(client: GlasshouseClient, text: str, *, org: str, actor: str)
             outcomes.append((line, RowOutcome(f"line {line}", ADMISSIBLE, "would commit")))
         else:
             outcomes.append((line, RowOutcome(f"line {line}", REFUSED, why(explanation))))
-    return ImportReport(tuple(outcome for _, outcome in sorted(outcomes, key=lambda o: o[0])))
+    return _in_file_order(outcomes)

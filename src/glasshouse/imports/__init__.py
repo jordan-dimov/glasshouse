@@ -13,6 +13,7 @@ from glasshouse.imports.curves import import_curves, parse_curves, preview_curve
 from glasshouse.imports.report import ImportReport, RowOutcome, why
 from glasshouse.imports.trades import (
     ImportFormatError,
+    ImportIncompleteError,
     import_trades,
     parse_trades,
     preview_trades,
@@ -20,6 +21,7 @@ from glasshouse.imports.trades import (
 
 __all__ = [
     "ImportFormatError",
+    "ImportIncompleteError",
     "ImportReport",
     "RowOutcome",
     "import_curves",

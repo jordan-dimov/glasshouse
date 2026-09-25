@@ -33,11 +33,16 @@ from glasshouse.commit import (
     MorphologError,
     apply_views,
 )
-from glasshouse.commit.morpholog_client.envelopes import CheckpointCreated, TreeIntact
+from glasshouse.commit.morpholog_client.envelopes import (
+    CheckpointCreated,
+    RoleRebindingsEvaluated,
+    TreeIntact,
+)
 from glasshouse.compute.store import CurveStore, engine_url
 from glasshouse.config import Settings, get_settings
 from glasshouse.imports import (
     ImportFormatError,
+    ImportIncompleteError,
     import_curves,
     import_trades,
     preview_curves,
@@ -79,7 +84,16 @@ def _run_import(
     text = file.read_text(encoding="utf-8")
     client = _client(db)
     if not curves:
-        report = (preview_trades if preview else import_trades)(client, text, org=org, actor=actor)
+        try:
+            report = (preview_trades if preview else import_trades)(
+                client, text, org=org, actor=actor
+            )
+        except ImportIncompleteError as stopped:
+            # The batch stopped: every row is still accounted for, so the
+            # report is printed before the failure exits 1 - the rows that
+            # may have committed are named in it, and only there.
+            print(stopped.report.render())
+            raise
     elif preview:
         report = preview_curves(client, text, org=org, actor=actor)
     else:
@@ -148,8 +162,8 @@ def import_curves_command(
 @app.command(
     "provision",
     help="Non-destructive first-boot provisioning: migrate the app schema to head, initialise "
-    "the governed schema if absent, apply the sealed inspection views. Idempotent - the web "
-    "service's pre-deploy step.",
+    "the governed schema if absent and migrate it, reconcile the managed indexes, apply the "
+    "sealed inspection views. Idempotent - the web service's pre-deploy step.",
 )
 def provision_command(
     least_privilege: Annotated[
@@ -258,12 +272,15 @@ def checkpoint_command(
     "party verifies it with no database access).",
 )
 def evidence_export_command(
-    out: Annotated[Path, typer.Argument(help="the pack JSON file to write")],
+    out: Annotated[Path, typer.Argument(help="the pack file to write (NDJSON)")],
     database_url: DatabaseUrl = "",
 ) -> None:
     client = _client(_db(database_url))
-    client.export_evidence_pack(out)
-    print(f"evidence pack written to {out}")
+    manifest = client.audit_export(str(out))
+    print(
+        f"evidence pack written to {out}: {manifest.tree_size} row(s) under "
+        f"{manifest.checkpoint_count} checkpoint(s)"
+    )
 
 
 @app.command(
@@ -272,7 +289,7 @@ def evidence_export_command(
     "against the pack's checkpoints.",
 )
 def evidence_verify_command(
-    pack: Annotated[Path, typer.Argument(help="the pack JSON file")],
+    pack: Annotated[Path, typer.Argument(help="the pack file")],
     anchor: Annotated[
         Path | None,
         typer.Option(help="an externally-held checkpoint JSON the pack must be shown to extend"),
@@ -284,9 +301,21 @@ def evidence_verify_command(
     # a rejected demo password in the environment must not be able to
     # stop a valid pack from being verified.
     client = GlasshouseClient(str(MODEL_FILE), "")
-    verdict = client.audit_verify_pack(str(pack), anchor_file=str(anchor) if anchor else None)
+    report = client.audit_verify_pack(str(pack), anchor_file=str(anchor) if anchor else None)
+    verdict = report.verdict
     intact = isinstance(verdict, TreeIntact)
     print(f"evidence verify: {'intact' if intact else type(verdict).__name__.removeprefix('Tree')}")
+    # A login role seen under a new OID among the pack's rows: the role
+    # was dropped and created again. A finding for the reader, never a
+    # verdict - the rows still hash as they did.
+    rebindings = report.role_rebindings
+    if isinstance(rebindings, RoleRebindingsEvaluated):
+        for change in rebindings.changes:
+            print(
+                f"role rebinding: {change.role} was oid {change.previous_oid} until "
+                f"{change.last_observed_transition}, oid {change.new_oid} from "
+                f"{change.first_observed_transition}"
+            )
     if not intact:
         raise typer.Exit(code=1)
 

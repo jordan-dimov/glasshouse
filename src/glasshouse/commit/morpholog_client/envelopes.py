@@ -179,12 +179,18 @@ class Rejected:
 
 @dataclass(frozen=True)
 class Errored:
+    """A traced proposal whose transformation raised a kernel error:
+    nothing was committed, and ``code`` is always ``kernel_error``."""
+
+    code: str
     error: str
 
     @classmethod
     def from_json(cls, payload: object) -> Errored:
-        data = _strict("errored result", payload, {"status", "error"})
-        return cls(error=data["error"])
+        data = _strict("errored result", payload, {"status", "code", "error"})
+        if data["code"] != "kernel_error":
+            raise EnvelopeError(f"errored result: unexpected code {data['code']!r}")
+        return cls(code=str(data["code"]), error=str(data["error"]))
 
 
 def parse_run_outcome(payload: object) -> Committed | Rejected:
@@ -726,6 +732,50 @@ class SessionReady:
         )
 
 
+#: The codes a proposal can fail with - the schema's
+#: ``propose_error_code``, which a test holds this set to. Only one of
+#: these, other than ``commit_outcome_unknown``, lets a caller treat a
+#: proposal as not committed; any other code is read as unknown.
+PROPOSE_ERROR_CODES = frozenset(
+    {
+        "actor_assertion_unauthorised",
+        "commit_outcome_unknown",
+        "duplicate_intent",
+        "invalid_arguments",
+        "invalid_request",
+        "kernel_error",
+        "not_committed",
+        "serialization_failure",
+        "unknown_transformation",
+    }
+)
+
+
+#: The codes that say nothing was recorded: every published code but
+#: ``commit_outcome_unknown``. A caller that hand-rolls its own handling
+#: should treat a proposal as not committed on one of these and on
+#: nothing else.
+NOTHING_RECORDED_CODES = PROPOSE_ERROR_CODES - {"commit_outcome_unknown"}
+
+
+@dataclass(frozen=True)
+class RequestError:
+    """The error object a one-shot ``propose`` or ``transact`` prints when
+    the request as a whole failed, and the object a batch prints when it
+    was refused before its first row. It is the binary's own statement;
+    the client never infers one."""
+
+    code: str
+    error: str
+
+    @classmethod
+    def from_json(cls, payload: object) -> RequestError:
+        data = _strict("request error", payload, {"code", "error", "status"})
+        if data["status"] != "error":
+            raise EnvelopeError(f"request error: unexpected status {data['status']!r}")
+        return cls(code=str(data["code"]), error=str(data["error"]))
+
+
 @dataclass(frozen=True)
 class SessionErrorReceipt:
     """A per-request session failure with its stable ``code`` - the
@@ -984,16 +1034,27 @@ class Attestation:
 
     mode: str
     authenticated_by: str
+    #: The role's OID when it asserted: which incarnation of the name, since
+    #: a dropped role's name can be created again. ``None`` on rows written
+    #: before it was recorded.
+    authenticated_by_oid: int | None = None
 
     @classmethod
     def from_json(cls, payload: object) -> Attestation:
-        data = _strict("attestation", payload, {"mode", "authenticated_by"})
+        data = _strict(
+            "attestation", payload, {"mode", "authenticated_by"}, {"authenticated_by_oid"}
+        )
         if data["mode"] != "gateway":
             raise EnvelopeError(
                 f"attestation: unknown mode {data['mode']!r} - the binary's "
                 "contract has drifted past this generated client; regenerate it"
             )
-        return cls(mode=data["mode"], authenticated_by=data["authenticated_by"])
+        oid = data.get("authenticated_by_oid")
+        return cls(
+            mode=data["mode"],
+            authenticated_by=data["authenticated_by"],
+            authenticated_by_oid=None if oid is None else int(str(oid)),
+        )
 
 
 def _attestation_of(data: dict[str, object]) -> Attestation | None:
@@ -1769,27 +1830,118 @@ class WitnessesReport:
 
 
 @dataclass(frozen=True)
+class RoleRebinding:
+    """A login-role name seen under a new OID: the role was dropped and
+    created again. The transitions are the last and first observed in the
+    rows compared, not necessarily the last and first in the log."""
+
+    role: str
+    previous_oid: int
+    last_observed_transition: str
+    new_oid: int
+    first_observed_transition: str
+
+    @classmethod
+    def from_json(cls, payload: object) -> RoleRebinding:
+        data = _strict(
+            "role rebinding",
+            payload,
+            {"role", "previous_oid", "last_observed_transition", "new_oid",
+             "first_observed_transition"},
+        )
+        return cls(
+            role=str(data["role"]),
+            previous_oid=int(str(data["previous_oid"])),
+            last_observed_transition=str(data["last_observed_transition"]),
+            new_oid=int(str(data["new_oid"])),
+            first_observed_transition=str(data["first_observed_transition"]),
+        )
+
+
+@dataclass(frozen=True)
+class RoleRebindingsEvaluated:
+    """Role rebindings compared over rows an intact verdict established.
+    ``scope`` is ``complete_prefix``, ``window`` or ``selective``; rows
+    without an OID could not show a change. A change is a finding, never a
+    failure."""
+
+    scope: str
+    rows_with_oid: int
+    rows_without_oid: int
+    changes: list[RoleRebinding]
+
+    @classmethod
+    def from_json(cls, payload: object) -> RoleRebindingsEvaluated:
+        data = _strict(
+            "role rebindings",
+            payload,
+            {"status", "scope", "rows_with_oid", "rows_without_oid", "changes"},
+        )
+        changes = data["changes"]
+        if not isinstance(changes, list):
+            raise EnvelopeError(f"role rebindings: changes is not a list: {changes!r}")
+        return cls(
+            scope=str(data["scope"]),
+            rows_with_oid=int(str(data["rows_with_oid"])),
+            rows_without_oid=int(str(data["rows_without_oid"])),
+            changes=[RoleRebinding.from_json(c) for c in changes],
+        )
+
+
+@dataclass(frozen=True)
+class RoleRebindingsNotEvaluated:
+    """The verdict did not establish the rows, so nothing is reported
+    from them."""
+
+    @classmethod
+    def from_json(cls, payload: object) -> RoleRebindingsNotEvaluated:
+        _strict("role rebindings", payload, {"status"})
+        return cls()
+
+
+RoleRebindings = RoleRebindingsEvaluated | RoleRebindingsNotEvaluated
+
+
+def parse_role_rebindings(payload: object) -> RoleRebindings:
+    """Parse the role-rebinding finding by its `status` tag."""
+    return _by_status(
+        payload,
+        "a role-rebinding finding",
+        {
+            "evaluated": RoleRebindingsEvaluated.from_json,
+            "not_evaluated": RoleRebindingsNotEvaluated.from_json,
+        },
+    )
+
+
+@dataclass(frozen=True)
 class VerifyReport:
     """The `verify` envelope: the replay verdict beside the
-    tamper-evidence verdict, plus the generated-view-surface verdict
-    when the verifier asked for it (`--views-schema`), plus what the
+    tamper-evidence verdict, the login roles seen under a new OID in the
+    rows the tree covered, plus the generated-view-surface verdict when
+    the verifier asked for it (`--views-schema`), plus what the
     checkpoints' external witnesses prove when any carries one."""
 
     replay: ReplayConsistent | ReplayDivergent
     tree: TreeVerification
+    role_rebindings: RoleRebindings
     views: ViewsVerification | None = None
     witnesses: WitnessesReport | None = None
 
     @classmethod
     def from_json(cls, payload: object) -> VerifyReport:
         data = _strict(
-            "verify report", payload, {"replay", "tree"}, optional={"views", "witnesses"}
+            "verify report",
+            payload,
+            {"replay", "tree", "role_rebindings"},
+            optional={"views", "witnesses"},
         )
         views = data.get("views")
         witnesses = data.get("witnesses")
         return cls(
             replay=parse_verify_outcome(data["replay"]),
             tree=parse_tree_verification(data["tree"]),
+            role_rebindings=parse_role_rebindings(data["role_rebindings"]),
             views=None if views is None else parse_views_verification(views),
             witnesses=None if witnesses is None else WitnessesReport.from_json(witnesses),
         )
@@ -1935,43 +2087,39 @@ def parse_checkpoint_outcome(payload: object) -> CheckpointCreated | CheckpointN
 
 
 @dataclass(frozen=True)
-class PackManifest:
+class PrefixPackManifest:
+    """Line 1 of a complete-prefix evidence pack. The next
+    ``checkpoint_count`` lines are checkpoints, then exactly ``tree_size``
+    audit rows in log order."""
+
     pack_format_version: int
+    pack_kind: str
     tree_size: int
     root_hash: str
     checkpoint_hash: str
+    checkpoint_count: int
 
     @classmethod
-    def from_json(cls, payload: object) -> PackManifest:
+    def from_json(cls, payload: object) -> PrefixPackManifest:
         data = _strict(
-            "pack manifest",
+            "prefix pack manifest",
             payload,
-            {"pack_format_version", "tree_size", "root_hash", "checkpoint_hash"},
+            {
+                "pack_format_version",
+                "pack_kind",
+                "tree_size",
+                "root_hash",
+                "checkpoint_hash",
+                "checkpoint_count",
+            },
         )
         return cls(
             pack_format_version=data["pack_format_version"],
+            pack_kind=data["pack_kind"],
             tree_size=data["tree_size"],
             root_hash=data["root_hash"],
             checkpoint_hash=data["checkpoint_hash"],
-        )
-
-
-@dataclass(frozen=True)
-class EvidencePack:
-    """A portable, offline-verifiable export of a checkpointed prefix of
-    the audit log: the covering checkpoint chain and the covered rows."""
-
-    manifest: PackManifest
-    checkpoints: list[Checkpoint]
-    rows: list[AuditRow]
-
-    @classmethod
-    def from_json(cls, payload: object) -> EvidencePack:
-        data = _strict("evidence pack", payload, {"manifest", "checkpoints", "rows"})
-        return cls(
-            manifest=PackManifest.from_json(data["manifest"]),
-            checkpoints=[Checkpoint.from_json(c) for c in data["checkpoints"]],
-            rows=[AuditRow.from_json(r) for r in data["rows"]],
+            checkpoint_count=data["checkpoint_count"],
         )
 
 
@@ -2409,20 +2557,28 @@ _PackVerdict = TypeVar("_PackVerdict")
 
 @dataclass(frozen=True)
 class PackVerificationReport(Generic[_PackVerdict]):
-    """`verify-pack` with the witness axis requested: the pack's own
-    verdict beside what its checkpoints' witnesses prove. ``witnesses``
-    is absent when no checkpoint in the pack carries one."""
+    """The `verify-pack` envelope: the pack's own verdict, the login roles
+    seen under a new OID among its rows, and, when asked for, what its
+    checkpoints' witnesses prove. ``witnesses`` is absent unless requested,
+    or when no checkpoint in the pack carries one."""
 
     verdict: _PackVerdict
+    role_rebindings: RoleRebindings
     witnesses: WitnessesReport | None = None
 
     @classmethod
     def from_json(
         cls, payload: object, parse_verdict: Callable[[object], _PackVerdict]
     ) -> PackVerificationReport[_PackVerdict]:
-        data = _strict("pack verification report", payload, {"verdict"}, optional={"witnesses"})
+        data = _strict(
+            "pack verification report",
+            payload,
+            {"verdict", "role_rebindings"},
+            optional={"witnesses"},
+        )
         witnesses = data.get("witnesses")
         return cls(
             verdict=parse_verdict(data["verdict"]),
+            role_rebindings=parse_role_rebindings(data["role_rebindings"]),
             witnesses=None if witnesses is None else WitnessesReport.from_json(witnesses),
         )

@@ -245,6 +245,69 @@ def test_browser_writes_are_fenced_off_in_production(monkeypatch: pytest.MonkeyP
     assert "fenced off in production" in preview.text
 
 
+THREE_GOOD_ROWS = "\n".join(
+    [
+        "book,trade,counterparty,market,direction,quantity,price,delivery_start,delivery_end",
+        "spec-de,T-1,cp,de-power,buy,10,86.25,2026-07-01T00:00:00Z,2026-07-02T00:00:00Z",
+        "spec-de,T-2,cp,de-power,buy,10,86.25,2026-07-01T00:00:00Z,2026-07-02T00:00:00Z",
+        "spec-de,T-3,cp,de-power,buy,10,86.25,2026-07-01T00:00:00Z,2026-07-02T00:00:00Z",
+    ]
+)
+ONE_RECEIPT = (
+    '{"status": "committed", "transition_id": "tr-1", "actor": {"type": "subject", '
+    '"value": "alice"}, "asserted_claims": [], "retracted_claims": [], '
+    '"emitted_intents": [], "row": 1}\n'
+)
+
+
+def _commit_three_rows(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, binary: Path):  # type: ignore[no-untyped-def]
+    monkeypatch.setenv("GLASSHOUSE_MORPHOLOG_BIN", str(binary))
+    with TestClient(create_app()) as client:
+        return client.post(
+            "/ui/imports/commit",
+            data={
+                "org": "acme-energy",
+                "kind": "trades",
+                "actor": "alice",
+                "text_b64": base64.b64encode(THREE_GOOD_ROWS.encode()).decode(),
+            },
+        )
+
+
+def test_a_batch_that_stops_names_the_rows_in_each_state(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    # One receipt, then the binary is killed: the page must say which
+    # rows finished, which one may have committed and which never ran -
+    # never "nothing happened", never "everything failed".
+    killed = fake_binary(tmp_path, ONE_RECEIPT, stderr="Killed", exit_code=137)
+    response = _commit_three_rows(tmp_path, monkeypatch, killed)
+    assert response.status_code == 500
+    assert "The import stopped part-way" in response.text
+    assert "1 row(s) committed" in response.text
+    assert "1 in flight when it stopped" in response.text
+    assert "1 never attempted" in response.text
+
+
+def test_a_batch_refused_whole_says_nothing_was_committed(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    # The binary's own statement, by published code, that it refused the
+    # batch before its first row. Only that statement earns "nothing was
+    # committed" on the page.
+    refused = fake_binary(
+        tmp_path,
+        '{"status": "error", "code": "invalid_request", "error": "malformed batch"}\n',
+        stderr="Error: malformed batch",
+        exit_code=1,
+    )
+    response = _commit_three_rows(tmp_path, monkeypatch, refused)
+    assert response.status_code == 502
+    assert "The import was refused whole" in response.text
+    assert "nothing was committed" in response.text
+    assert "invalid_request" in response.text
+
+
 def test_the_browser_row_cap_points_at_the_cli() -> None:
     # 2001 data rows is small in bytes but long in subprocess work (one
     # explain per row on preview, one batch on commit): the browser path

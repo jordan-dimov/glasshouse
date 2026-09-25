@@ -23,7 +23,12 @@ from glasshouse.commit.morpholog_client import (
     models,
     values,
 )
-from glasshouse.commit.morpholog_client.adapter import MorphologError, MorphologOutcomeUnknown
+from glasshouse.commit.morpholog_client.adapter import (
+    MorphologBatchIncomplete,
+    MorphologError,
+    MorphologOutcomeUnknown,
+    MorphologRequestError,
+)
 from glasshouse.commit.morpholog_client.envelopes import Committed, Rejected
 from glasshouse.commit.views import (
     VIEWS_FILE,
@@ -48,8 +53,10 @@ __all__ = [
     "VIEWS_SCHEMA",
     "Committed",
     "GlasshouseClient",
+    "MorphologBatchIncomplete",
     "MorphologError",
     "MorphologOutcomeUnknown",
+    "MorphologRequestError",
     "NamedClaimModel",
     "Outcome",
     "Rejected",

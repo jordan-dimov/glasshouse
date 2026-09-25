@@ -155,6 +155,11 @@ def seed_demo(client: GlasshouseClient, store: CurveStore, engine: sa.Engine) ->
     client.init(skip_if_exists=True)
     if client.audit():
         raise SeedError("the ledger already has transitions; use seed --reset")
+    # The reset re-initialises the governed schema with the cron's own
+    # binary, which lays down no managed indexes: the demo would run its
+    # keyed loads as predicate scans until the next web deploy provisioned
+    # them. Reconcile here so the seeded database is the provisioned one.
+    client.provision_indexes(prune=True)
     apply_views(engine)
 
     grants: tuple[object, ...] = (

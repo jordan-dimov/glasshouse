@@ -58,13 +58,33 @@ def test_a_rejection_gives_the_version_back(tmp_path: Path) -> None:
 
 
 def test_a_known_non_commit_gives_the_version_back(tmp_path: Path) -> None:
-    # Exit 1, empty stdout: an operational failure before the decision,
-    # which the substrate classifies as nothing having happened.
+    # The binary's own statement, by published code, that nothing was
+    # recorded: since v0.0.12 that is the ONLY thing the client reads as
+    # a known non-commit (an empty stdout on exit 1 no longer is).
+    binary = fake_binary(
+        tmp_path,
+        json.dumps(
+            {"status": "error", "code": "not_committed", "error": "the proposal was not committed"}
+        ),
+        stderr="Error: the proposal was not committed",
+        exit_code=1,
+    )
+    store = RecordingStore()
+    with pytest.raises(MorphologError) as raised:
+        _register(binary, store)
+    assert not isinstance(raised.value, MorphologOutcomeUnknown)
+    assert store.discarded == ["acme-energy/crv-1"]
+
+
+def test_silence_on_a_failing_exit_keeps_the_payload(tmp_path: Path) -> None:
+    # Exit 1 with nothing on stdout used to be read as a known
+    # non-commit. It is not one: the child may have died after COMMIT
+    # was sent, so the payload stays.
     binary = fake_binary(tmp_path, "", stderr="Error: the proposal was not committed", exit_code=1)
     store = RecordingStore()
-    with pytest.raises(MorphologError):
+    with pytest.raises(MorphologOutcomeUnknown):
         _register(binary, store)
-    assert store.discarded == ["acme-energy/crv-1"]
+    assert (store.saved, store.discarded) == (["acme-energy/crv-1"], [])
 
 
 def test_an_unknown_outcome_keeps_the_payload(tmp_path: Path) -> None:
@@ -80,13 +100,12 @@ def test_an_unknown_outcome_keeps_the_payload(tmp_path: Path) -> None:
 
 def test_an_undecodable_reply_keeps_the_payload(tmp_path: Path) -> None:
     # Exit 0 with stdout that is not an outcome envelope: the proposal
-    # may have committed, and the generated one-shot client raises the
-    # decoder's own error rather than `MorphologOutcomeUnknown` (reported
-    # upstream). It is not a `MorphologError`, so it is never read as a
-    # known non-commit: the payload stays.
+    # may have committed. The v0.0.11 client raised the decoder's own
+    # error here (recorded in contract section 24); since v0.0.12 the
+    # generated one-shot client says `MorphologOutcomeUnknown`, and the
+    # payload stays either way.
     binary = fake_binary(tmp_path, '{"status": "committed"', exit_code=0)
     store = RecordingStore()
-    with pytest.raises(json.JSONDecodeError) as raised:
+    with pytest.raises(MorphologOutcomeUnknown):
         _register(binary, store)
-    assert not isinstance(raised.value, MorphologError)
     assert (store.saved, store.discarded) == (["acme-energy/crv-1"], [])

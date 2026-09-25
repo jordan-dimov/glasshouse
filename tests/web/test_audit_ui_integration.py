@@ -92,11 +92,13 @@ def test_the_evidence_loop_closes_offline(ui: TestClient, tmp_path) -> None:  # 
     assert anchor.status_code == 200
     assert "attachment" in anchor.headers["content-disposition"]
     assert pack.status_code == 200
-    pack_file = tmp_path / "pack.json"
+    assert pack.headers["content-type"].startswith("application/x-ndjson")
+    assert 'filename="glasshouse-evidence-pack.ndjson"' in pack.headers["content-disposition"]
+    pack_file = tmp_path / "pack.ndjson"
     anchor_file = tmp_path / "anchor.json"
     pack_file.write_bytes(pack.content)
     anchor_file.write_bytes(anchor.content)
     # The downloads verify offline against each other - no database.
     offline = GlasshouseClient(str(MODEL_FILE), "", binary=str(BINARY))
-    verdict = offline.audit_verify_pack(str(pack_file), anchor_file=str(anchor_file))
-    assert isinstance(verdict, TreeIntact)
+    report = offline.audit_verify_pack(str(pack_file), anchor_file=str(anchor_file))
+    assert isinstance(report.verdict, TreeIntact)

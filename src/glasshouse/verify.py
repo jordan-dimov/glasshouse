@@ -50,6 +50,7 @@ from glasshouse.commit import (
 )
 from glasshouse.commit.morpholog_client.envelopes import (
     ReplayConsistent,
+    RoleRebindingsEvaluated,
     TreeIntact,
     ViewsIntact,
     ViewsNotSealed,
@@ -124,10 +125,20 @@ def _tree_leg(report: LedgerVerifyReport) -> Leg:
     # verdict names itself (tampered, chain_broken, ...).
     tree = report.tree
     if isinstance(tree, TreeIntact):
+        # A login role seen under a new OID (dropped and created again) is
+        # a finding beside the verdict, never a failure: the rows still
+        # hash as they did. Named so a reader of the report sees it.
+        rebindings = report.role_rebindings
+        rebound = (
+            f", {len(rebindings.changes)} login role(s) rebound"
+            if isinstance(rebindings, RoleRebindingsEvaluated) and rebindings.changes
+            else ""
+        )
         return Leg(
             "tree",
             True,
-            f"history tree intact ({tree.checkpoints} checkpoint(s) over {tree.tree_size} row(s))",
+            f"history tree intact ({tree.checkpoints} checkpoint(s) over {tree.tree_size} "
+            f"row(s){rebound})",
         )
     verdict = type(tree).__name__.removeprefix("Tree")
     return Leg("tree", False, f"history tree verdict: {verdict}")
