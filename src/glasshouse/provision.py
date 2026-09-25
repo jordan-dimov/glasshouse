@@ -4,12 +4,14 @@ The idempotent steps a fresh (or already-provisioned) database needs
 before the web service can serve: migrate the app schema to head,
 initialise the governed schema if absent (`init --skip-if-exists`),
 bring that governed schema up to the binary's own version (`migrate`),
-apply the sealed inspection views, and prove the audit tail can be read
-at all. This is the web service's pre-deploy
-command (DESIGN section 13: migrations and the Morpholog bootstrap run
-in a pre-deploy step, never at app startup) and is safe to run on every
-deploy: both migrations no-op when current, the init skips an existing
-schema, and the committed view script re-applies and re-seals.
+reconcile the managed indexes the programme's keyed loads and compiled
+checks seek through (`provision indexes --prune`), apply the sealed
+inspection views, and prove the audit tail can be read at all. This is
+the web service's pre-deploy command (DESIGN section 13: migrations and
+the Morpholog bootstrap run in a pre-deploy step, never at app startup)
+and is safe to run on every deploy: both migrations no-op when current,
+the init skips an existing schema, the index plan keeps what is already
+right, and the committed view script re-applies and re-seals.
 
 `--least-privilege` passes the upstream provisioning floor through
 (reader/writer group roles; the report names the membership grants only
@@ -43,6 +45,7 @@ from alembic.config import Config
 
 from alembic import command
 from glasshouse.commit import MODEL_FILE, GlasshouseClient, apply_views
+from glasshouse.commit.client import IndexPlan
 from glasshouse.commit.morpholog_client.envelopes import LeastPrivilege
 from glasshouse.compute.store import engine_url
 
@@ -77,6 +80,9 @@ class ProvisionReport:
     # database (init provisions at the binary's own version) and on one
     # already current, which is the ordinary case.
     governed_migrations: tuple[str, ...] = ()
+    # The managed-index plan as applied. None only in a report built
+    # without provisioning (the tests' stable-render fixture).
+    indexes: IndexPlan | None = None
 
     def render(self) -> str:
         applied = (
@@ -85,7 +91,8 @@ class ProvisionReport:
             else f"governed schema {self.governed}, "
             f"migrated ({', '.join(self.governed_migrations)})"
         )
-        lines = [f"provisioned: app schema at head, {applied}, views applied"]
+        indexes = "" if self.indexes is None else f", indexes ({self.indexes.summary()})"
+        lines = [f"provisioned: app schema at head, {applied}{indexes}, views applied"]
         if self.least_privilege is not None:
             floor = self.least_privilege
             lines.append(
@@ -116,6 +123,13 @@ def run_provision(
     # database is already current (init wrote this binary's own schema) and
     # a current one is left alone, which keeps provision idempotent.
     migration = client.migrate()
+    # `init` lays down the schema but not the managed indexes, and a
+    # migration can rekey every one of them (v0.0.12's 017 did), so the
+    # plan runs after both, every deploy. Without it every keyed load
+    # falls back to scanning its predicate under the lock the old
+    # whole-predicate read held: correct, slower, and contended. Prune is
+    # right here because Glasshouse is the only programme on its database.
+    indexes = client.provision_indexes(prune=True)
     engine = sa.create_engine(engine_url(database_url))
     try:
         apply_views(engine)
@@ -130,4 +144,5 @@ def run_provision(
         governed=init_report.status,
         least_privilege=init_report.least_privilege,
         governed_migrations=tuple(str(ref.version) for ref in migration.applied),
+        indexes=indexes,
     )

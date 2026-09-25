@@ -19,13 +19,17 @@ ours, nothing duplicated:
   rather than repeated at every call site (see below);
 * **`read`**, the typed per-predicate as-of read composing the generated
   named-claim surface;
-* **`export_evidence_pack`**, writing the binary's exact pack bytes to a
-  file for offline verification (the generated `audit_export` returns
-  the typed pack for inspection, not a file).
+* **`provision_indexes`**, the one command the generated client does
+  not spell: `morpholog provision indexes`, which since v0.0.12 builds
+  the managed indexes every keyed load and compiled check seeks
+  through. It prints a plan, not JSON, so the parser lives here.
 
-The bridge count is zero again: the last one (the `views_schema` flag on
-`verify`, our morpholog#192) was delivered upstream in #197 and deleted
-here (contract section 19). `writer_roles` is not a bridge - the flag is
+The bridge count is one: `provision_indexes` is a hand-built argv for a
+surface the generator does not emit (recorded in contract section 25,
+deleted the day a generated method lands - the pattern every earlier
+bridge followed). The pack export that used to live here is gone: since
+v0.0.12 the generated `audit_export(path)` streams the pack to a file
+itself. `writer_roles` is not a bridge - the flag is
 generated and typed (upstream #210) - it is a deployment property of the
 connection, exactly like `database_url` and the timeout, so it belongs
 on the client that holds those. Binding it here also makes it
@@ -38,11 +42,49 @@ from __future__ import annotations
 
 import json
 import os
+import re
+from dataclasses import dataclass
 from pathlib import Path
 from typing import ClassVar, Protocol, Self, override
 
 from glasshouse.commit.morpholog_client import envelopes
-from glasshouse.commit.morpholog_client.adapter import Morpholog
+from glasshouse.commit.morpholog_client.adapter import Morpholog, MorphologError, _redact_argv
+
+# The actions `provision indexes` prints, one per managed index, exactly
+# as the binary's help lists them. Anything else on a plan line is drift.
+_INDEX_ACTIONS = ("KEEP", "CREATE", "REPAIR INVALID", "SATISFIED EXTERNALLY", "STALE", "CONFLICT")
+_PLAN_LINE = re.compile(rf"^({'|'.join(_INDEX_ACTIONS)})\s+(\S+)\s*(.*)$")
+
+
+@dataclass(frozen=True)
+class IndexAction:
+    """One line of the plan: what `provision indexes` did (or, on a dry
+    run, would do) to one managed index."""
+
+    action: str
+    index: str
+    detail: str
+
+
+@dataclass(frozen=True)
+class IndexPlan:
+    """The reconciled index set for the programme: every managed index
+    with its action, and whether the plan was applied or only printed."""
+
+    actions: tuple[IndexAction, ...]
+    applied: bool
+
+    def count(self, action: str) -> int:
+        return sum(1 for entry in self.actions if entry.action == action)
+
+    def summary(self) -> str:
+        """The actions that occurred, in the binary's order, as counts."""
+        present = [
+            f"{self.count(action)} {action.lower()}"
+            for action in _INDEX_ACTIONS
+            if self.count(action)
+        ]
+        return ", ".join(present) or "nothing to provision"
 
 
 class NamedClaimModel(Protocol):
@@ -147,18 +189,48 @@ class GlasshouseClient(Morpholog):
         Path(path).write_bytes(raw.encode("utf-8"))
         return outcome
 
-    def export_evidence_pack(self, path: str | Path, tree_size: int | None = None) -> None:
-        """Write a complete-prefix evidence pack to `path` for offline
-        verification. The binary writes the pack JSON to stdout; we write
-        those exact bytes as explicit UTF-8 (the offline verifier
-        recomputes roots from them) after parsing once to refuse a
-        malformed pack loudly."""
-        args = ["audit", "export", "--database-url", self.database_url]
-        if tree_size is not None:
-            args.extend(["--tree-size", str(tree_size)])
-        raw = self._invoke(*args)
-        envelopes.EvidencePack.from_json(json.loads(raw))  # validate or raise
-        Path(path).write_bytes(raw.encode("utf-8"))
+    def provision_indexes(self, *, prune: bool = False, dry_run: bool = False) -> IndexPlan:
+        """Reconcile the managed indexes this programme's keyed loads and
+        compiled checks seek through (`morpholog provision indexes`).
+        Correctness never depends on them - an unindexed keyed read scans
+        the predicate and holds the lock a whole-predicate read held -
+        so this is provisioning, run after `init` and after `migrate`
+        (a migration can rekey every index, as v0.0.12's did). `prune`
+        also drops managed indexes no longer required, which is right
+        when this is the only programme on the database, as it is for
+        Glasshouse. Builds run concurrently; the claims table stays
+        writable. A conflict needs an operator and raises."""
+        args = ["provision", "indexes", self.file, "--database-url", self.database_url]
+        if prune:
+            args.append("--prune")
+        if dry_run:
+            args.append("--dry-run")
+        proc = self._run(args, timeout=self.timeout)
+        if proc.returncode != 0:
+            raise MorphologError(
+                f"`{_redact_argv(args)}`:\n{proc.stdout}{self._redact_stderr(proc.stderr)}"
+            )
+        actions: list[IndexAction] = []
+        applied: bool | None = None
+        for line in proc.stdout.splitlines():
+            if not line.strip() or line.startswith("program:"):
+                continue
+            if line == "applied":
+                applied = True
+                continue
+            if line.startswith("dry run:"):
+                applied = False
+                continue
+            matched = _PLAN_LINE.match(line)
+            if matched is None:
+                raise MorphologError(
+                    f"`{_redact_argv(args)}`: not a provision plan line: {line!r} - the "
+                    "binary's plan format has drifted past this client"
+                )
+            actions.append(IndexAction(matched[1], matched[2], matched[3]))
+        if applied is None:
+            raise MorphologError(f"`{_redact_argv(args)}`: the plan ended without a verdict line")
+        return IndexPlan(tuple(actions), applied)
 
     def read[C: NamedClaimModel](self, model: type[C], as_of: str | None = None) -> list[C]:
         """Read one predicate back through the named surface, decoded by

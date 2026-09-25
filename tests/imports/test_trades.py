@@ -12,7 +12,7 @@ from hypothesis import given
 from hypothesis import strategies as st
 
 from glasshouse.commit import GlasshouseClient
-from glasshouse.imports import ImportFormatError, import_trades, parse_trades
+from glasshouse.imports import ImportFormatError, ImportIncompleteError, import_trades, parse_trades
 from glasshouse.imports.trades import COLUMNS
 from tests.support import fake_binary
 
@@ -30,21 +30,24 @@ MIXED = "\n".join(
     ]
 )
 
-RECEIPTS = "\n".join(
-    [
-        json.dumps(
-            {
-                "status": "committed",
-                "transition_id": "tr-1",
-                "actor": {"type": "subject", "value": "alice"},
-                "asserted_claims": [],
-                "retracted_claims": [],
-                "emitted_intents": [],
-                "row": 1,
-            }
-        ),
-        json.dumps({"status": "rejected", "reason": "trade already captured", "row": 2}),
-    ]
+RECEIPTS = (
+    "\n".join(
+        [
+            json.dumps(
+                {
+                    "status": "committed",
+                    "transition_id": "tr-1",
+                    "actor": {"type": "subject", "value": "alice"},
+                    "asserted_claims": [],
+                    "retracted_claims": [],
+                    "emitted_intents": [],
+                    "row": 1,
+                }
+            ),
+            json.dumps({"status": "rejected", "reason": "trade already captured", "row": 2}),
+        ]
+    )
+    + "\n"
 )
 
 
@@ -92,28 +95,31 @@ def test_import_maps_batch_receipts_back_to_csv_lines(tmp_path: Path) -> None:
     assert all(row["actor"] == "alice" for row in sent)
 
 
-ERROR_RECEIPTS = "\n".join(
-    [
-        json.dumps(
-            {
-                "status": "committed",
-                "transition_id": "tr-1",
-                "actor": {"type": "subject", "value": "alice"},
-                "asserted_claims": [],
-                "retracted_claims": [],
-                "emitted_intents": [],
-                "row": 1,
-            }
-        ),
-        json.dumps(
-            {
-                "row": 2,
-                "status": "error",
-                "code": "serialization_failure",
-                "error": "could not serialize access",
-            }
-        ),
-    ]
+ERROR_RECEIPTS = (
+    "\n".join(
+        [
+            json.dumps(
+                {
+                    "status": "committed",
+                    "transition_id": "tr-1",
+                    "actor": {"type": "subject", "value": "alice"},
+                    "asserted_claims": [],
+                    "retracted_claims": [],
+                    "emitted_intents": [],
+                    "row": 1,
+                }
+            ),
+            json.dumps(
+                {
+                    "row": 2,
+                    "status": "error",
+                    "code": "serialization_failure",
+                    "error": "could not serialize access",
+                }
+            ),
+        ]
+    )
+    + "\n"
 )
 
 
@@ -124,6 +130,37 @@ def test_an_error_receipt_is_reported_per_row_not_raised(tmp_path: Path) -> None
     report = import_trades(client, text, org="acme-energy", actor="alice")
     assert (report.committed, report.errored) == (1, 1)
     assert report.outcomes[1].detail == "serialization_failure: could not serialize access"
+
+
+def test_a_batch_that_stops_accounts_for_every_row(tmp_path: Path) -> None:
+    # One receipt, then the binary dies: the generated client names the
+    # row in flight and the rows never run, and the import turns that
+    # into a report that still covers the whole file - including the
+    # quarantined row the batch never carried - before failing.
+    text = "\n".join(
+        [
+            HEADER,
+            GOOD.format(n=1),
+            "spec-de,T-Q,cp,de-power,buy,ten,86.25,2026-07-01T00:00:00Z,2026-07-02T00:00:00Z",
+            GOOD.format(n=2),
+            GOOD.format(n=3),
+        ]
+    )
+    first_receipt = ERROR_RECEIPTS.splitlines(keepends=True)[0]
+    binary = fake_binary(tmp_path, first_receipt, stderr="killed", exit_code=137)
+    client = GlasshouseClient("model.morph", "postgres:///x", binary=str(binary))
+    with pytest.raises(ImportIncompleteError) as stopped:
+        import_trades(client, text, org="acme-energy", actor="alice")
+    report = stopped.value.report
+    assert [(o.ref, o.status) for o in report.outcomes] == [
+        ("line 2", "committed"),
+        ("line 3", "quarantined"),
+        ("line 4", "unknown"),
+        ("line 5", "not attempted"),
+    ]
+    assert "may have committed" in report.outcomes[2].detail
+    assert (report.committed, report.unknown, report.not_attempted) == (1, 1, 1)
+    assert "1 unknown, 1 not attempted" in report.render()
 
 
 def test_an_all_quarantined_file_never_reaches_the_binary(tmp_path: Path) -> None:

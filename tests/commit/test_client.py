@@ -59,6 +59,7 @@ def test_verify_passes_the_views_schema_flag_through(tmp_path: Path) -> None:
         {
             "replay": {"status": "consistent", "transitions": 1, "claims": 1},
             "tree": {"status": "intact", "checkpoints": 0, "tree_size": 0},
+            "role_rebindings": {"status": "not_evaluated"},
             "views": {"status": "intact", "views_checked": 10},
         }
     )
@@ -77,6 +78,7 @@ def test_verify_without_the_flag_matches_the_generated_call(tmp_path: Path) -> N
         {
             "replay": {"status": "consistent", "transitions": 1, "claims": 1},
             "tree": {"status": "intact", "checkpoints": 0, "tree_size": 0},
+            "role_rebindings": {"status": "not_evaluated"},
         }
     )
     client = GlasshouseClient(
@@ -147,29 +149,68 @@ def test_the_configured_writer_roles_reach_both_checkpoint_paths(tmp_path: Path)
     assert json.loads(anchor.read_text())["tree_size"] == 3
 
 
-def test_the_hand_built_pack_export_names_the_audit_subcommand(tmp_path: Path) -> None:
-    # The other hand-built argv, pinned for the same reason: it is the one
-    # call the generated adapter does not spell for us, so a future
-    # regrouping upstream would otherwise reach it only in a live test.
-    # An empty but well-formed pack: the export path parses once to
-    # refuse malformed bytes, so the payload has to satisfy the envelope.
-    pack = json.dumps(
-        {
-            "manifest": {
-                "pack_format_version": 1,
-                "tree_size": 0,
-                "root_hash": "sha256:00",
-                "checkpoint_hash": "sha256:01",
-            },
-            "checkpoints": [],
-            "rows": [],
-        }
+INDEX_PLAN = (
+    "program: glasshouse (sha256:7045)\n"
+    "CREATE               morpholog_ci_tradeterms_0_vk1_2785  TradeTerms[0] value_key_v1_digest\n"
+    "KEEP                 morpholog_ci_tradeterms_1_vk1_4298  TradeTerms[1] value_key_v1_digest\n"
+    "SATISFIED EXTERNALLY morpholog_ci_tradevalued_0_vk1_bd45  TradeValued[0] value_key_v1_digest\n"
+    "STALE                morpholog_ci_tradevalued_0_old_dead  TradeValued[0] arg_digest\n"
+)
+
+
+def test_provision_indexes_names_the_subcommand_and_parses_the_plan(tmp_path: Path) -> None:
+    # The one hand-built argv left (the generator emits no method for
+    # `provision indexes`), pinned so a regrouping upstream is caught by a
+    # pure test rather than only in a live one. The plan is text, not
+    # JSON, so its parser lives on our side and is held to the binary's
+    # own action vocabulary, multi-word actions included.
+    binary = fake_binary(tmp_path, INDEX_PLAN + "applied\n")
+    client = GlasshouseClient("model.morph", "postgres:///x", binary=str(binary))
+    plan = client.provision_indexes(prune=True)
+    argv = (tmp_path / "argv.txt").read_text().splitlines()
+    assert argv[:3] == ["provision", "indexes", "model.morph"]
+    assert "--prune" in argv
+    assert "--dry-run" not in argv
+    assert plan.applied
+    assert [(a.action, a.index.split("_")[2]) for a in plan.actions] == [
+        ("CREATE", "tradeterms"),
+        ("KEEP", "tradeterms"),
+        ("SATISFIED EXTERNALLY", "tradevalued"),
+        ("STALE", "tradevalued"),
+    ]
+    assert plan.summary() == "1 keep, 1 create, 1 satisfied externally, 1 stale"
+
+
+def test_a_dry_run_plan_is_not_applied(tmp_path: Path) -> None:
+    binary = fake_binary(tmp_path, INDEX_PLAN + "dry run: nothing changed\n")
+    client = GlasshouseClient("model.morph", "postgres:///x", binary=str(binary))
+    plan = client.provision_indexes(dry_run=True)
+    assert "--dry-run" in (tmp_path / "argv.txt").read_text().splitlines()
+    assert not plan.applied
+
+
+def test_an_unrecognised_plan_line_is_drift_not_silence(tmp_path: Path) -> None:
+    # A new action word upstream must not be counted as nothing: the
+    # plan is refused by name, the way the generated envelopes refuse an
+    # unknown key.
+    binary = fake_binary(tmp_path, "program: x\nREBUILD  morpholog_ci_x  X[0]\napplied\n")
+    client = GlasshouseClient("model.morph", "postgres:///x", binary=str(binary))
+    with pytest.raises(MorphologError, match="not a provision plan line"):
+        client.provision_indexes()
+
+
+def test_an_index_conflict_raises_with_the_plan(tmp_path: Path) -> None:
+    # Exit non-zero is the binary's "an operator must decide"; the plan
+    # it printed is the evidence, so it rides in the message.
+    binary = fake_binary(
+        tmp_path,
+        "program: x\nCONFLICT             morpholog_ci_x_0_vk1_00  X[0] value_key_v1_digest\n",
+        stderr="Error: 1 conflict",
+        exit_code=1,
     )
-    client = GlasshouseClient(
-        "model.morph", "postgres:///x", binary=str(fake_binary(tmp_path, pack))
-    )
-    client.export_evidence_pack(tmp_path / "pack.json")
-    assert (tmp_path / "argv.txt").read_text().splitlines()[:2] == ["audit", "export"]
+    client = GlasshouseClient("model.morph", "postgres:///x", binary=str(binary))
+    with pytest.raises(MorphologError, match="CONFLICT"):
+        client.provision_indexes()
 
 
 def test_without_configured_roles_the_horizon_stays_the_blessed_default(tmp_path: Path) -> None:

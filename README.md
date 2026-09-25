@@ -54,7 +54,7 @@ uv run python -m glasshouse.cli evidence-export pack.json   # a portable pack a 
 uv run python -m glasshouse.cli evidence-verify pack.json   # recompute the Merkle root, no database needed
 ```
 
-Provisioning a fresh database is `morpholog init` (the governed schema), the Alembic migration (the app schema), then `glasshouse apply-views` (the official inspection model). `glasshouse verify`'s `views` leg fails until that last step has run, by design: the inspection model is part of the operational surface it checks.
+Provisioning a fresh database is `morpholog init` (the governed schema), the Alembic migration (the app schema), `morpholog provision indexes` (the managed indexes the ledger's keyed reads and compiled checks seek through; `init` does not build them), then `glasshouse apply-views` (the official inspection model). `glasshouse provision` runs all of those in order and is idempotent, which is how the deployed service does it. `glasshouse verify`'s `views` leg fails until the views step has run, by design: the inspection model is part of the operational surface it checks.
 
 ### Configuration and logs
 

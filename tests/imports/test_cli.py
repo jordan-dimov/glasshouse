@@ -37,6 +37,39 @@ def test_import_trades_prints_the_report_and_exits_zero(
     assert "line 2: tr-1" in out
 
 
+def test_a_batch_that_stops_prints_the_report_then_exits_one(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # An operational failure by contract (exit 1), but the report still
+    # reaches stdout first: it is the only place the rows that may have
+    # committed are named, and the operator reads the ledger for exactly
+    # those before re-running the file.
+    first_receipt = RECEIPTS.splitlines(keepends=True)[0]
+    killed = fake_binary(tmp_path, first_receipt, stderr="Killed", exit_code=137)
+    monkeypatch.setenv("GLASSHOUSE_MORPHOLOG_BIN", str(killed))
+    csv_file = tmp_path / "trades.csv"
+    csv_file.write_text(MIXED)
+
+    code = cli.main(
+        [
+            "import-trades",
+            str(csv_file),
+            "--org",
+            "acme-energy",
+            "--actor",
+            "alice",
+            "--database-url",
+            "postgres:///x",
+        ]
+    )
+
+    assert code == 1
+    captured = capsys.readouterr()
+    assert "5 processed: 1 committed, 3 quarantined, 1 unknown" in captured.out
+    assert "unknown       line 6: in flight when the batch stopped" in captured.out
+    assert "error: batch incomplete" in captured.err
+
+
 def test_a_file_that_breaks_the_contract_exits_one(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:

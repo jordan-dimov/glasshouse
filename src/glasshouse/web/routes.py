@@ -42,10 +42,11 @@ from glasshouse.api.deps import (
     StoreDep,
 )
 from glasshouse.api.schemas import CurveVersion
-from glasshouse.commit import MorphologError
+from glasshouse.commit import MorphologError, MorphologRequestError
 from glasshouse.config import get_settings
 from glasshouse.imports import (
     ImportFormatError,
+    ImportIncompleteError,
     import_curves,
     import_trades,
     preview_curves,
@@ -467,10 +468,40 @@ def imports_commit(
             report = import_curves(client, store, text, org=org, actor=actor)
     except ImportFormatError as refusal:
         return _import_refusal(request, org, 422, "The file was refused whole", str(refusal))
+    except ImportIncompleteError as stopped:
+        # A batch that stopped, with every row accounted for: the rows
+        # that finished, the one that may have committed, the ones that
+        # never ran. Said in those terms, never as "nothing happened".
+        log.warning("web.import_incomplete", org=org, kind=kind, error=str(stopped))
+        report = stopped.report
+        return _import_refusal(
+            request,
+            org,
+            500,
+            "The import stopped part-way",
+            f"The batch stopped: {report.committed} row(s) committed, {report.rejected} "
+            f"rejected, {report.errored} errored, {report.unknown} in flight when it "
+            f"stopped (it may have committed), {report.not_attempted} never attempted. "
+            "Check the Audit screen for what landed, then re-run the same file - rows "
+            "already committed come back as lawful rejections, never duplicates.",
+        )
+    except MorphologRequestError as refused:
+        # The binary's own statement that the batch was refused before
+        # its first row, by published code: nothing ran, nothing landed.
+        log.warning("web.import_refused", org=org, kind=kind, code=refused.code)
+        return _import_refusal(
+            request,
+            org,
+            502,
+            "The import was refused whole",
+            f"The commit layer refused the batch before its first row ({refused.code}); "
+            "nothing was committed. Re-run the same file once the cause is fixed.",
+        )
     except MorphologError as failure:
         # A WRITE failed operationally - never claim the ledger is
-        # unaffected: a batch aborts between rows, so part of the file
-        # may already be committed. Honest instructions, not reassurance.
+        # unaffected: a curve import proposes one claim at a time, so
+        # part of the file may already be committed. Honest instructions,
+        # not reassurance.
         log.warning("web.import_failed", org=org, kind=kind, error=str(failure))
         return _import_refusal(
             request,
@@ -588,13 +619,13 @@ def evidence_pack_download(
     # The binary's exact pack bytes, straight to the operator's machine:
     # a pack is only evidence if it leaves the database's blast radius.
     with tempfile.TemporaryDirectory() as scratch:
-        path = Path(scratch) / "pack.json"
-        client.export_evidence_pack(path)
+        path = Path(scratch) / "pack.ndjson"
+        client.audit_export(str(path))
         payload = path.read_bytes()
     return Response(
         content=payload,
-        media_type="application/json",
-        headers={"Content-Disposition": 'attachment; filename="glasshouse-evidence-pack.json"'},
+        media_type="application/x-ndjson",
+        headers={"Content-Disposition": 'attachment; filename="glasshouse-evidence-pack.ndjson"'},
     )
 
 

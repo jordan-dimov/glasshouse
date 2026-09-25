@@ -11,6 +11,7 @@ import pytest
 
 from glasshouse import cli, provision
 from glasshouse.commit import MorphologError
+from glasshouse.commit.client import IndexAction, IndexPlan
 from glasshouse.commit.morpholog_client.envelopes import LeastPrivilege
 from glasshouse.provision import (
     ProvisionError,
@@ -26,6 +27,23 @@ def test_the_report_renders_stably() -> None:
     plain = ProvisionReport(governed="initialised", least_privilege=None)
     assert plain.render() == (
         "provisioned: app schema at head, governed schema initialised, views applied"
+    )
+    indexed = ProvisionReport(
+        governed="already-initialised",
+        least_privilege=None,
+        governed_migrations=("16", "17"),
+        indexes=IndexPlan(
+            (
+                IndexAction("CREATE", "morpholog_ci_tradeterms_0_vk1_1", "TradeTerms[0]"),
+                IndexAction("CREATE", "morpholog_ci_tradeterms_1_vk1_2", "TradeTerms[1]"),
+                IndexAction("STALE", "morpholog_ci_tradeterms_0_old_3", "TradeTerms[0]"),
+            ),
+            applied=True,
+        ),
+    )
+    assert indexed.render() == (
+        "provisioned: app schema at head, governed schema already-initialised, "
+        "migrated (16, 17), indexes (2 create, 1 stale), views applied"
     )
     floored = ProvisionReport(
         governed="already-initialised",
