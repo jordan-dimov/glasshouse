@@ -213,12 +213,16 @@ class GlasshouseClient(Morpholog):
         actions: list[IndexAction] = []
         applied: bool | None = None
         for line in proc.stdout.splitlines():
-            if not line.strip() or line.startswith("program:"):
+            if not line.strip() or line.startswith(("program:", "no compiled invariants:")):
                 continue
-            if line == "applied":
+            # The verdict line is read by its leading word: the binary
+            # appends what else the run did (`applied; morpholog.claims
+            # analyzed` since upstream #412) and a longer sentence is
+            # still the same verdict, where a new action word is not.
+            if line == "applied" or line.startswith("applied;"):
                 applied = True
                 continue
-            if line.startswith("dry run:"):
+            if line.startswith(("dry run:", "not applied")):
                 applied = False
                 continue
             matched = _PLAN_LINE.match(line)
