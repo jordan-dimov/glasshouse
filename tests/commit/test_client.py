@@ -181,6 +181,30 @@ def test_provision_indexes_names_the_subcommand_and_parses_the_plan(tmp_path: Pa
     assert plan.summary() == "1 keep, 1 create, 1 satisfied externally, 1 stale"
 
 
+def test_the_applied_verdict_is_read_by_its_leading_word(tmp_path: Path) -> None:
+    # Upstream #412 made every applied run ANALYZE the claims table and
+    # extended the verdict line to say so; the canary read that as drift
+    # and every live provisioning failed. The verdict is its leading
+    # word, so a longer sentence with the same word is the same verdict,
+    # and a plan with no compiled invariants is a plan, not drift.
+    binary = fake_binary(tmp_path, INDEX_PLAN + "applied; morpholog.claims analyzed\n")
+    client = GlasshouseClient("model.morph", "postgres:///x", binary=str(binary))
+    plan = client.provision_indexes()
+    assert plan.applied
+    assert plan.count("CREATE") == 1
+    (tmp_path / "empty").mkdir()
+    empty = fake_binary(
+        tmp_path / "empty",
+        "program: x\n"
+        "no compiled invariants: nothing to provision\n"
+        "applied; morpholog.claims analyzed\n",
+    )
+    client = GlasshouseClient("model.morph", "postgres:///x", binary=str(empty))
+    plan = client.provision_indexes()
+    assert plan.applied
+    assert plan.actions == ()
+
+
 def test_a_dry_run_plan_is_not_applied(tmp_path: Path) -> None:
     binary = fake_binary(tmp_path, INDEX_PLAN + "dry run: nothing changed\n")
     client = GlasshouseClient("model.morph", "postgres:///x", binary=str(binary))
