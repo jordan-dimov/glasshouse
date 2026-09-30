@@ -111,13 +111,21 @@ predicate TradeValued(org: Subject, book: Subject, trade: Subject, curve_version
 invariant terms_belong_to_captured_trade:
     TradeTerms(org: org, trade: trade, ..) implies TradeCaptured(org: org, trade: trade, ..)
 
--- A trade for nothing, or for negative power, is not a trade.
+-- A trade for nothing, or for negative power, is not a trade. The trade
+-- is named for the same reason as in delivery_period_is_ordered below:
+-- the case of a single-pattern rule is what its pattern binds, and a
+-- quantity is shared by many trades.
 invariant quantity_is_positive:
-    TradeTerms(quantity: qty, ..) implies qty > 0 MW
+    TradeTerms(trade: trade, quantity: qty, ..) implies qty > 0 MW
 
--- A delivery period is a real interval on the timeline.
+-- A delivery period is a real interval on the timeline. The trade is
+-- named so the rule's case is one trade's own terms: a case-bound check
+-- is keyed on the variables the pattern binds, and a delivery window is
+-- shared by every trade on the same product, so binding only the two
+-- instants put every such trade in one case and the check read them all
+-- under one lock (contract sections 27 and 28, morpholog#396).
 invariant delivery_period_is_ordered:
-    TradeTerms(delivery_start: delivery_start, delivery_end: delivery_end, ..)
+    TradeTerms(trade: trade, delivery_start: delivery_start, delivery_end: delivery_end, ..)
     implies delivery_start strictly_before delivery_end
 
 -- The official pointer can never name a version that was not
