@@ -17,7 +17,6 @@ from glasshouse.commit import (
 )
 from glasshouse.commit.morpholog_client import MORPHOLOG_VERSION
 from glasshouse.commit.morpholog_client.envelopes import (
-    HashReport,
     ViewsIntact,
     ViewsNotSealed,
     ViewsTampered,
@@ -34,16 +33,20 @@ from glasshouse.verify import (
     _views_leg,
     verify,
 )
-from tests.support import fake_binary
+from tests.support import fake_binary, stamps
 
 INTACT_TREE = {"status": "intact", "checkpoints": 0, "tree_size": 0}
 CONSISTENT_REPLAY = {"status": "consistent", "transitions": 8, "claims": 12}
 INTACT_SEAL = ViewsIntact(views_checked=11)
 
 
-def client_with(tmp_path: Path, stdout: str) -> GlasshouseClient:
+def client_with(
+    tmp_path: Path, stdout: str, hash_report: dict[str, object] | None = None
+) -> GlasshouseClient:
     return GlasshouseClient(
-        "model.morph", "postgres:///x", binary=str(fake_binary(tmp_path, stdout))
+        "model.morph",
+        "postgres:///x",
+        binary=str(fake_binary(tmp_path, stdout, hash_report=hash_report)),
     )
 
 
@@ -62,60 +65,37 @@ def test_the_replay_covers_every_projection_table(tmp_path: Path) -> None:
     assert set(replay) == set(projection_metadata.tables)
 
 
-def _hash_report(**overrides: object) -> HashReport:
-    report: dict[str, object] = {
-        "program": "glasshouse",
-        "hash": MODEL_HASH,
-        "morpholog_version": MORPHOLOG_VERSION,
-    }
-    report.update(overrides)
-    return HashReport.from_json(report)
-
-
-def test_the_model_leg_names_both_hashes_on_divergence() -> None:
-    leg = _model_leg(_hash_report(hash="sha256:0000"))
-    assert not leg.ok
-    assert "sha256:0000" in leg.detail
-    assert MODEL_HASH in leg.detail
-
-
-def test_the_model_leg_passes_on_agreement_and_names_the_binary_version() -> None:
-    leg = _model_leg(_hash_report())
+def test_the_model_leg_names_the_binary_version_and_the_hash(tmp_path: Path) -> None:
+    # The client's first-use check has already refused any binary whose
+    # version or rules differ, so the leg's one shape is ok, naming both.
+    leg = _model_leg(client_with(tmp_path, ""))
     assert leg.ok
     assert f"morpholog {MORPHOLOG_VERSION}" in leg.detail
+    assert MODEL_HASH in leg.detail
 
 
 def test_a_refused_client_fails_every_ledger_leg_by_name(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     # The client's first-use check (a binary of another version here)
-    # refuses before any leg can run. verify does not raise: the model leg
-    # carries the refusal, the client-backed legs say they did not run,
-    # the views leg reports what it can see without the seal, and the
-    # whole report is DIVERGENT - never a crash and never "ok".
-    skewed = fake_binary(
-        tmp_path,
-        "",
-        hash_report=json.dumps(
-            {"program": "glasshouse", "hash": MODEL_HASH, "morpholog_version": "0.0.1"}
-        ),
-    )
-    client = GlasshouseClient("model.morph", "postgres:///x", binary=str(skewed))
-    # The views leg's local half is a database read; here it finds no
-    # inspection model, which is a FAIL of its own and not the point.
+    # refuses before any leg can run. verify does not raise: every leg is
+    # total, so each client-backed leg carries the refusal (the client
+    # remembers it), the projection leg names the dead database it met
+    # first, the views leg reports what it can see without the seal, and
+    # the whole report is DIVERGENT - never a crash and never "ok".
+    client = client_with(tmp_path, "", hash_report=stamps(morpholog_version="0.0.1"))
     monkeypatch.setattr(verify_module, "views_model_hash", lambda _engine: None)
-    engine = sa.create_engine("postgresql+psycopg://127.0.0.1:1/nowhere")
+    engine = _dead_engine()
     try:
         report = verify(client, engine, CurveStore(engine))
     finally:
         engine.dispose()
     assert not report.ok
     by_name = {leg.name: leg for leg in report.legs}
-    assert "Morpholog 0.0.1" in by_name["model"].detail
-    for name in ("ledger", "tree", "projections", "payloads"):
-        assert not by_name[name].ok
-        assert by_name[name].detail.startswith("not run: the commit layer refused")
-    assert not by_name["views"].ok
+    assert all(not leg.ok for leg in report.legs)
+    for name in ("model", "ledger", "tree", "payloads"):
+        assert by_name[name].detail.startswith("could not run: the binary is Morpholog 0.0.1")
+    assert by_name["projections"].detail.startswith("could not run: ")
 
 
 def test_the_ledger_leg_reads_the_replay_verdict(tmp_path: Path) -> None:

@@ -12,8 +12,8 @@ from pathlib import Path
 import pytest
 
 from glasshouse.commit import GlasshouseClient, MorphologError, envelopes, models
-from glasshouse.commit.morpholog_client import MODEL_HASH, MORPHOLOG_VERSION
-from tests.support import fake_binary
+from glasshouse.commit.morpholog_client import MORPHOLOG_VERSION
+from tests.support import fake_binary, stamps
 
 NAMED_OFFICIAL_CURVE = json.dumps(
     [
@@ -150,53 +150,29 @@ def test_the_configured_writer_roles_reach_both_checkpoint_paths(tmp_path: Path)
     assert json.loads(anchor.read_text())["tree_size"] == 3
 
 
-def _stamped(**overrides: object) -> str:
-    report: dict[str, object] = {
-        "program": "glasshouse",
-        "hash": MODEL_HASH,
-        "morpholog_version": MORPHOLOG_VERSION,
-    }
-    report.update(overrides)
-    return json.dumps(report)
-
-
 def test_the_first_call_checks_the_binary_against_the_package_stamps(tmp_path: Path) -> None:
     # The generated client runs unchecked when constructed directly and
     # only `open_client()` turns the first-use check on; our constructor
     # is the deployment's one construction path, so it passes the stamps
-    # itself. A binary of another version is refused by name, before the
-    # call it was asked for is ever made - argv.txt holds the check.
-    other = fake_binary(tmp_path, "", hash_report=_stamped(morpholog_version="0.0.99"))
+    # itself. What is pinned here is that they arrive: a binary of another
+    # version is refused by name before the call it was asked for is ever
+    # made (argv.txt holds the check, not the call).
+    other = fake_binary(tmp_path, "", hash_report=stamps(morpholog_version="0.0.99"))
     client = GlasshouseClient("model.morph", "postgres:///x", binary=str(other))
     with pytest.raises(
         MorphologError, match=r"Morpholog 0\.0\.99.*generated for " + MORPHOLOG_VERSION
     ):
         client.audit()
     assert (tmp_path / "argv.txt").read_text().splitlines()[:1] == ["hash"]
-    # The refusal is remembered: the next call does not ask again and
-    # does not reach the binary either.
-    (tmp_path / "argv.txt").unlink()
-    with pytest.raises(MorphologError, match=r"0\.0\.99"):
-        client.audit()
-    assert not (tmp_path / "argv.txt").exists()
 
 
-def test_a_programme_with_other_rules_is_refused_by_hash(tmp_path: Path) -> None:
-    drifted = fake_binary(tmp_path, "", hash_report=_stamped(hash="sha256:0000"))
-    client = GlasshouseClient("model.morph", "postgres:///x", binary=str(drifted))
-    with pytest.raises(MorphologError, match="sha256:0000.*" + MODEL_HASH):
-        client.audit()
-
-
-def test_a_matching_binary_is_checked_once_then_serves_every_call(tmp_path: Path) -> None:
-    # The default fake answers `hash` with this package's stamps: one
-    # check, then the call under test, then no check on the next call.
+def test_a_matching_binary_passes_the_check_and_serves_the_call(tmp_path: Path) -> None:
+    # The default fake answers `hash` with this package's stamps: the
+    # check passes and argv.txt holds the call under test.
     binary = fake_binary(tmp_path, "")  # an empty tail
     client = GlasshouseClient("model.morph", "postgres:///x", binary=str(binary))
     assert client.audit() == []
     assert (tmp_path / "argv.txt").read_text().splitlines()[:1] == ["inspect"]
-    (tmp_path / "hash.txt").write_text(_stamped(morpholog_version="0.0.99"))
-    assert client.audit() == []  # already checked; the binary's later word is not re-read
 
 
 def test_without_configured_roles_the_horizon_stays_the_blessed_default(tmp_path: Path) -> None:

@@ -70,13 +70,25 @@ def provision(database_url: str = DB) -> sa.Engine:
     return engine
 
 
+def stamps(**overrides: object) -> dict[str, object]:
+    """The `hash` report the pinned binary gives for the committed
+    programme: what a GlasshouseClient's first-use check reads. One
+    spelling, so a field upstream adds to the report is one edit here."""
+    return {
+        "program": PROGRAM,
+        "hash": MODEL_HASH,
+        "morpholog_version": MORPHOLOG_VERSION,
+        **overrides,
+    }
+
+
 def fake_binary(
     tmp_path: Path,
     stdout: str,
     *,
     stderr: str = "",
     exit_code: int = 0,
-    hash_report: str | None = None,
+    hash_report: dict[str, object] | None = None,
 ) -> Path:
     """A stand-in morpholog for pure tests: records its argv
     (argv.txt) and any piped stdin (stdin.txt), plays back a canned
@@ -84,22 +96,15 @@ def fake_binary(
     input do not block on a terminal.
 
     `hash` is answered separately, because every GlasshouseClient asks
-    it once before its first call (the generated first-use check, on by
-    default in our constructor): by default with this package's own
-    stamps, so the check passes and the canned reply serves the call
-    under test; `hash_report` substitutes another report to exercise
-    the check itself. argv.txt holds the LAST invocation, which is the
-    call under test, never the check."""
+    it once before its first call (the generated first-use check, on in
+    our constructor): with `stamps()` by default, so the check passes
+    and the canned reply serves the call under test; `hash_report`
+    substitutes another report to exercise the check itself. argv.txt
+    holds the LAST invocation, which is the call under test."""
     script = tmp_path / "fake-morpholog"
     (tmp_path / "stdout.txt").write_text(stdout)
     (tmp_path / "stderr.txt").write_text(stderr)
-    (tmp_path / "hash.txt").write_text(
-        hash_report
-        if hash_report is not None
-        else json.dumps(
-            {"program": PROGRAM, "hash": MODEL_HASH, "morpholog_version": MORPHOLOG_VERSION}
-        )
-    )
+    (tmp_path / "hash.txt").write_text(json.dumps(stamps() if hash_report is None else hash_report))
     script.write_text(
         "#!/bin/sh\n"
         f'printf \'%s\\n\' "$@" > "{tmp_path}/argv.txt"\n'

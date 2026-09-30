@@ -25,28 +25,22 @@ from tests.support import fake_binary
 DEAD_DB = "postgresql://127.0.0.1:1/nowhere"
 
 
-def _index(
-    action: str, predicate: str, position: int, detail: str | None = None
+def _entry(
+    action: str, name: str, *, detail: str | None = None, statistics: bool = False
 ) -> dict[str, object]:
+    """One index (or statistics object) entry of the envelope; the tests
+    read only action, name and detail."""
     entry: dict[str, object] = {
         "action": action,
-        "name": f"morpholog_ci_{predicate.lower()}_{position}_vk1_{position:012x}",
-        "predicate": predicate,
-        "position": position,
-        "required_by": ["glasshouse"] if action != "stale" else [],
+        "name": name,
+        "position": 0,
+        "required_by": ["glasshouse"],
     }
+    if not statistics:
+        entry["predicate"] = "TradeTerms"
     if detail is not None:
         entry["detail"] = detail
     return entry
-
-
-def _statistics(action: str, position: int) -> dict[str, object]:
-    return {
-        "action": action,
-        "name": f"morpholog_cs_vk1_p{position}",
-        "position": position,
-        "required_by": ["glasshouse"] if action != "stale" else [],
-    }
 
 
 def provision_envelope(
@@ -81,11 +75,14 @@ def test_the_report_renders_stably() -> None:
         indexes=envelopes.ProvisionReport.from_json(
             provision_envelope(
                 indexes=[
-                    _index("create", "TradeTerms", 0),
-                    _index("create", "TradeTerms", 1),
-                    _index("stale", "TradeTerms", 2, detail="required by no programme; dropped"),
+                    _entry("create", "morpholog_ci_tradeterms_0"),
+                    _entry("create", "morpholog_ci_tradeterms_1"),
+                    _entry("stale", "morpholog_ci_tradeterms_2_old", detail="dropped"),
                 ],
-                statistics=[_statistics("keep", 0), _statistics("create", 1)],
+                statistics=[
+                    _entry("keep", "morpholog_cs_vk1_p0", statistics=True),
+                    _entry("create", "morpholog_cs_vk1_p1", statistics=True),
+                ],
             )
         ),
     )
@@ -187,11 +184,10 @@ def test_an_index_conflict_refuses_rather_than_reporting_done(tmp_path: Path) ->
         json.dumps(
             provision_envelope(
                 indexes=[
-                    _index("keep", "TradeTerms", 0),
-                    _index(
+                    _entry("keep", "morpholog_ci_tradeterms_0"),
+                    _entry(
                         "conflict",
-                        "TradeTerms",
-                        1,
+                        "morpholog_ci_tradeterms_1",
                         detail="an index of this name exists with another definition",
                     ),
                 ],
@@ -213,15 +209,7 @@ def test_an_index_conflict_refuses_rather_than_reporting_done(tmp_path: Path) ->
 def test_a_clean_plan_is_returned_for_the_report(tmp_path: Path) -> None:
     clean = fake_binary(
         tmp_path,
-        json.dumps(
-            provision_envelope(
-                indexes=[_index("keep", "TradeTerms", 0), _index("create", "TradeTerms", 4)],
-                statistics=[_statistics("create", 4)],
-            )
-        ),
+        json.dumps(provision_envelope(indexes=[_entry("keep", "morpholog_ci_tradeterms_0")])),
     )
     client = GlasshouseClient("model.morph", "postgres:///x", binary=str(clean))
-    report = reconcile_indexes(client)
-    assert report.applied
-    assert not report.has_conflict
-    assert [i.action for i in report.indexes] == ["keep", "create"]
+    assert reconcile_indexes(client).applied

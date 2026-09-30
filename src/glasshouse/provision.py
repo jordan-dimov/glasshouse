@@ -38,8 +38,10 @@ This module never prints; the CLI renders the report and turns
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections import Counter
+from collections.abc import Iterable
 from dataclasses import dataclass
+from itertools import chain
 from pathlib import Path
 
 import sqlalchemy as sa
@@ -70,47 +72,46 @@ class ProvisionError(Exception):
 _ACTION_ORDER = ("keep", "create", "repair_invalid", "satisfied_externally", "stale", "conflict")
 
 
-def _counts(entries: Sequence[ProvisionedIndex | ProvisionedStatistics]) -> str:
-    present = [
-        f"{n} {action.replace('_', ' ')}"
-        for action in _ACTION_ORDER
-        if (n := sum(1 for e in entries if e.action == action))
-    ]
-    return ", ".join(present)
+def _counts(entries: Iterable[ProvisionedIndex | ProvisionedStatistics]) -> str:
+    counts = Counter(entry.action for entry in entries)
+    return ", ".join(
+        f"{counts[action]} {action.replace('_', ' ')}" for action in _ACTION_ORDER if counts[action]
+    )
 
 
-def index_summary(report: envelopes.ProvisionReport) -> str:
-    """The actions that occurred, as counts: indexes first, then the
-    statistics objects the planner seeks through (since v0.0.13 the
-    plan keeps one per argument position its indexes seek on)."""
+def _index_summary(report: envelopes.ProvisionReport) -> str:
+    """Indexes first, then the statistics objects the planner seeks
+    through (one per argument position, since v0.0.13), as counts."""
     indexes = _counts(report.indexes) or "nothing to provision"
     statistics = _counts(report.statistics)
     return indexes if not statistics else f"{indexes}; statistics {statistics}"
 
 
 def reconcile_indexes(client: GlasshouseClient) -> envelopes.ProvisionReport:
-    """`provision indexes --prune` through the generated method, with the
-    one decision the generated client leaves to the caller made here: a
-    conflict (something under Morpholog's own index or statistics name
-    with another definition) applies nothing and needs an operator, so
-    it refuses rather than returning a report that reads as done. Prune
-    is right because Glasshouse is the only programme on its database;
-    `required_elsewhere` and `positions_unknown_for` are therefore
-    always empty here and are not rendered."""
+    """`provision indexes --prune` through the generated method, plus the
+    one decision it leaves to the caller: the report comes back whatever
+    the exit code, and a conflict (an object under Morpholog's own name
+    with another definition) applies nothing and needs an operator, so it
+    refuses here rather than rendering as a completed deploy. Prune is
+    right because Glasshouse is the only programme on its database."""
     report = client.provision_indexes(prune=True)
-    if report.has_conflict:
-        entries: list[ProvisionedIndex | ProvisionedStatistics] = [
-            *report.indexes,
-            *report.statistics,
-        ]
+    if report.has_conflict or not report.applied:
+        entries: Iterable[ProvisionedIndex | ProvisionedStatistics] = chain(
+            report.indexes, report.statistics
+        )
         conflicts = [
             f"{entry.name}: {entry.detail or 'another definition under this name'}"
             for entry in entries
             if entry.action == "conflict"
         ]
         raise ProvisionError(
-            "provision indexes applied nothing: an object under Morpholog's own name has "
-            "another definition and an operator must decide - " + "; ".join(conflicts)
+            "provision indexes applied nothing"
+            + (
+                ": an object under Morpholog's own name has another definition and an "
+                "operator must decide - " + "; ".join(conflicts)
+                if conflicts
+                else " and reported no conflict; read the binary's own report"
+            )
         )
     return report
 
@@ -148,7 +149,7 @@ class ProvisionReport:
             else f"governed schema {self.governed}, "
             f"migrated ({', '.join(self.governed_migrations)})"
         )
-        indexes = "" if self.indexes is None else f", indexes ({index_summary(self.indexes)})"
+        indexes = "" if self.indexes is None else f", indexes ({_index_summary(self.indexes)})"
         lines = [f"provisioned: app schema at head, {applied}{indexes}, views applied"]
         if self.least_privilege is not None:
             floor = self.least_privilege
