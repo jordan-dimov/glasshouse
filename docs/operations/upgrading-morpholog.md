@@ -11,6 +11,8 @@ How a new morpholog release reaches each database Glasshouse uses. The code half
 | new | old (unmigrated) | `propose` refuses by name ("the database schema is behind this binary ... run `morpholog migrate`"). `audit verify` and the audit tail fail with a raw SQL error (`column "arguments_hash" does not exist`). |
 | old | new (migrated) | `propose` fails with a raw SQL error (`no unique or exclusion constraint matching the ON CONFLICT specification`). The old generated client also refuses new audit rows (`unknown key(s) ['parameters']`), so the projector stops. `migrate` refuses by name ("this database records migrations this binary does not know ... upgrade the binary"), so an old `glasshouse provision` fails too. |
 
+**From v0.0.13 the new-binary side is sharp on every command**: a v0.0.13 or later binary refuses a schema behind it by name, before its first query, on `inspect`, `audit verify`, `propose` and everything else that opens the database (`init` and `migrate` apart, since they are what make it current); a proposal reports the refusal as the `not_committed` object. A schema *ahead* is refused the same way by any binary that carries the check, so once every deployed binary is at least v0.0.13 both rows of the table above collapse to "refused by name". A v0.0.12 or older binary cannot be retrofitted and keeps failing one query at a time against a newer schema, as the table says.
+
 Both directions stop **governed operations**: writes and every ledger read (the audit tail, `verify`, the curves and audit screens). They do not stop the whole service. Projection-backed screens (overview, blotter, positions) keep serving from the tables as they last stood, which is stale data rather than an error, so `/readyz` is the signal to trust, not whether pages load. No process may run an older binary against a database a newer one has migrated, and a window in which one does is an outage to declare, not a detail to hide.
 
 ## The databases
@@ -23,6 +25,22 @@ Both directions stop **governed operations**: writes and every ledger read (the 
 | Render `glasshouse-db` (demo) | the maintainer | persistent, rebuilt nightly by `seed --reset` | The procedure below. **Ask before touching it.** |
 
 The Render database is written by two services from the **same image**: `glasshouse-web`, whose `preDeployCommand` runs `glasshouse provision` (`init` if absent, then `migrate`, then the sealed views), and the `glasshouse-seed-reset` cron at 02:30 UTC. The cron drops the governed schema and re-`init`s it with **its own** binary. So if only one of the two is redeployed, the next reset or the next deploy puts the database and one of its writers on opposite sides of the table above.
+
+## The sequence upstream states (from v0.0.13)
+
+Upstream's `docs/install.md` now carries the whole sequence, and it is the shape every procedure below follows:
+
+```sh
+# 1. stop every process on the database: sessions, workers, the service
+pg_dump -Fc "$DATABASE_URL" > before-upgrade.dump                  # 2. back up
+morpholog migrate --check --database-url "$DATABASE_URL"           # 3. ask: exit 1 if behind or ahead
+morpholog migrate --database-url "$DATABASE_URL"                   # 4. bring the schema forward
+morpholog audit verify --database-url "$DATABASE_URL"              # 5. the record still agrees with itself
+morpholog provision indexes glasshouse.morph --database-url "$DATABASE_URL" --json   # 6. indexes and statistics
+# 7. start every process on the new binary
+```
+
+Stopping first is not ceremony: a process that checked the database once at start keeps writing until it is restarted, and a backup taken while processes write does not hold what they wrote after it. `glasshouse provision` runs steps 4 and 6 (and the views) in order; the demo procedure below accepts one departure from step 1, stated where it happens.
 
 ## Procedure (demo database)
 
@@ -66,6 +84,7 @@ It came back with all 30 audit rows, and the v0.0.11 binary refused to `propose`
 
 ## Release-specific notes
 
+- **v0.0.13 (migrations 018-019)**: 018 adds the coordinate the compiled checks order dates by (`morpholog.date_ordinal`), 019 records on each index requirement the argument position it seeks on. Neither rewrites `claims` (44 ms on a 5,535-transition rehearsal ledger; `audit verify` consistent afterwards). **`provision indexes` after `migrate` is load-bearing this release**: it builds the indexes for the case-bound positions the compiled checks seek on (fifteen new ones for this model) and, new, one statistics object per seek position, without which the planner walks a large predicate instead of seeking it; it also analyses the claims table on every applying run. `glasshouse provision` and `seed --reset` both run it through the generated method now (contract section 27). **Skew is sharp on the new side from this release**: a v0.0.13 binary refuses an unmigrated schema by name on every command before its first query. The old side is unchanged: a v0.0.12 binary still reads and writes against the migrated schema (`migrate --check` alone says the database is ahead), so restart every process on the new binary after migrating; on Render that is the web deploy and the cron deploy, both, and the pre-deploy `provision` of the new web meets the refusal only if something else has already moved the schema ahead of *it*.
 - **v0.0.12 (migrations 016-017)**: 016 adds a function that orders stored instants, 017 the equality key every stored value compares by. Neither rewrites `claims` (0.08 s on the rehearsal ledger). **The managed indexes are a step of their own**: `morpholog provision indexes <programme>.morph --database-url <url> --prune` after `migrate`, because 017 rekeys every managed index and `init` never builds any. `glasshouse provision` and `seed --reset` both run it now (contract section 25), so on the demo the web pre-deploy and the nightly reset cover it; a database provisioned any other way needs the command by hand, or every keyed read scans its predicate under the lock the old whole-predicate read held. **The skew for this release is silent, not sharp**: a v0.0.11 binary commits against the migrated schema and its rows stay visible to v0.0.12's keyed loads; a v0.0.12 binary on an unmigrated schema commits some proposals and fails others (`function morpholog.value_key_v1(jsonb) does not exist`, reported as `not_committed`). Nothing refuses (upstream #393), so the table above does not describe this release; the rule still does.
 - **v0.0.11 (migrations 012-015)**: 012 rekeys `claims` on an argument digest. It rewrites the table, so on a large ledger plan a window. On the demo's ~30-transition ledger it took 0.08 s in rehearsal. 013 adds checkpoint witnesses, 014 audit parameter names (rows written before it carry none, which is expected and decoded as `None`), and 015 the managed-index registry. `provision indexes` has nothing to do for this model, because its invariants are interpreted (contract section 24), so it is not part of the procedure until a model compiles.
 

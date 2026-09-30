@@ -15,14 +15,25 @@ from glasshouse.commit import (
     missing_catalogued_views,
     views_model_hash,
 )
+from glasshouse.commit.morpholog_client import MORPHOLOG_VERSION
 from glasshouse.commit.morpholog_client.envelopes import (
+    HashReport,
     ViewsIntact,
     ViewsNotSealed,
     ViewsTampered,
 )
+from glasshouse.compute.store import CurveStore
 from glasshouse.projections import accumulate
 from glasshouse.projections.tables import metadata as projection_metadata
-from glasshouse.verify import Leg, VerifyReport, _ledger_leg, _model_leg, _tree_leg, _views_leg
+from glasshouse.verify import (
+    Leg,
+    VerifyReport,
+    _ledger_leg,
+    _model_leg,
+    _tree_leg,
+    _views_leg,
+    verify,
+)
 from tests.support import fake_binary
 
 INTACT_TREE = {"status": "intact", "checkpoints": 0, "tree_size": 0}
@@ -51,17 +62,60 @@ def test_the_replay_covers_every_projection_table(tmp_path: Path) -> None:
     assert set(replay) == set(projection_metadata.tables)
 
 
-def test_the_model_leg_names_both_hashes_on_divergence(tmp_path: Path) -> None:
-    drifted = json.dumps({"program": "glasshouse", "hash": "sha256:0000"})
-    leg = _model_leg(client_with(tmp_path, drifted))
+def _hash_report(**overrides: object) -> HashReport:
+    report: dict[str, object] = {
+        "program": "glasshouse",
+        "hash": MODEL_HASH,
+        "morpholog_version": MORPHOLOG_VERSION,
+    }
+    report.update(overrides)
+    return HashReport.from_json(report)
+
+
+def test_the_model_leg_names_both_hashes_on_divergence() -> None:
+    leg = _model_leg(_hash_report(hash="sha256:0000"))
     assert not leg.ok
     assert "sha256:0000" in leg.detail
     assert MODEL_HASH in leg.detail
 
 
-def test_the_model_leg_passes_on_agreement(tmp_path: Path) -> None:
-    agreed = json.dumps({"program": "glasshouse", "hash": MODEL_HASH})
-    assert _model_leg(client_with(tmp_path, agreed)).ok
+def test_the_model_leg_passes_on_agreement_and_names_the_binary_version() -> None:
+    leg = _model_leg(_hash_report())
+    assert leg.ok
+    assert f"morpholog {MORPHOLOG_VERSION}" in leg.detail
+
+
+def test_a_refused_client_fails_every_ledger_leg_by_name(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The client's first-use check (a binary of another version here)
+    # refuses before any leg can run. verify does not raise: the model leg
+    # carries the refusal, the client-backed legs say they did not run,
+    # the views leg reports what it can see without the seal, and the
+    # whole report is DIVERGENT - never a crash and never "ok".
+    skewed = fake_binary(
+        tmp_path,
+        "",
+        hash_report=json.dumps(
+            {"program": "glasshouse", "hash": MODEL_HASH, "morpholog_version": "0.0.1"}
+        ),
+    )
+    client = GlasshouseClient("model.morph", "postgres:///x", binary=str(skewed))
+    # The views leg's local half is a database read; here it finds no
+    # inspection model, which is a FAIL of its own and not the point.
+    monkeypatch.setattr(verify_module, "views_model_hash", lambda _engine: None)
+    engine = sa.create_engine("postgresql+psycopg://127.0.0.1:1/nowhere")
+    try:
+        report = verify(client, engine, CurveStore(engine))
+    finally:
+        engine.dispose()
+    assert not report.ok
+    by_name = {leg.name: leg for leg in report.legs}
+    assert "Morpholog 0.0.1" in by_name["model"].detail
+    for name in ("ledger", "tree", "projections", "payloads"):
+        assert not by_name[name].ok
+        assert by_name[name].detail.startswith("not run: the commit layer refused")
+    assert not by_name["views"].ok
 
 
 def test_the_ledger_leg_reads_the_replay_verdict(tmp_path: Path) -> None:

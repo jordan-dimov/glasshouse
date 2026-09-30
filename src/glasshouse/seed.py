@@ -40,7 +40,7 @@ from glasshouse.compute.terms import terms_version_id
 from glasshouse.config import Environment, get_settings
 from glasshouse.projections import rebuild
 from glasshouse.projections.tables import metadata as projection_metadata
-from glasshouse.provision import ALEMBIC_INI, ProvisionError, alembic_config
+from glasshouse.provision import ALEMBIC_INI, ProvisionError, alembic_config, reconcile_indexes
 from glasshouse.verify import verify
 
 # One session-level advisory lock for the whole seed/reset operation.
@@ -177,7 +177,7 @@ def seed_demo(client: GlasshouseClient, store: CurveStore, engine: sa.Engine) ->
     # binary, which lays down no managed indexes: the demo would run its
     # keyed loads as predicate scans until the next web deploy provisioned
     # them. Reconcile here so the seeded database is the provisioned one.
-    client.provision_indexes(prune=True)
+    reconcile_indexes(client)
     apply_views(engine)
 
     grants: tuple[object, ...] = (

@@ -49,6 +49,7 @@ from glasshouse.commit import (
     views_model_hash,
 )
 from glasshouse.commit.morpholog_client.envelopes import (
+    HashReport,
     ReplayConsistent,
     RoleRebindingsEvaluated,
     TreeIntact,
@@ -92,11 +93,19 @@ class VerifyReport:
         return "\n".join(lines)
 
 
-def _model_leg(client: GlasshouseClient) -> Leg:
-    deployed = client.hash().hash
-    if deployed == MODEL_HASH:
-        return Leg("model", True, f"binary and committed client both name {deployed}")
-    return Leg("model", False, f"binary names {deployed}, committed client {MODEL_HASH}")
+def _model_leg(report: HashReport) -> Leg:
+    # The client has already checked the binary against the package's
+    # stamps before this report came back (version and rules hash both,
+    # since v0.0.13; see `verify`). What the leg proves is that the report
+    # the binary gives for the committed programme is the committed one.
+    if report.hash == MODEL_HASH:
+        return Leg(
+            "model",
+            True,
+            f"binary (morpholog {report.morpholog_version}) and committed client both name "
+            f"{report.hash}",
+        )
+    return Leg("model", False, f"binary names {report.hash}, committed client {MODEL_HASH}")
 
 
 def _ledger_leg(report: LedgerVerifyReport) -> Leg:
@@ -280,6 +289,27 @@ def verify(client: GlasshouseClient, engine: sa.Engine, store: CurveStore) -> Ve
     call fails all three - the views leg's local checks still report
     their evidence, but "ok" needs the seal - while the model, projection
     and payload legs still run, giving as much evidence as they can."""
+    # The first call through the client runs its compatibility check: a
+    # binary of another version, or a programme file with other rules, is
+    # refused by name before anything else runs (and a binary that cannot
+    # run at all fails here too). Every client-backed leg would meet the
+    # same failure, so they say so rather than raise, and the views leg
+    # reports the local evidence it can gather without the seal verdict
+    # (never "ok").
+    try:
+        model = _model_leg(client.hash())
+    except MorphologError as refused:
+        not_run = f"not run: the commit layer refused or could not run - {refused}"
+        return VerifyReport(
+            (
+                Leg("model", False, f"the commit layer refused or could not run: {refused}"),
+                Leg("ledger", False, not_run),
+                Leg("tree", False, not_run),
+                Leg("projections", False, not_run),
+                Leg("payloads", False, not_run),
+                _views_leg(engine, None),
+            )
+        )
     try:
         report = client.audit_verify(views_schema=VIEWS_SCHEMA)
         ledger, tree = _ledger_leg(report), _tree_leg(report)
@@ -291,7 +321,7 @@ def verify(client: GlasshouseClient, engine: sa.Engine, store: CurveStore) -> Ve
         seal = None
     return VerifyReport(
         (
-            _model_leg(client),
+            model,
             ledger,
             tree,
             _projection_leg(client, engine),

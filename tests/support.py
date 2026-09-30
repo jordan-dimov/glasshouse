@@ -23,6 +23,7 @@ so each integration module starts from zero whatever ran before it (the
 modules share one scratch database).
 """
 
+import json
 import os
 import subprocess
 from pathlib import Path
@@ -32,6 +33,7 @@ import sqlalchemy as sa
 from alembic.config import Config
 
 from alembic import command
+from glasshouse.commit.morpholog_client import MODEL_HASH, MORPHOLOG_VERSION, PROGRAM
 from glasshouse.compute.store import engine_url
 from glasshouse.compute.store import metadata as payload_metadata
 from glasshouse.projections.tables import metadata as projection_metadata
@@ -68,18 +70,41 @@ def provision(database_url: str = DB) -> sa.Engine:
     return engine
 
 
-def fake_binary(tmp_path: Path, stdout: str, *, stderr: str = "", exit_code: int = 0) -> Path:
+def fake_binary(
+    tmp_path: Path,
+    stdout: str,
+    *,
+    stderr: str = "",
+    exit_code: int = 0,
+    hash_report: str | None = None,
+) -> Path:
     """A stand-in morpholog for pure tests: records its argv
     (argv.txt) and any piped stdin (stdin.txt), plays back a canned
     reply. The stdin capture is guarded so invocations without piped
-    input do not block on a terminal."""
+    input do not block on a terminal.
+
+    `hash` is answered separately, because every GlasshouseClient asks
+    it once before its first call (the generated first-use check, on by
+    default in our constructor): by default with this package's own
+    stamps, so the check passes and the canned reply serves the call
+    under test; `hash_report` substitutes another report to exercise
+    the check itself. argv.txt holds the LAST invocation, which is the
+    call under test, never the check."""
     script = tmp_path / "fake-morpholog"
     (tmp_path / "stdout.txt").write_text(stdout)
     (tmp_path / "stderr.txt").write_text(stderr)
+    (tmp_path / "hash.txt").write_text(
+        hash_report
+        if hash_report is not None
+        else json.dumps(
+            {"program": PROGRAM, "hash": MODEL_HASH, "morpholog_version": MORPHOLOG_VERSION}
+        )
+    )
     script.write_text(
         "#!/bin/sh\n"
         f'printf \'%s\\n\' "$@" > "{tmp_path}/argv.txt"\n'
         f'[ -t 0 ] || cat - > "{tmp_path}/stdin.txt"\n'
+        f'if [ "$1" = hash ]; then cat "{tmp_path}/hash.txt"; exit 0; fi\n'
         f'cat "{tmp_path}/stdout.txt"\n'
         f'cat "{tmp_path}/stderr.txt" >&2\n'
         f"exit {exit_code}\n"

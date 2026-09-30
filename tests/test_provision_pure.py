@@ -4,23 +4,69 @@ preflight refuses before any database work, and the CLI threads its
 flag and this deployment's writer-role assertion through.
 """
 
+import json
 from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 
 from glasshouse import cli, provision
-from glasshouse.commit import MorphologError
-from glasshouse.commit.client import IndexAction, IndexPlan
+from glasshouse.commit import GlasshouseClient, MorphologError
+from glasshouse.commit.morpholog_client import envelopes
 from glasshouse.commit.morpholog_client.envelopes import LeastPrivilege
 from glasshouse.provision import (
     ProvisionError,
     ProvisionReport,
     alembic_config,
+    reconcile_indexes,
 )
 from tests.support import fake_binary
 
 DEAD_DB = "postgresql://127.0.0.1:1/nowhere"
+
+
+def _index(
+    action: str, predicate: str, position: int, detail: str | None = None
+) -> dict[str, object]:
+    entry: dict[str, object] = {
+        "action": action,
+        "name": f"morpholog_ci_{predicate.lower()}_{position}_vk1_{position:012x}",
+        "predicate": predicate,
+        "position": position,
+        "required_by": ["glasshouse"] if action != "stale" else [],
+    }
+    if detail is not None:
+        entry["detail"] = detail
+    return entry
+
+
+def _statistics(action: str, position: int) -> dict[str, object]:
+    return {
+        "action": action,
+        "name": f"morpholog_cs_vk1_p{position}",
+        "position": position,
+        "required_by": ["glasshouse"] if action != "stale" else [],
+    }
+
+
+def provision_envelope(
+    *,
+    indexes: list[dict[str, object]],
+    statistics: list[dict[str, object]] | None = None,
+    applied: bool = True,
+) -> dict[str, object]:
+    """The `provision_report` envelope as the binary prints it (upstream
+    embedder-integration, "The deploy sequence")."""
+    return {
+        "applied": applied,
+        "dry_run": False,
+        "prune": True,
+        "programs": [{"program": "glasshouse", "hash": "sha256:299c"}],
+        "indexes": indexes,
+        "statistics": statistics or [],
+        "required_elsewhere": [],
+        "positions_unknown_for": [],
+    }
 
 
 def test_the_report_renders_stably() -> None:
@@ -32,18 +78,21 @@ def test_the_report_renders_stably() -> None:
         governed="already-initialised",
         least_privilege=None,
         governed_migrations=("16", "17"),
-        indexes=IndexPlan(
-            (
-                IndexAction("CREATE", "morpholog_ci_tradeterms_0_vk1_1", "TradeTerms[0]"),
-                IndexAction("CREATE", "morpholog_ci_tradeterms_1_vk1_2", "TradeTerms[1]"),
-                IndexAction("STALE", "morpholog_ci_tradeterms_0_old_3", "TradeTerms[0]"),
-            ),
-            applied=True,
+        indexes=envelopes.ProvisionReport.from_json(
+            provision_envelope(
+                indexes=[
+                    _index("create", "TradeTerms", 0),
+                    _index("create", "TradeTerms", 1),
+                    _index("stale", "TradeTerms", 2, detail="required by no programme; dropped"),
+                ],
+                statistics=[_statistics("keep", 0), _statistics("create", 1)],
+            )
         ),
     )
     assert indexed.render() == (
         "provisioned: app schema at head, governed schema already-initialised, "
-        "migrated (16, 17), indexes (2 create, 1 stale), views applied"
+        "migrated (16, 17), indexes (2 create, 1 stale; statistics 1 keep, 1 create), "
+        "views applied"
     )
     floored = ProvisionReport(
         governed="already-initialised",
@@ -125,3 +174,54 @@ def test_a_ledger_that_cannot_be_tailed_fails_the_deploy(
     monkeypatch.setattr(cli, "run_provision", provision.run_provision)
     assert cli.main(["provision", "--database-url", DEAD_DB]) == 1
     assert "hidden from this role" in capsys.readouterr().err
+
+
+def test_an_index_conflict_refuses_rather_than_reporting_done(tmp_path: Path) -> None:
+    # The generated client hands the report back whatever the exit code
+    # and leaves the decision to the caller (upstream: "gate on
+    # has_conflict"). A conflict applied nothing and needs an operator,
+    # so provisioning refuses by name instead of rendering a report that
+    # reads as a completed deploy.
+    conflicted = fake_binary(
+        tmp_path,
+        json.dumps(
+            provision_envelope(
+                indexes=[
+                    _index("keep", "TradeTerms", 0),
+                    _index(
+                        "conflict",
+                        "TradeTerms",
+                        1,
+                        detail="an index of this name exists with another definition",
+                    ),
+                ],
+                applied=False,
+            )
+        ),
+        exit_code=1,
+    )
+    client = GlasshouseClient("model.morph", "postgres:///x", binary=str(conflicted))
+    with pytest.raises(ProvisionError, match="another definition") as refused:
+        reconcile_indexes(client)
+    assert "morpholog_ci_tradeterms_1" in str(refused.value)
+    argv = (tmp_path / "argv.txt").read_text().splitlines()
+    assert argv[:3] == ["provision", "indexes", "model.morph"]
+    assert "--json" in argv
+    assert "--prune" in argv
+
+
+def test_a_clean_plan_is_returned_for_the_report(tmp_path: Path) -> None:
+    clean = fake_binary(
+        tmp_path,
+        json.dumps(
+            provision_envelope(
+                indexes=[_index("keep", "TradeTerms", 0), _index("create", "TradeTerms", 4)],
+                statistics=[_statistics("create", 4)],
+            )
+        ),
+    )
+    client = GlasshouseClient("model.morph", "postgres:///x", binary=str(clean))
+    report = reconcile_indexes(client)
+    assert report.applied
+    assert not report.has_conflict
+    assert [i.action for i in report.indexes] == ["keep", "create"]
