@@ -383,3 +383,23 @@ Three things to read off it. The retries-per-commit number moved the way upstrea
 
 **Still open upstream from this ledger**: #410 (a plan field in `check --json`; the compiled pin parses verbose text until then), #411 (named-field patterns on definition calls), #396 (the table above is its acceptance evidence; the remaining relation lock is a new observation for it), #313 (derived views per source predicate; read before #39's derived-claims adoption). Nothing new to file from this pass.
 
+
+## 28. The case is the trade: one binding moves the acceptance number again — 30/09/2026, model change, no re-pin
+
+Upstream read section 27's statement and named the cause the same evening: a case-bound check keys its case on the variables the rule's pattern binds, and `delivery_period_is_ordered` was spelled `TradeTerms(delivery_start: s, delivery_end: e, ..) implies s strictly_before e`, so its case was the pair of instants and every trade sharing a delivery window sat in one case. The elided fields bind nothing. Naming the trade puts it in the case: `TradeTerms(trade: trade, delivery_start: …, delivery_end: …, ..)`. Upstream asked for a re-measurement with that spelling before considering the kernel change section 27 described (each elided position as a case coordinate), preferring to see the spelling fall short first.
+
+**The change.** One binding in one invariant, with the reason in the comment above it. `check -v` still `compiled`, `check --strict` clean, `check --ir` shows `TradeTerms(_, trade, _, _, _, delivery_start, delivery_end, _)` where it showed `_` in the trade's position. **MODEL_HASH moved** (`sha256:299c7ad0…` → `sha256:85ba9786…`), so the client's `__init__.py` and the views script's stamped catalogue rows were regenerated; nothing else in either changed. Not a re-pin: the binary stays v0.0.13. The consequence is the usual one for a hash move: every deployed database is a ledger reset, which for the demo folds into #82 (it was already one).
+
+**The measurement, same fixture, same harness, two runs.** The v0.0.13 rows of section 27 are the baseline (1.55-1.76 retries per commit, 0-1 stories given up, relation-lock presence 0.82-0.84, `delivery_period_is_ordered` 54 percent of holder observations).
+
+| Run | Retries per commit | Commits per second | Gave up (of 20) | Capture p50 / p90 / mean attempts | Transact p50 / p90 / mean attempts | Relation SIRead on claims present | Top holder |
+|---|---|---|---|---|---|---|---|
+| e | **0.56** | 28.3 | 0 | 1 / 3 / 1.5 | 6 / 8 / 6.3 | 0.49 | lock outlived a committed transaction, 48 percent; `delivery_period_is_ordered` 7 percent |
+| f | **0.62** | 26.3 | 0 | 1 / 3 / 1.6 | 6 / 10 / 6.1 | 0.47 | lock outlived a committed transaction, 57 percent; `valued_trade_was_captured` 8 percent |
+
+The spelling did not fall short. Retries per commit is a third of the v0.0.13 baseline and a sixth of v0.0.12's; capture is at a median of one attempt; `delivery_period_is_ordered` went from the holder to a footnote (9 observations in run e); and the lock that remains is mostly SSI's own tail, locks kept by committed transactions until the transactions that read against them finish, spread thinly over every compiled check (nothing above 8 percent). Holder transactions are shorter too (p50 0.05 s, max 0.18 s). The one number that moved the wrong way: `transact` mean attempts rose from 2.2 to 6.1-6.3. With captures no longer colliding, the twenty eleven-act transactions reach each other sooner and more often; each still commits (none gave up, p90 8-10 attempts). That is the next thing to read, not this pass's.
+
+**What it says about the kernel change.** Upstream's candidate (an elided position as a case coordinate, so a single-pattern rule's case is the row itself) would remove the author's burden of knowing to name the trade; this pass says the burden is small and the fix is expressible today. It also says something for the authoring lint: a single-pattern invariant whose case binds only the compared columns is a shape `check --strict` could name, since the cost is invisible until a ledger has many rows per window. Recorded as the friction from this pass, not filed (ask first).
+
+**Not re-measured**: the eight-writer build (the write path does not run this check's case any differently, since a capture writes one `TradeTerms` row; a re-run would answer whether the case now seeks one row there too, and belongs with #87's next-release run).
+
