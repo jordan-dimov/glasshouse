@@ -21,6 +21,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import psycopg.errors
 import sqlalchemy as sa
 
 # The committed, byte-exact view surface; regenerate with
@@ -70,10 +71,12 @@ def views_model_hash(engine: sa.Engine) -> str | None:
     try:
         with engine.connect() as connection:
             return connection.execute(catalog).scalar_one_or_none()
-    except sa.exc.SQLAlchemyError:
-        # The schema or catalogue view is absent: the surface has never
-        # been applied. That is a verdict for the caller, not an error.
-        return None
+    except sa.exc.ProgrammingError as absent:
+        if _surface_absent(absent):
+            # The schema or catalogue view is absent: the surface has never
+            # been applied. That is a verdict for the caller, not an error.
+            return None
+        raise
 
 
 def missing_catalogued_views(engine: sa.Engine) -> tuple[str, ...]:
@@ -92,5 +95,15 @@ def missing_catalogued_views(engine: sa.Engine) -> tuple[str, ...]:
     try:
         with engine.connect() as connection:
             return tuple(connection.execute(query, {"schema": VIEWS_SCHEMA}).scalars())
-    except sa.exc.SQLAlchemyError:
-        return ()
+    except sa.exc.ProgrammingError as absent:
+        if _surface_absent(absent):
+            return ()
+        raise
+
+
+def _surface_absent(error: sa.exc.ProgrammingError) -> bool:
+    """Only an undefined schema or catalogue view means "not applied". A
+    database that cannot be reached, a refused login or a broken view is
+    an operational failure, and `verify` reports it as one rather than
+    as a surface that was never applied."""
+    return isinstance(error.orig, psycopg.errors.UndefinedTable | psycopg.errors.InvalidSchemaName)

@@ -9,12 +9,16 @@ substrate's throughput.
 
 Two commands:
 
-    classroom_load.py build --database-url URL --filler 500 --procs 8
+    classroom_load.py build --database-url URL --filler 500
         Provision (this checkout's `glasshouse provision`, so the binary the
         checkout is pinned to lays down the schema and its indexes), then
         populate `--filler` organisations with one capture grant and ten
         captures each - 500 of them is the "10k" ledger (10,500 claims) -
-        and ANALYZE. Dump it afterwards with pg_dump -Fc; both sides of a
+        and ANALYZE. The fixture is built sequentially by default and the
+        command exits non-zero on any decision that did not commit or a
+        claim count other than the expected one: fixture construction is
+        boring on purpose, so the contention under study is not in the
+        setup. Dump it afterwards with pg_dump -Fc; both sides of a
         comparison restore the same dump.
 
     classroom_load.py burst --database-url URL --orgs 20 --trades 10 --out results.json
@@ -28,8 +32,13 @@ Two commands:
         `transact`. Every decision goes through the Glasshouse flows
         (payload store, then claim), one-shot `propose` each, retried with
         jittered backoff on a serialization failure up to `--max-attempts`
-        times. A sampler thread reads pg_locks at 4 Hz and reports how often
-        a relation-level SIRead lock on `morpholog.claims` was present.
+        times. The worker processes are spawned (never forked from a
+        process holding database connections) and warmed before the timer
+        and the sampler start, so process start-up is in neither number. A
+        sampler thread reads pg_locks at 4 Hz and reports how often a
+        relation-level SIRead lock on `morpholog.claims` was present and,
+        per holder, the statement it was running (attribution by backend,
+        which is what names a lock's cause; presence alone is a lead).
 
 Run it from the checkout whose client and pinned binary you are
 measuring (`GLASSHOUSE_MORPHOLOG_BIN` set), against a disposable
@@ -43,6 +52,7 @@ import datetime as dt
 import json
 import multiprocessing as mp
 import random
+import re
 import statistics
 import subprocess
 import sys
@@ -238,18 +248,69 @@ def _story(database_url: str, org: str, trades: int, max_attempts: int) -> Tally
     return tally
 
 
-def _sample_locks(engine: sa.Engine, stop: threading.Event, samples: list[bool]) -> None:
-    """Whether a relation-level SIRead lock on the claims table is held,
-    sampled at 4 Hz. The engine is AUTOCOMMIT: a sampler sitting in an
+@dataclass
+class LockSamples:
+    """What the 4 Hz sampler saw: per sample, whether any backend held a
+    relation-level SIRead lock on the claims table, and per holder, which
+    statement it was running (the compiled checks announce themselves in
+    a leading comment) and how old its transaction was."""
+
+    present: list[bool] = field(default_factory=list)
+    holders: Counter[str] = field(default_factory=Counter)
+    ages: list[float] = field(default_factory=list)
+
+    def as_json(self) -> dict[str, object]:
+        total = sum(self.holders.values())
+        return {
+            "relation_siread_on_claims_present": round(sum(self.present) / len(self.present), 3)
+            if self.present
+            else None,
+            "lock_samples": len(self.present),
+            "holder_observations": total,
+            "holder_age_p50_s": round(statistics.median(self.ages), 2) if self.ages else None,
+            "holder_age_max_s": round(max(self.ages), 2) if self.ages else None,
+            "relation_siread_holders": [
+                {"share": round(n / total, 3), "observations": n, "statement": label}
+                for label, n in self.holders.most_common(12)
+            ]
+            if total
+            else [],
+        }
+
+
+_HOLDERS = sa.text(
+    "select a.state, a.query, extract(epoch from now() - a.xact_start) as age "
+    "from pg_locks l left join pg_stat_activity a on a.pid = l.pid "
+    "where l.locktype = 'relation' and l.mode = 'SIReadLock' "
+    "and l.relation = 'morpholog.claims'::regclass and l.pid <> pg_backend_pid()"
+)
+
+
+def _label(state: str | None, query: str | None) -> str:
+    """The holder's running statement, as the compiled checks name
+    themselves (`/* morpholog compiled invariant ... */`) or its first
+    words; a holder with no backend row is a lock that outlived its
+    committed transaction."""
+    if state is None:
+        return "(backend gone: lock outlived a committed transaction)"
+    text = " ".join((query or "").split())
+    comment = re.match(r"/\*.*?\*/", text)
+    head = comment.group(0) if comment else text[:90]
+    return f"{state} | {head}"
+
+
+def _sample_locks(engine: sa.Engine, stop: threading.Event, samples: LockSamples) -> None:
+    """Sample at 4 Hz. The engine is AUTOCOMMIT: a sampler sitting in an
     open transaction between samples would pin xmin for the whole burst
     and skew the very contention it is measuring."""
-    query = sa.text(
-        "select exists(select 1 from pg_locks where locktype = 'relation' "
-        "and mode = 'SIReadLock' and relation = 'morpholog.claims'::regclass)"
-    )
     with engine.connect() as connection:
         while not stop.is_set():
-            samples.append(bool(connection.execute(query).scalar()))
+            rows = connection.execute(_HOLDERS).all()
+            samples.present.append(bool(rows))
+            for state, query, age in rows:
+                samples.holders[_label(state, query)] += 1
+                if age is not None:
+                    samples.ages.append(float(age))
             time.sleep(0.25)
 
 
@@ -321,35 +382,57 @@ def _binary_version(client: GlasshouseClient) -> str:
     ).stdout.strip()
 
 
-def build(args: argparse.Namespace) -> None:
+# One capture grant (one claim) and ten captures (TradeCaptured plus
+# TradeTerms each) per filler organisation.
+CLAIMS_PER_FILLER = 1 + 10 * 2
+
+
+def _warm(_: int) -> None:
+    """A no-op the pool runs once per worker so every process exists,
+    has imported everything and is idle before the clock starts."""
+
+
+def build(args: argparse.Namespace) -> int:
     report = run_provision(args.database_url)
     print(report.render())
     engine = sa.create_engine(engine_url(args.database_url), isolation_level="AUTOCOMMIT")
     orgs = [f"filler-{i:04d}" for i in range(args.filler)]
-    chunks = [orgs[i :: args.procs] for i in range(args.procs)]
     started = time.monotonic()
     try:
-        with mp.Pool(args.procs) as pool:
-            tallies = pool.starmap(
-                _filler, [(args.database_url, chunk, args.max_attempts) for chunk in chunks]
-            )
+        before = _claims(engine)
+        if args.procs == 1:
+            tallies = [_filler(args.database_url, orgs, args.max_attempts)]
+        else:
+            chunks = [orgs[i :: args.procs] for i in range(args.procs)]
+            with mp.get_context("spawn").Pool(args.procs) as pool:
+                tallies = pool.starmap(
+                    _filler, [(args.database_url, chunk, args.max_attempts) for chunk in chunks]
+                )
         _analyze(engine)
-        print(
-            json.dumps(
-                {
-                    "built": args.filler,
-                    "claims": _claims(engine),
-                    "seconds": round(time.monotonic() - started, 1),
-                    **_merge(tallies).as_json(),
-                },
-                indent=2,
-            )
-        )
+        merged = _merge(tallies)
+        claims = _claims(engine)
+        result = {
+            "built": args.filler,
+            "claims": claims,
+            "seconds": round(time.monotonic() - started, 1),
+            **merged.as_json(),
+        }
+        print(json.dumps(result, indent=2))
     finally:
         engine.dispose()
+    expected = before + args.filler * CLAIMS_PER_FILLER
+    if merged.gave_up or merged.failures or claims != expected:
+        print(
+            f"partial fixture: {sum(merged.gave_up.values())} decision(s) gave up, "
+            f"{len(merged.failures)} refused, {claims} claims where {expected} were expected; "
+            "drop the database and build again",
+            file=sys.stderr,
+        )
+        return 2
+    return 0
 
 
-def burst(args: argparse.Namespace) -> None:
+def burst(args: argparse.Namespace) -> int:
     report = run_provision(args.database_url)
     print(report.render())
     engine = sa.create_engine(engine_url(args.database_url), isolation_level="AUTOCOMMIT")
@@ -357,16 +440,20 @@ def burst(args: argparse.Namespace) -> None:
         _analyze(engine)
         claims_before = _claims(engine)
         orgs = [f"class-{i:02d}" for i in range(args.orgs)]
-        samples: list[bool] = []
+        samples = LockSamples()
         stop = threading.Event()
         sampler = threading.Thread(target=_sample_locks, args=(engine, stop, samples), daemon=True)
-        sampler.start()
-        started = time.monotonic()
-        with mp.Pool(args.orgs) as pool:
+        # Spawned, never forked: this process holds database connections
+        # and a thread is about to run. Warmed before the clock and the
+        # sampler start, so twenty interpreter start-ups are in neither.
+        with mp.get_context("spawn").Pool(args.orgs) as pool:
+            pool.map(_warm, range(args.orgs * 4))
+            sampler.start()
+            started = time.monotonic()
             tallies = pool.starmap(
                 _story, [(args.database_url, org, args.trades, args.max_attempts) for org in orgs]
             )
-        elapsed = time.monotonic() - started
+            elapsed = time.monotonic() - started
         stop.set()
         sampler.join(timeout=2)
         merged = _merge(tallies)
@@ -380,10 +467,7 @@ def burst(args: argparse.Namespace) -> None:
             "claims_after": _claims(engine),
             "seconds": round(elapsed, 1),
             "commits_per_second": round(merged.commits / elapsed, 2) if elapsed else None,
-            "relation_siread_on_claims_present": round(sum(samples) / len(samples), 3)
-            if samples
-            else None,
-            "lock_samples": len(samples),
+            **samples.as_json(),
             **merged.as_json(),
         }
     finally:
@@ -392,6 +476,7 @@ def burst(args: argparse.Namespace) -> None:
     print(text)
     if args.out:
         Path(args.out).write_text(text + "\n")
+    return 0
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -403,7 +488,7 @@ def main(argv: list[str] | None = None) -> int:
     sub = parser.add_subparsers(dest="command", required=True)
     b = sub.add_parser("build")
     b.add_argument("--filler", type=int, default=500)
-    b.add_argument("--procs", type=int, default=8)
+    b.add_argument("--procs", type=int, default=1)
     b.set_defaults(run=build)
     r = sub.add_parser("burst")
     r.add_argument("--orgs", type=int, default=20)
@@ -412,8 +497,7 @@ def main(argv: list[str] | None = None) -> int:
     r.add_argument("--out", default="")
     r.set_defaults(run=burst)
     args = parser.parse_args(argv)
-    args.run(args)
-    return 0
+    return int(args.run(args))
 
 
 if __name__ == "__main__":

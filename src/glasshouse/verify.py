@@ -51,6 +51,7 @@ from glasshouse.commit import (
     models,
     views_model_hash,
 )
+from glasshouse.commit.morpholog_client import MORPHOLOG_VERSION
 from glasshouse.commit.morpholog_client.envelopes import (
     ReplayConsistent,
     RoleRebindingsEvaluated,
@@ -98,28 +99,38 @@ class VerifyReport:
 def _guarded(name: str, leg: Callable[[], Leg]) -> Leg:
     """Every leg is total: a commit-layer failure (the client's first-use
     refusal of a mismatched binary, a tail the deployment cannot read, a
-    timeout) or a database that cannot be reached is that leg's FAIL
+    timeout), a binary that cannot start at all (`OSError`: the generated
+    adapter translates a timeout but not a missing or non-executable
+    binary) or a database that cannot be reached is that leg's FAIL
     verdict, never a traceback out of `verify`. The client remembers a
     refusal, so every leg that asks it meets the same message."""
     try:
         return leg()
-    except (MorphologError, SQLAlchemyError) as failure:
+    except (MorphologError, SQLAlchemyError, OSError) as failure:
         return Leg(name, False, f"could not run: {failure}")
 
 
 def _model_leg(client: GlasshouseClient) -> Leg:
-    # The client checks the binary against the package's stamps before
-    # its first call (version and rules hash both, since v0.0.13) and
-    # refuses a mismatch by name, so a report that comes back is the
-    # committed programme's from a binary of the client's own version.
-    # The leg states that, with the binary's version; a refusal lands in
-    # `_guarded` carrying both sides.
+    # The client's first-use check refuses a mismatched binary or
+    # programme before its FIRST call and never looks again (a binary or
+    # file replaced under a long-lived client, the web app's for one, is
+    # not its concern by upstream's own contract). verify is continuing
+    # attestation, so the leg compares the live report against both
+    # committed stamps every time it runs.
     report = client.hash()
+    agreed = report.hash == MODEL_HASH and report.morpholog_version == MORPHOLOG_VERSION
+    if agreed:
+        return Leg(
+            "model",
+            True,
+            f"binary (morpholog {report.morpholog_version}) and committed client both name "
+            f"{report.hash}",
+        )
     return Leg(
         "model",
-        True,
-        f"binary (morpholog {report.morpholog_version}) and committed client both name "
-        f"{report.hash}",
+        False,
+        f"binary (morpholog {report.morpholog_version}) names {report.hash}; the committed "
+        f"client (generated for {MORPHOLOG_VERSION}) names {MODEL_HASH}",
     )
 
 
@@ -310,7 +321,7 @@ def verify(client: GlasshouseClient, engine: sa.Engine, store: CurveStore) -> Ve
         report = client.audit_verify(views_schema=VIEWS_SCHEMA)
         ledger, tree = _ledger_leg(report), _tree_leg(report)
         seal = report.views
-    except MorphologError as failure:
+    except (MorphologError, OSError) as failure:
         unavailable = f"could not run: {failure}"
         ledger = Leg("ledger", False, unavailable)
         tree = Leg("tree", False, unavailable)

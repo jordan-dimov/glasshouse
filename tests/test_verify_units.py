@@ -66,25 +66,41 @@ def test_the_replay_covers_every_projection_table(tmp_path: Path) -> None:
 
 
 def test_the_model_leg_names_the_binary_version_and_the_hash(tmp_path: Path) -> None:
-    # The client's first-use check has already refused any binary whose
-    # version or rules differ, so the leg's one shape is ok, naming both.
     leg = _model_leg(client_with(tmp_path, ""))
     assert leg.ok
     assert f"morpholog {MORPHOLOG_VERSION}" in leg.detail
     assert MODEL_HASH in leg.detail
 
 
-def test_a_refused_client_fails_every_ledger_leg_by_name(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+@pytest.mark.parametrize(
+    "changed", [{"hash": "sha256:0000"}, {"morpholog_version": "0.0.99"}], ids=["rules", "binary"]
+)
+def test_the_model_leg_keeps_attesting_after_the_first_use_check(
+    tmp_path: Path, changed: dict[str, object]
 ) -> None:
+    # The client's check runs once, before its first call, and by upstream's
+    # contract does not notice a binary or programme replaced under a
+    # client already checked - the web app's client lives for the whole
+    # process. verify is continuing attestation, so the leg compares the
+    # live report against both committed stamps every time.
+    client = client_with(tmp_path, "")
+    assert client.audit() == []  # the first-use check passed here
+    (tmp_path / "hash.txt").write_text(json.dumps(stamps(**changed)))
+    leg = _model_leg(client)
+    assert not leg.ok
+    assert str(next(iter(changed.values()))) in leg.detail
+    assert MODEL_HASH in leg.detail
+    assert MORPHOLOG_VERSION in leg.detail
+
+
+def test_a_refused_client_fails_every_ledger_leg_by_name(tmp_path: Path) -> None:
     # The client's first-use check (a binary of another version here)
     # refuses before any leg can run. verify does not raise: every leg is
     # total, so each client-backed leg carries the refusal (the client
-    # remembers it), the projection leg names the dead database it met
-    # first, the views leg reports what it can see without the seal, and
-    # the whole report is DIVERGENT - never a crash and never "ok".
+    # remembers it), the two database-backed legs name the dead database
+    # they met, and the whole report is DIVERGENT - never a crash and
+    # never "ok".
     client = client_with(tmp_path, "", hash_report=stamps(morpholog_version="0.0.1"))
-    monkeypatch.setattr(verify_module, "views_model_hash", lambda _engine: None)
     engine = _dead_engine()
     try:
         report = verify(client, engine, CurveStore(engine))
@@ -95,7 +111,40 @@ def test_a_refused_client_fails_every_ledger_leg_by_name(
     assert all(not leg.ok for leg in report.legs)
     for name in ("model", "ledger", "tree", "payloads"):
         assert by_name[name].detail.startswith("could not run: the binary is Morpholog 0.0.1")
-    assert by_name["projections"].detail.startswith("could not run: ")
+    for name in ("projections", "views"):
+        assert by_name[name].detail.startswith("could not run: ")
+
+
+def test_a_binary_that_cannot_start_fails_every_leg_instead_of_raising() -> None:
+    # The generated adapter translates a timeout into MorphologError but
+    # lets a missing or non-executable binary raise OSError; verify is
+    # total over that too, because a mis-set GLASSHOUSE_MORPHOLOG_BIN is
+    # exactly the deployment failure a verdict is for.
+    client = GlasshouseClient("model.morph", "postgres:///x", binary="/definitely/not/here")
+    engine = _dead_engine()
+    try:
+        report = verify(client, engine, CurveStore(engine))
+    finally:
+        engine.dispose()
+    assert len(report.legs) == 6
+    assert all(not leg.ok for leg in report.legs)
+    assert all(leg.detail.startswith("could not run: ") for leg in report.legs)
+    assert "not/here" in report.legs[0].detail
+
+
+def test_an_unreachable_database_is_not_an_unapplied_surface() -> None:
+    # Only an undefined schema or catalogue reads as "not applied"; a
+    # database that cannot be reached is an operational failure the views
+    # leg reports as such (through `_guarded`), never as a surface that was
+    # never applied.
+    engine = _dead_engine()
+    try:
+        with pytest.raises(sa.exc.OperationalError):
+            views_model_hash(engine)
+        with pytest.raises(sa.exc.OperationalError):
+            missing_catalogued_views(engine)
+    finally:
+        engine.dispose()
 
 
 def test_the_ledger_leg_reads_the_replay_verdict(tmp_path: Path) -> None:
@@ -211,18 +260,6 @@ def test_the_views_leg_names_the_redefined_and_missing_views(
     assert not leg.ok
     assert "redefined in place: trade_terms" in leg.detail
     assert "seal or view missing: official_curve" in leg.detail
-
-
-def test_views_model_hash_is_none_on_an_unreachable_database() -> None:
-    # The real read against a dead database: a SQLAlchemy error is a
-    # "not applied" verdict (None), never a raise.
-    assert views_model_hash(_dead_engine()) is None
-
-
-def test_missing_catalogued_views_is_empty_on_an_unreachable_database() -> None:
-    # An absent surface reads as a whole inventory (the empty tuple); the
-    # not-applied verdict belongs to views_model_hash, not this check.
-    assert missing_catalogued_views(_dead_engine()) == ()
 
 
 def test_the_report_renders_verdict_first() -> None:
