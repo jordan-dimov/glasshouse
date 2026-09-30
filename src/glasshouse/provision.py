@@ -4,8 +4,9 @@ The idempotent steps a fresh (or already-provisioned) database needs
 before the web service can serve: migrate the app schema to head,
 initialise the governed schema if absent (`init --skip-if-exists`),
 bring that governed schema up to the binary's own version (`migrate`),
-reconcile the managed indexes the programme's keyed loads and compiled
-checks seek through (`provision indexes --prune`), apply the sealed
+reconcile the managed indexes and planner statistics the programme's
+keyed loads and compiled checks seek through (`provision indexes
+--prune`), apply the sealed
 inspection views, and prove the audit tail can be read at all. This is
 the web service's pre-deploy command (DESIGN section 13: migrations and
 the Morpholog bootstrap run in a pre-deploy step, never at app startup)
@@ -37,7 +38,10 @@ This module never prints; the CLI renders the report and turns
 
 from __future__ import annotations
 
+from collections import Counter
+from collections.abc import Iterable
 from dataclasses import dataclass
+from itertools import chain
 from pathlib import Path
 
 import sqlalchemy as sa
@@ -45,8 +49,12 @@ from alembic.config import Config
 
 from alembic import command
 from glasshouse.commit import MODEL_FILE, GlasshouseClient, apply_views
-from glasshouse.commit.client import IndexPlan
-from glasshouse.commit.morpholog_client.envelopes import LeastPrivilege
+from glasshouse.commit.morpholog_client import envelopes
+from glasshouse.commit.morpholog_client.envelopes import (
+    LeastPrivilege,
+    ProvisionedIndex,
+    ProvisionedStatistics,
+)
 from glasshouse.compute.store import engine_url
 
 # The migration bundle. Resolved as a constant so the preflight (and its
@@ -55,7 +63,57 @@ ALEMBIC_INI = Path(__file__).resolve().parents[2] / "alembic.ini"
 
 
 class ProvisionError(Exception):
-    """Provisioning cannot proceed (no migration bundle to run)."""
+    """Provisioning cannot proceed (no migration bundle to run, or an
+    index conflict an operator must resolve)."""
+
+
+# The order the binary's own vocabulary lists the actions in, so a
+# summary reads the same way its report does.
+_ACTION_ORDER = ("keep", "create", "repair_invalid", "satisfied_externally", "stale", "conflict")
+
+
+def _counts(entries: Iterable[ProvisionedIndex | ProvisionedStatistics]) -> str:
+    counts = Counter(entry.action for entry in entries)
+    return ", ".join(
+        f"{counts[action]} {action.replace('_', ' ')}" for action in _ACTION_ORDER if counts[action]
+    )
+
+
+def _index_summary(report: envelopes.ProvisionReport) -> str:
+    """Indexes first, then the statistics objects the planner seeks
+    through (one per argument position, since v0.0.13), as counts."""
+    indexes = _counts(report.indexes) or "nothing to provision"
+    statistics = _counts(report.statistics)
+    return indexes if not statistics else f"{indexes}; statistics {statistics}"
+
+
+def reconcile_indexes(client: GlasshouseClient) -> envelopes.ProvisionReport:
+    """`provision indexes --prune` through the generated method, plus the
+    one decision it leaves to the caller: the report comes back whatever
+    the exit code, and a conflict (an object under Morpholog's own name
+    with another definition) applies nothing and needs an operator, so it
+    refuses here rather than rendering as a completed deploy. Prune is
+    right because Glasshouse is the only programme on its database."""
+    report = client.provision_indexes(prune=True)
+    if report.has_conflict or not report.applied:
+        entries: Iterable[ProvisionedIndex | ProvisionedStatistics] = chain(
+            report.indexes, report.statistics
+        )
+        conflicts = [
+            f"{entry.name}: {entry.detail or 'another definition under this name'}"
+            for entry in entries
+            if entry.action == "conflict"
+        ]
+        raise ProvisionError(
+            "provision indexes applied nothing"
+            + (
+                ": an object under Morpholog's own name has another definition and an "
+                "operator must decide - " + "; ".join(conflicts)
+                if conflicts
+                else " and reported no conflict; read the binary's own report"
+            )
+        )
+    return report
 
 
 def alembic_config(database_url: str, *, ini: Path = ALEMBIC_INI) -> Config:
@@ -80,9 +138,9 @@ class ProvisionReport:
     # database (init provisions at the binary's own version) and on one
     # already current, which is the ordinary case.
     governed_migrations: tuple[str, ...] = ()
-    # The managed-index plan as applied. None only in a report built
+    # The managed-index report as applied. None only in a report built
     # without provisioning (the tests' stable-render fixture).
-    indexes: IndexPlan | None = None
+    indexes: envelopes.ProvisionReport | None = None
 
     def render(self) -> str:
         applied = (
@@ -91,7 +149,7 @@ class ProvisionReport:
             else f"governed schema {self.governed}, "
             f"migrated ({', '.join(self.governed_migrations)})"
         )
-        indexes = "" if self.indexes is None else f", indexes ({self.indexes.summary()})"
+        indexes = "" if self.indexes is None else f", indexes ({_index_summary(self.indexes)})"
         lines = [f"provisioned: app schema at head, {applied}{indexes}, views applied"]
         if self.least_privilege is not None:
             floor = self.least_privilege
@@ -127,9 +185,8 @@ def run_provision(
     # migration can rekey every one of them (v0.0.12's 017 did), so the
     # plan runs after both, every deploy. Without it every keyed load
     # falls back to scanning its predicate under the lock the old
-    # whole-predicate read held: correct, slower, and contended. Prune is
-    # right here because Glasshouse is the only programme on its database.
-    indexes = client.provision_indexes(prune=True)
+    # whole-predicate read held: correct, slower, and contended.
+    indexes = reconcile_indexes(client)
     engine = sa.create_engine(engine_url(database_url))
     try:
         apply_views(engine)

@@ -35,9 +35,12 @@ hand-bridged `verify` once had is closed.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
+from functools import partial
 
 import sqlalchemy as sa
+from sqlalchemy.exc import SQLAlchemyError
 
 from glasshouse.commit import (
     MODEL_HASH,
@@ -48,6 +51,7 @@ from glasshouse.commit import (
     models,
     views_model_hash,
 )
+from glasshouse.commit.morpholog_client import MORPHOLOG_VERSION
 from glasshouse.commit.morpholog_client.envelopes import (
     ReplayConsistent,
     RoleRebindingsEvaluated,
@@ -92,11 +96,42 @@ class VerifyReport:
         return "\n".join(lines)
 
 
+def _guarded(name: str, leg: Callable[[], Leg]) -> Leg:
+    """Every leg is total: a commit-layer failure (the client's first-use
+    refusal of a mismatched binary, a tail the deployment cannot read, a
+    timeout), a binary that cannot start at all (`OSError`: the generated
+    adapter translates a timeout but not a missing or non-executable
+    binary) or a database that cannot be reached is that leg's FAIL
+    verdict, never a traceback out of `verify`. The client remembers a
+    refusal, so every leg that asks it meets the same message."""
+    try:
+        return leg()
+    except (MorphologError, SQLAlchemyError, OSError) as failure:
+        return Leg(name, False, f"could not run: {failure}")
+
+
 def _model_leg(client: GlasshouseClient) -> Leg:
-    deployed = client.hash().hash
-    if deployed == MODEL_HASH:
-        return Leg("model", True, f"binary and committed client both name {deployed}")
-    return Leg("model", False, f"binary names {deployed}, committed client {MODEL_HASH}")
+    # The client's first-use check refuses a mismatched binary or
+    # programme before its FIRST call and never looks again (a binary or
+    # file replaced under a long-lived client, the web app's for one, is
+    # not its concern by upstream's own contract). verify is continuing
+    # attestation, so the leg compares the live report against both
+    # committed stamps every time it runs.
+    report = client.hash()
+    agreed = report.hash == MODEL_HASH and report.morpholog_version == MORPHOLOG_VERSION
+    if agreed:
+        return Leg(
+            "model",
+            True,
+            f"binary (morpholog {report.morpholog_version}) and committed client both name "
+            f"{report.hash}",
+        )
+    return Leg(
+        "model",
+        False,
+        f"binary (morpholog {report.morpholog_version}) names {report.hash}; the committed "
+        f"client (generated for {MORPHOLOG_VERSION}) names {MODEL_HASH}",
+    )
 
 
 def _ledger_leg(report: LedgerVerifyReport) -> Leg:
@@ -273,29 +308,31 @@ def _payload_leg(client: GlasshouseClient, store: CurveStore) -> Leg:
 
 
 def verify(client: GlasshouseClient, engine: sa.Engine, store: CurveStore) -> VerifyReport:
-    """All six legs. Each leg is its own verdict: a divergent ledger does
-    not stop the projections being checked. The ledger, tree and views
-    legs share one `verify` call (replay, tree and the views seal are
-    faces of the same typed envelope), so an operational failure of that
-    call fails all three - the views leg's local checks still report
-    their evidence, but "ok" needs the seal - while the model, projection
-    and payload legs still run, giving as much evidence as they can."""
+    """All six legs, each its own verdict and each total (`_guarded`): a
+    divergent ledger does not stop the projections being checked, and a
+    commit layer or database that cannot be reached is a FAIL with the
+    reason, not a crash. The ledger, tree and views legs share one
+    `verify` call (replay, tree and the views seal are faces of the same
+    typed envelope), so an operational failure of that call fails all
+    three - the views leg's local checks still report their evidence,
+    but "ok" needs the seal - while the other legs still run, giving as
+    much evidence as they can."""
     try:
         report = client.audit_verify(views_schema=VIEWS_SCHEMA)
         ledger, tree = _ledger_leg(report), _tree_leg(report)
         seal = report.views
-    except MorphologError as failure:
-        unavailable = f"verify could not run: {failure}"
+    except (MorphologError, OSError) as failure:
+        unavailable = f"could not run: {failure}"
         ledger = Leg("ledger", False, unavailable)
         tree = Leg("tree", False, unavailable)
         seal = None
     return VerifyReport(
         (
-            _model_leg(client),
+            _guarded("model", partial(_model_leg, client)),
             ledger,
             tree,
-            _projection_leg(client, engine),
-            _payload_leg(client, store),
-            _views_leg(engine, seal),
+            _guarded("projections", partial(_projection_leg, client, engine)),
+            _guarded("payloads", partial(_payload_leg, client, store)),
+            _guarded("views", partial(_views_leg, engine, seal)),
         )
     )

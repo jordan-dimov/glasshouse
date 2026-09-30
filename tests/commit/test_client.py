@@ -12,7 +12,8 @@ from pathlib import Path
 import pytest
 
 from glasshouse.commit import GlasshouseClient, MorphologError, envelopes, models
-from tests.support import fake_binary
+from glasshouse.commit.morpholog_client import MORPHOLOG_VERSION
+from tests.support import fake_binary, stamps
 
 NAMED_OFFICIAL_CURVE = json.dumps(
     [
@@ -149,92 +150,29 @@ def test_the_configured_writer_roles_reach_both_checkpoint_paths(tmp_path: Path)
     assert json.loads(anchor.read_text())["tree_size"] == 3
 
 
-INDEX_PLAN = (
-    "program: glasshouse (sha256:7045)\n"
-    "CREATE               morpholog_ci_tradeterms_0_vk1_2785  TradeTerms[0] value_key_v1_digest\n"
-    "KEEP                 morpholog_ci_tradeterms_1_vk1_4298  TradeTerms[1] value_key_v1_digest\n"
-    "SATISFIED EXTERNALLY morpholog_ci_tradevalued_0_vk1_bd45  TradeValued[0] value_key_v1_digest\n"
-    "STALE                morpholog_ci_tradevalued_0_old_dead  TradeValued[0] arg_digest\n"
-)
+def test_the_first_call_checks_the_binary_against_the_package_stamps(tmp_path: Path) -> None:
+    # The generated client runs unchecked when constructed directly and
+    # only `open_client()` turns the first-use check on; our constructor
+    # is the deployment's one construction path, so it passes the stamps
+    # itself. What is pinned here is that they arrive: a binary of another
+    # version is refused by name before the call it was asked for is ever
+    # made (argv.txt holds the check, not the call).
+    other = fake_binary(tmp_path, "", hash_report=stamps(morpholog_version="0.0.99"))
+    client = GlasshouseClient("model.morph", "postgres:///x", binary=str(other))
+    with pytest.raises(
+        MorphologError, match=r"Morpholog 0\.0\.99.*generated for " + MORPHOLOG_VERSION
+    ):
+        client.audit()
+    assert (tmp_path / "argv.txt").read_text().splitlines()[:1] == ["hash"]
 
 
-def test_provision_indexes_names_the_subcommand_and_parses_the_plan(tmp_path: Path) -> None:
-    # The one hand-built argv left (the generator emits no method for
-    # `provision indexes`), pinned so a regrouping upstream is caught by a
-    # pure test rather than only in a live one. The plan is text, not
-    # JSON, so its parser lives on our side and is held to the binary's
-    # own action vocabulary, multi-word actions included.
-    binary = fake_binary(tmp_path, INDEX_PLAN + "applied\n")
+def test_a_matching_binary_passes_the_check_and_serves_the_call(tmp_path: Path) -> None:
+    # The default fake answers `hash` with this package's stamps: the
+    # check passes and argv.txt holds the call under test.
+    binary = fake_binary(tmp_path, "")  # an empty tail
     client = GlasshouseClient("model.morph", "postgres:///x", binary=str(binary))
-    plan = client.provision_indexes(prune=True)
-    argv = (tmp_path / "argv.txt").read_text().splitlines()
-    assert argv[:3] == ["provision", "indexes", "model.morph"]
-    assert "--prune" in argv
-    assert "--dry-run" not in argv
-    assert plan.applied
-    assert [(a.action, a.index.split("_")[2]) for a in plan.actions] == [
-        ("CREATE", "tradeterms"),
-        ("KEEP", "tradeterms"),
-        ("SATISFIED EXTERNALLY", "tradevalued"),
-        ("STALE", "tradevalued"),
-    ]
-    assert plan.summary() == "1 keep, 1 create, 1 satisfied externally, 1 stale"
-
-
-def test_the_applied_verdict_is_read_by_its_leading_word(tmp_path: Path) -> None:
-    # Upstream #412 made every applied run ANALYZE the claims table and
-    # extended the verdict line to say so; the canary read that as drift
-    # and every live provisioning failed. The verdict is its leading
-    # word, so a longer sentence with the same word is the same verdict,
-    # and a plan with no compiled invariants is a plan, not drift.
-    binary = fake_binary(tmp_path, INDEX_PLAN + "applied; morpholog.claims analyzed\n")
-    client = GlasshouseClient("model.morph", "postgres:///x", binary=str(binary))
-    plan = client.provision_indexes()
-    assert plan.applied
-    assert plan.count("CREATE") == 1
-    (tmp_path / "empty").mkdir()
-    empty = fake_binary(
-        tmp_path / "empty",
-        "program: x\n"
-        "no compiled invariants: nothing to provision\n"
-        "applied; morpholog.claims analyzed\n",
-    )
-    client = GlasshouseClient("model.morph", "postgres:///x", binary=str(empty))
-    plan = client.provision_indexes()
-    assert plan.applied
-    assert plan.actions == ()
-
-
-def test_a_dry_run_plan_is_not_applied(tmp_path: Path) -> None:
-    binary = fake_binary(tmp_path, INDEX_PLAN + "dry run: nothing changed\n")
-    client = GlasshouseClient("model.morph", "postgres:///x", binary=str(binary))
-    plan = client.provision_indexes(dry_run=True)
-    assert "--dry-run" in (tmp_path / "argv.txt").read_text().splitlines()
-    assert not plan.applied
-
-
-def test_an_unrecognised_plan_line_is_drift_not_silence(tmp_path: Path) -> None:
-    # A new action word upstream must not be counted as nothing: the
-    # plan is refused by name, the way the generated envelopes refuse an
-    # unknown key.
-    binary = fake_binary(tmp_path, "program: x\nREBUILD  morpholog_ci_x  X[0]\napplied\n")
-    client = GlasshouseClient("model.morph", "postgres:///x", binary=str(binary))
-    with pytest.raises(MorphologError, match="not a provision plan line"):
-        client.provision_indexes()
-
-
-def test_an_index_conflict_raises_with_the_plan(tmp_path: Path) -> None:
-    # Exit non-zero is the binary's "an operator must decide"; the plan
-    # it printed is the evidence, so it rides in the message.
-    binary = fake_binary(
-        tmp_path,
-        "program: x\nCONFLICT             morpholog_ci_x_0_vk1_00  X[0] value_key_v1_digest\n",
-        stderr="Error: 1 conflict",
-        exit_code=1,
-    )
-    client = GlasshouseClient("model.morph", "postgres:///x", binary=str(binary))
-    with pytest.raises(MorphologError, match="CONFLICT"):
-        client.provision_indexes()
+    assert client.audit() == []
+    assert (tmp_path / "argv.txt").read_text().splitlines()[:1] == ["inspect"]
 
 
 def test_without_configured_roles_the_horizon_stays_the_blessed_default(tmp_path: Path) -> None:

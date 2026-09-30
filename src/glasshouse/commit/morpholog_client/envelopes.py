@@ -1311,13 +1311,46 @@ class CheckReport:
 
 @dataclass(frozen=True)
 class HashReport:
+    """The rules-identity hash of a programme, from the binary reporting
+    it. A pinned client compares both against its own stamps."""
+
     program: str
     hash: str
+    morpholog_version: str
 
     @classmethod
     def from_json(cls, payload: object) -> HashReport:
-        data = _strict("hash report", payload, {"program", "hash"})
-        return cls(program=data["program"], hash=data["hash"])
+        data = _strict("hash report", payload, {"program", "hash", "morpholog_version"})
+        return cls(
+            program=data["program"],
+            hash=data["hash"],
+            morpholog_version=data["morpholog_version"],
+        )
+
+
+def version_skew(payload: object, expected: str) -> str | None:
+    """The version the binary states in its envelope against the one this
+    client was generated for, or ``None`` when they agree or the envelope
+    states none.
+
+    Read before the strict parser, on purpose: a binary of another version
+    may speak another protocol or carry a field this client does not know,
+    and the version is the reason for that, so it is the diagnosis to give.
+    The strict parser then still sees the whole object when the versions
+    agree; this reads one key and nothing else. An envelope that states no
+    version is not evidence of any version, so it is left to the strict
+    parser to refuse."""
+    actual = payload.get("morpholog_version") if isinstance(payload, dict) else None
+    if isinstance(actual, str) and actual != expected:
+        return f"the binary is Morpholog {actual}; this client was generated for {expected}"
+    return None
+
+
+def predates_versioned_hash(payload: object) -> bool:
+    """Whether a `hash` report is the exact shape every binary emitted
+    before the report carried a version: the one legacy shape a
+    generated client names as such rather than as drift."""
+    return isinstance(payload, dict) and set(payload) == {"hash", "program"}
 
 
 @dataclass(frozen=True)
@@ -1391,6 +1424,160 @@ class MigrationReport:
             applied=[MigrationRef.from_json(m) for m in data["applied"]],
             pending=[MigrationRef.from_json(m) for m in data["pending"]],
             unknown=[MigrationRef.from_json(m) for m in data.get("unknown", [])],
+        )
+
+
+@dataclass(frozen=True)
+class ProvisionedProgram:
+    program: str
+    hash: str
+
+    @classmethod
+    def from_json(cls, payload: object) -> ProvisionedProgram:
+        data = _strict("provisioned program", payload, {"program", "hash"})
+        return cls(program=data["program"], hash=data["hash"])
+
+
+_INDEX_ACTIONS = frozenset(
+    {"keep", "create", "repair_invalid", "satisfied_externally", "stale", "conflict"}
+)
+_STATISTICS_ACTIONS = frozenset({"keep", "create", "conflict", "stale"})
+
+
+def _action(label: str, value: object, known: AbstractSet[str]) -> str:
+    if not isinstance(value, str) or value not in known:
+        raise EnvelopeError(
+            f"{label}: unknown action {value!r} - the binary's contract has "
+            f"drifted past this generated client; regenerate it"
+        )
+    return value
+
+
+@dataclass(frozen=True)
+class ProvisionedIndex:
+    """One index the call reconciled against the catalogue. ``detail`` is
+    for an operator to read, not to decide on."""
+
+    action: str
+    name: str
+    predicate: str
+    position: int
+    required_by: list[str]
+    detail: str = ""
+
+    @classmethod
+    def from_json(cls, payload: object) -> ProvisionedIndex:
+        data = _strict(
+            "provisioned index",
+            payload,
+            {"action", "name", "predicate", "position", "required_by"},
+            {"detail"},
+        )
+        return cls(
+            action=_action("provisioned index", data["action"], _INDEX_ACTIONS),
+            name=data["name"],
+            predicate=data["predicate"],
+            position=data["position"],
+            required_by=_str_list("required_by", data["required_by"]),
+            detail=data.get("detail", ""),
+        )
+
+
+@dataclass(frozen=True)
+class ProvisionedStatistics:
+    """One statistics object Morpholog manages, the named programmes' or
+    another's: an object is fully known from its position."""
+
+    action: str
+    name: str
+    position: int
+    required_by: list[str]
+    detail: str = ""
+
+    @classmethod
+    def from_json(cls, payload: object) -> ProvisionedStatistics:
+        data = _strict(
+            "provisioned statistics",
+            payload,
+            {"action", "name", "position", "required_by"},
+            {"detail"},
+        )
+        return cls(
+            action=_action("provisioned statistics", data["action"], _STATISTICS_ACTIONS),
+            name=data["name"],
+            position=data["position"],
+            required_by=_str_list("required_by", data["required_by"]),
+            detail=data.get("detail", ""),
+        )
+
+
+@dataclass(frozen=True)
+class RequiredElsewhere:
+    """A managed index no named programme requires, protected from a prune
+    by a programme outside the call. It says nothing about whether the
+    index is still in the catalogue."""
+
+    name: str
+    required_by: list[str]
+
+    @classmethod
+    def from_json(cls, payload: object) -> RequiredElsewhere:
+        data = _strict("required elsewhere", payload, {"name", "required_by"})
+        return cls(name=data["name"], required_by=_str_list("required_by", data["required_by"]))
+
+
+@dataclass(frozen=True)
+class ProvisionReport:
+    """What `provision indexes` planned and did, over every programme the
+    call named."""
+
+    applied: bool
+    dry_run: bool
+    prune: bool
+    programs: list[ProvisionedProgram]
+    indexes: list[ProvisionedIndex]
+    statistics: list[ProvisionedStatistics]
+    required_elsewhere: list[RequiredElsewhere]
+    # Programmes outside the call with a recorded requirement whose
+    # position is not known. While any, no statistics object is stale;
+    # provisioning them again records it.
+    positions_unknown_for: list[str]
+
+    @property
+    def has_conflict(self) -> bool:
+        """Something under Morpholog's own name has another definition. The
+        run applied nothing and an operator has to look."""
+        return any(e.action == "conflict" for e in (*self.indexes, *self.statistics))
+
+    @property
+    def pruned(self) -> list[str]:
+        """What this run dropped: every stale index and statistics object,
+        when it applied under prune."""
+        if not (self.applied and self.prune):
+            return []
+        return [e.name for e in (*self.indexes, *self.statistics) if e.action == "stale"]
+
+    @classmethod
+    def from_json(cls, payload: object) -> ProvisionReport:
+        data = _strict(
+            "provision report",
+            payload,
+            {"applied", "dry_run", "prune", "programs", "indexes", "statistics",
+             "required_elsewhere", "positions_unknown_for"},
+        )
+        return cls(
+            applied=data["applied"],
+            dry_run=data["dry_run"],
+            prune=data["prune"],
+            programs=[ProvisionedProgram.from_json(p) for p in data["programs"]],
+            indexes=[ProvisionedIndex.from_json(i) for i in data["indexes"]],
+            statistics=[ProvisionedStatistics.from_json(s) for s in data["statistics"]],
+            required_elsewhere=[
+                RequiredElsewhere.from_json(r) for r in data["required_elsewhere"]
+            ],
+            positions_unknown_for=_str_list(
+                "positions_unknown_for", data["positions_unknown_for"]
+            ),
         )
 
 

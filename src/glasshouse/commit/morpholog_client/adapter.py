@@ -20,6 +20,7 @@ import contextlib
 import json
 import os
 import subprocess
+import threading
 import tempfile
 from typing import IO, Callable, TypeVar
 
@@ -151,6 +152,13 @@ class Morpholog:
     """A typed client over the ``morpholog`` CLI: arguments in, parsed
     envelope dataclasses out.
 
+    Constructed directly it is unchecked: it runs whatever binary and file
+    it is given. The generated ``open_client`` checks both once, immediately
+    before the first call: a binary of another version than the package was
+    generated for, or a file whose rules are not the ones it was generated
+    from, is refused. That check parses the file even ahead of a call that
+    needs no programme, such as ``init`` or ``migrate``.
+
     ``binary`` resolves as: explicit argument, then the
     ``MORPHOLOG_BIN`` environment variable, then ``morpholog`` on
     ``PATH``.
@@ -170,11 +178,20 @@ class Morpholog:
         database_url: str,
         binary: str | None = None,
         timeout: float | None = None,
+        expected_version: str | None = None,
+        expected_model_hash: str | None = None,
     ) -> None:
         self.file = str(file)
         self.database_url = database_url
         self.binary = binary or os.environ.get("MORPHOLOG_BIN", "morpholog")
         self.timeout = timeout
+        self._expected_version = expected_version
+        self._expected_model_hash = expected_model_hash
+        # The binary is checked once, before the first call: ``None``
+        # until then, ``True`` once it agreed, or the error a mismatch
+        # raised, raised again on every later call.
+        self._checked: bool | MorphologError | None = None
+        self._check_lock = threading.Lock()
 
     # ------------------------------------------------------------
     # The one subprocess seam.
@@ -188,7 +205,69 @@ class Morpholog:
         timeout: float | None,
         stdout: IO[bytes] | None = None,
     ) -> subprocess.CompletedProcess[str]:
-        """Every invocation lands here. A timeout is operational, not a
+        """Every invocation lands here, and the compatibility check runs
+        before the first of them."""
+        self._ensure_compatible()
+        return self._run_raw(args, stdin, timeout=timeout, stdout=stdout)
+
+    def _ensure_compatible(self) -> None:
+        """Refuse a binary of another version, or one serving other rules,
+        before anything else runs. Asked of `hash`, whose report carries
+        both, once per client, immediately before its first operation: a
+        mismatch stays refused. It detects deployment skew at first use;
+        it does not protect against replacing the binary or the programme
+        file under a client already checked."""
+        if self._expected_version is None and self._expected_model_hash is None:
+            return
+        with self._check_lock:
+            if self._checked is True:
+                return
+            if isinstance(self._checked, MorphologError):
+                raise self._checked
+            args = ["hash", self.file]
+            proc = self._run_raw(args, None, timeout=self.timeout)
+            if not proc.stdout.strip():
+                raise MorphologError(
+                    f"`{_redact_argv(args)}`:\n{self._redact_stderr(proc.stderr)}"
+                )
+            payload = json.loads(proc.stdout)
+            skew = None
+            if self._expected_version is not None:
+                skew = envelopes.version_skew(payload, self._expected_version)
+                if skew is None and envelopes.predates_versioned_hash(payload):
+                    skew = (
+                        f"the binary predates the versioned hash report, so it is "
+                        f"older than Morpholog {self._expected_version}, which this "
+                        f"client was generated for"
+                    )
+            if skew is not None:
+                self._checked = MorphologError(
+                    f"{skew} (binary `{self.binary}`; MORPHOLOG_BIN selects the "
+                    f"matching one, and a client constructed directly runs unchecked)"
+                )
+                raise self._checked
+            report = envelopes.HashReport.from_json(payload)
+            if (
+                self._expected_model_hash is not None
+                and report.hash != self._expected_model_hash
+            ):
+                self._checked = MorphologError(
+                    f"`{self.file}` hashes to {report.hash}; this client was generated "
+                    f"from {self._expected_model_hash} - regenerate it, or point it at "
+                    f"the programme it was generated from"
+                )
+                raise self._checked
+            self._checked = True
+
+    def _run_raw(
+        self,
+        args: list[str],
+        stdin: str | None = None,
+        *,
+        timeout: float | None,
+        stdout: IO[bytes] | None = None,
+    ) -> subprocess.CompletedProcess[str]:
+        """The one ``subprocess.run``. A timeout is operational, not a
         decided outcome, so it raises ``MorphologError``. ``stdout``, when
         given, receives the output instead of memory."""
         try:
@@ -292,6 +371,48 @@ class Morpholog:
         if check:
             args.append("--check")
         return envelopes.MigrationReport.from_json(self._json(*args))
+
+    def provision_indexes(
+        self,
+        *,
+        dry_run: bool = False,
+        prune: bool = False,
+        with_programs: list[str] | None = None,
+        timeout: float | None = None,
+    ) -> envelopes.ProvisionReport:
+        """Reconcile the indexes and statistics this programme's proposals
+        seek on. Run it on every deploy, after `migrate`.
+
+        `with_programs` names the other `.morph` files this database
+        serves. Name them all in one call: the plan is their union, a
+        conflict in one applies nothing for any, and `prune` acts once,
+        after every programme's requirements are recorded.
+
+        **Needs a connection that owns the schema**, as `migrate` does.
+
+        A conflict makes the binary exit non-zero, but this client reads
+        stdout rather than the exit code, so you get the report either
+        way. Gate on the report:
+
+            report = client.provision_indexes()
+            if report.has_conflict:
+                ...
+
+        ``timeout`` bounds this one call and defaults to unbounded,
+        ignoring the client-wide timeout: an index build over a large
+        table is the legitimate long case. A build cut short leaves an
+        invalid index, which the next run repairs.
+        """
+        args = ["provision", "indexes", self.file, *(with_programs or [])]
+        args.extend(["--database-url", self.database_url, "--json"])
+        if dry_run:
+            args.append("--dry-run")
+        if prune:
+            args.append("--prune")
+        proc = self._run(args, timeout=timeout)
+        if not proc.stdout.strip():
+            raise MorphologError(f"`{_redact_argv(args)}`:\n{self._redact_stderr(proc.stderr)}")
+        return envelopes.ProvisionReport.from_json(json.loads(proc.stdout))
 
     def hash(self) -> envelopes.HashReport:
         return envelopes.HashReport.from_json(self._json("hash", self.file))
