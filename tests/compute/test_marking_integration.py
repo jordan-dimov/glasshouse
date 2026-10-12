@@ -22,6 +22,7 @@ import sqlalchemy as sa
 from glasshouse.commit import MODEL_FILE, Committed, GlasshouseClient, Rejected
 from glasshouse.commit.morpholog_client.models import (
     CaptureTradeRequest,
+    EstablishLedgerRequest,
     EstablishOrganisationRequest,
     GrantCaptureAuthorityRequest,
     GrantCurveAuthorityRequest,
@@ -37,7 +38,7 @@ from glasshouse.compute.marking import (
 )
 from glasshouse.compute.store import CurveStore, StoreError
 from glasshouse.compute.terms import terms_version_id
-from tests.support import BINARY, DB, needs_live_stack, provision
+from tests.support import BINARY, DB, login_role, needs_live_stack, provision
 
 ORG, BOOK, MARKET = "acme-energy", "spec-de", "de-power"
 AS_OF = dt.date(2026, 6, 8)
@@ -79,6 +80,7 @@ def monday(morpholog: GlasshouseClient, store: CurveStore) -> None:
     register v1 (90/88/86.25), mark (55.00), correct to v2 (+1.00 every
     hour), re-mark (85.00). Tests assert the resulting state."""
     for grant in (
+        EstablishLedgerRequest(login_role=login_role()),
         EstablishOrganisationRequest(org=ORG),
         GrantCaptureAuthorityRequest(principal="alice", org=ORG, book=BOOK),
         GrantCurveAuthorityRequest(principal="carol", org=ORG, market=MARKET),

@@ -15,7 +15,7 @@ from fastapi.testclient import TestClient
 from glasshouse.api.app import create_app
 from glasshouse.commit import MODEL_FILE, Committed, GlasshouseClient, models
 from glasshouse.compute.terms import terms_version_id
-from tests.support import BINARY, DB, needs_live_stack, provision
+from tests.support import BINARY, DB, login_role, needs_live_stack, provision
 
 pytestmark = needs_live_stack
 
@@ -51,6 +51,7 @@ def granted() -> None:
     client = GlasshouseClient(str(MODEL_FILE), DB, binary=str(BINARY))
     assert client.init().status == "initialised"
     for request in (
+        models.EstablishLedgerRequest(login_role=login_role()),
         models.EstablishOrganisationRequest(org=ORG),
         models.GrantCaptureAuthorityRequest(principal="alice", org=ORG, book=BOOK),
     ):

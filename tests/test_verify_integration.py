@@ -27,7 +27,7 @@ from glasshouse.compute.store import CurveStore
 from glasshouse.compute.terms import terms_version_id
 from glasshouse.projections import catch_up
 from glasshouse.verify import verify
-from tests.support import BINARY, DB, needs_live_stack, provision
+from tests.support import BINARY, DB, login_role, needs_live_stack, provision
 
 ORG, BOOK, MARKET = "acme-energy", "spec-de", "de-power"
 T0 = dt.datetime(2026, 7, 1, tzinfo=dt.UTC)
@@ -58,6 +58,7 @@ def store(engine: sa.Engine) -> CurveStore:
 @pytest.fixture(scope="module")
 def monday(morpholog: GlasshouseClient, engine: sa.Engine, store: CurveStore) -> None:
     for grant in (
+        models.EstablishLedgerRequest(login_role=login_role()),
         models.EstablishOrganisationRequest(org=ORG),
         models.GrantCaptureAuthorityRequest(principal="alice", org=ORG, book=BOOK),
         models.GrantCurveAuthorityRequest(principal="carol", org=ORG, market=MARKET),

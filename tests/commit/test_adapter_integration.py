@@ -32,7 +32,7 @@ from glasshouse.commit import (
 )
 from glasshouse.commit.morpholog_client.envelopes import GateRejection, InvariantRejection
 from glasshouse.compute.terms import terms_version_id
-from tests.support import BINARY, DB, needs_live_stack
+from tests.support import BINARY, DB, login_role, needs_live_stack
 
 ORG, BOOK, MARKET = "acme-energy", "spec-de", "de-power"
 AS_OF = dt.date(2026, 6, 8)
@@ -118,6 +118,7 @@ def test_the_needle_lifecycle(morpholog: GlasshouseClient) -> None:
 
     # Authority is governed capability claims, granted by transitions.
     for grant in (
+        models.EstablishLedgerRequest(login_role=login_role()),
         models.EstablishOrganisationRequest(org=ORG),
         models.GrantCaptureAuthorityRequest(principal="alice", org=ORG, book=BOOK),
         models.GrantCurveAuthorityRequest(principal="carol", org=ORG, market=MARKET),
@@ -129,8 +130,10 @@ def test_the_needle_lifecycle(morpholog: GlasshouseClient) -> None:
     # The grant authority is the root of the others, and itself governed:
     # an organisation is established once, a grant by an actor without
     # the authority is refused by its named gate, and the authority is
-    # delegated by a transition like any other capability.
-    again = morpholog.submit(models.EstablishOrganisationRequest(org=ORG), actor="mallory")
+    # delegated by a transition like any other capability (restricted to
+    # the delegate's login in the same act). Who may establish at all is
+    # test_bootstrap_boundary_integration's subject.
+    again = morpholog.submit(models.EstablishOrganisationRequest(org=ORG), actor="bootstrap")
     assert isinstance(again, Rejected), again
     assert again.rule == "organisation_is_new"
     usurped = morpholog.submit(
@@ -140,7 +143,8 @@ def test_the_needle_lifecycle(morpholog: GlasshouseClient) -> None:
     assert isinstance(usurped, Rejected), usurped
     assert usurped.rule == "may_grant_authority"
     delegated = morpholog.submit(
-        models.GrantGrantAuthorityRequest(principal="ops", org=ORG), actor="bootstrap"
+        models.GrantGrantAuthorityRequest(principal="ops", org=ORG, login_role=login_role()),
+        actor="bootstrap",
     )
     assert isinstance(delegated, Committed), delegated
 
@@ -477,6 +481,6 @@ def test_the_needle_lifecycle(morpholog: GlasshouseClient) -> None:
     # no invariant's condition has gone unexercised by committed history.
     report = morpholog.coverage()
     in_programme = [t for t in report.transformations if not t.not_in_programme]
-    assert len(in_programme) == 10
+    assert len(in_programme) == 11
     assert all(t.transitions > 0 for t in in_programme)
     assert not [i.invariant for i in report.invariants if i.verdict == "never_fired"]

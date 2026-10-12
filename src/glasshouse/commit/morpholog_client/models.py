@@ -16,6 +16,20 @@ from . import values
 
 
 @dataclass(frozen=True)
+class EstablishLedgerRequest:
+    """Arguments for `establish_ledger`."""
+
+    TRANSFORMATION: ClassVar[str] = "establish_ledger"
+
+    login_role: str
+
+    def to_args_named(self) -> dict[str, object]:
+        return {
+            "login_role": values.encode_named(self.login_role),
+        }
+
+
+@dataclass(frozen=True)
 class EstablishOrganisationRequest:
     """Arguments for `establish_organisation`."""
 
@@ -37,11 +51,13 @@ class GrantGrantAuthorityRequest:
 
     principal: str
     org: str
+    login_role: str
 
     def to_args_named(self) -> dict[str, object]:
         return {
             "principal": values.encode_named(self.principal),
             "org": values.encode_named(self.org),
+            "login_role": values.encode_named(self.login_role),
         }
 
 
@@ -313,6 +329,56 @@ class MayGrantAuthorityClaim:
         return cls(
             actor=values.named_text("MayGrantAuthority.actor", args["actor"]),
             org=values.named_text("MayGrantAuthority.org", args["org"]),
+        )
+
+
+@dataclass(frozen=True)
+class MayEstablishOrganisationsClaim:
+    """One admitted `MayEstablishOrganisations` claim, decoded by declared kind."""
+
+    PREDICATE: ClassVar[str] = "MayEstablishOrganisations"
+
+    actor: str
+
+    @classmethod
+    def from_named(cls, args: dict[str, object]) -> MayEstablishOrganisationsClaim:
+        values.named_fields("MayEstablishOrganisations", args, ("actor",))
+        return cls(
+            actor=values.named_text("MayEstablishOrganisations.actor", args["actor"]),
+        )
+
+
+@dataclass(frozen=True)
+class ActorAssertionRestrictedClaim:
+    """One admitted `ActorAssertionRestricted` claim, decoded by declared kind."""
+
+    PREDICATE: ClassVar[str] = "ActorAssertionRestricted"
+
+    actor: str
+
+    @classmethod
+    def from_named(cls, args: dict[str, object]) -> ActorAssertionRestrictedClaim:
+        values.named_fields("ActorAssertionRestricted", args, ("actor",))
+        return cls(
+            actor=values.named_text("ActorAssertionRestricted.actor", args["actor"]),
+        )
+
+
+@dataclass(frozen=True)
+class ActorAssertionAuthorityClaim:
+    """One admitted `ActorAssertionAuthority` claim, decoded by declared kind."""
+
+    PREDICATE: ClassVar[str] = "ActorAssertionAuthority"
+
+    actor: str
+    login_role: str
+
+    @classmethod
+    def from_named(cls, args: dict[str, object]) -> ActorAssertionAuthorityClaim:
+        values.named_fields("ActorAssertionAuthority", args, ("actor", "login_role"))
+        return cls(
+            actor=values.named_text("ActorAssertionAuthority.actor", args["actor"]),
+            login_role=values.named_text("ActorAssertionAuthority.login_role", args["login_role"]),
         )
 
 

@@ -19,7 +19,7 @@ from glasshouse.projections.runner import start_projector_thread
 from glasshouse.projections.tables import blotter_trade
 from glasshouse.seed import ORG as SEED_ORG
 from glasshouse.seed import run_seed
-from tests.support import BINARY, DB, needs_live_stack, provision
+from tests.support import BINARY, DB, login_role, needs_live_stack, provision
 
 # The first terms version's effective date: on or before every curve
 # business date these tests value under.
@@ -37,6 +37,7 @@ def test_a_write_becomes_visible_without_manual_catch_up(
     client = GlasshouseClient(str(MODEL_FILE), DB, binary=str(BINARY))
     assert client.init().status == "initialised"
     for request in (
+        models.EstablishLedgerRequest(login_role=login_role()),
         models.EstablishOrganisationRequest(org=ORG),
         models.GrantCaptureAuthorityRequest(principal="alice", org=ORG, book=BOOK),
     ):

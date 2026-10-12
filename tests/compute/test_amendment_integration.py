@@ -26,7 +26,7 @@ from glasshouse.compute.marking import (
 )
 from glasshouse.compute.store import CurveStore
 from glasshouse.compute.terms import terms_version_id
-from tests.support import BINARY, DB, needs_live_stack, provision
+from tests.support import BINARY, DB, ensure_ledger_root, needs_live_stack, provision
 
 pytestmark = needs_live_stack
 
@@ -56,6 +56,7 @@ def _desk(
 ) -> None:
     """Grants, a buy and a sell on the market (10 MW over two hours at
     80), and an official curve for AS_OF."""
+    ensure_ledger_root(client)
     for grant in (
         models.EstablishOrganisationRequest(org=org),
         models.GrantCaptureAuthorityRequest(principal="alice", org=org, book=BOOK),

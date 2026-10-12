@@ -13,7 +13,7 @@ import pytest
 
 from glasshouse import cli
 from glasshouse.commit import MODEL_FILE, Committed, GlasshouseClient, models
-from tests.support import DB, needs_live_stack, provision
+from tests.support import DB, login_role, needs_live_stack, provision
 
 ORG, BOOK, MARKET = "acme-energy", "spec-de", "de-power"
 
@@ -49,6 +49,7 @@ def provisioned(cli_binary: None) -> None:
     client = GlasshouseClient(str(MODEL_FILE), DB)
     assert client.init().status == "initialised"
     for grant, actor in (
+        (models.EstablishLedgerRequest(login_role=login_role()), "bootstrap"),
         (models.EstablishOrganisationRequest(org=ORG), "bootstrap"),
         (models.GrantCaptureAuthorityRequest(principal="alice", org=ORG, book=BOOK), "bootstrap"),
         (models.GrantCurveAuthorityRequest(principal="carol", org=ORG, market=MARKET), "bootstrap"),
