@@ -8,10 +8,11 @@ and raises ``MorphologError``. For a proposal, only the binary's own
 statement - a decided envelope or a coded error object - settles the
 outcome; anything else raises ``MorphologOutcomeUnknown``.
 
-This module never imports the generated ``models``; ``submit`` is
-duck-typed on the two class attributes every generated request model
-carries (``TRANSFORMATION`` and ``to_args_named``), so the static and
-generated halves of the package meet only at that seam.
+This module never imports the generated ``models``; ``submit`` and
+``submit_all`` take any ``Request``, the protocol naming what every
+generated request model carries (the ``TRANSFORMATION`` class attribute
+and the ``to_args_named`` method), so the static and generated halves
+of the package meet only at that seam.
 """
 
 from __future__ import annotations
@@ -22,12 +23,21 @@ import os
 import subprocess
 import threading
 import tempfile
-from typing import IO, Callable, TypeVar
+from typing import IO, Callable, ClassVar, Protocol, Sequence, TypeVar
 
 from . import envelopes
 
 _Verdict = TypeVar("_Verdict")
 _T = TypeVar("_T")
+
+
+class Request(Protocol):
+    """A generated request model: its class names the transformation,
+    its fields encode themselves."""
+
+    TRANSFORMATION: ClassVar[str]
+
+    def to_args_named(self) -> dict[str, object]: ...
 
 
 # Flags whose VALUE is a credential. It must never appear in a raised
@@ -48,6 +58,18 @@ def _redact_argv(args: list[str]) -> str:
             parts.append(arg)
             redact_next = arg in _CREDENTIAL_FLAGS
     return " ".join(parts)
+
+
+def _act_rows(acts: Sequence[tuple[Request, str]]) -> list[dict[str, object]]:
+    """The batch rows ``transact`` takes, one per (request, actor)."""
+    return [
+        {
+            "transformation": request.TRANSFORMATION,
+            "actor": actor,
+            "args_named": request.to_args_named(),
+        }
+        for request, actor in acts
+    ]
 
 
 def _text(output: str | bytes | None) -> str:
@@ -152,12 +174,14 @@ class Morpholog:
     """A typed client over the ``morpholog`` CLI: arguments in, parsed
     envelope dataclasses out.
 
-    Constructed directly it is unchecked: it runs whatever binary and file
-    it is given. The generated ``open_client`` checks both once, immediately
+    Constructed directly without either pin it is unchecked: it runs
+    whatever binary and file it is given. The generated ``open_client`` checks both once, immediately
     before the first call: a binary of another version than the package was
     generated for, or a file whose rules are not the ones it was generated
     from, is refused. That check parses the file even ahead of a call that
-    needs no programme, such as ``init`` or ``migrate``.
+    needs no programme, such as ``init`` or ``migrate``. ``expected_version``
+    and ``expected_model_hash`` are that same check for a client constructed
+    or subclassed directly; both names are part of the pinned client surface.
 
     ``binary`` resolves as: explicit argument, then the
     ``MORPHOLOG_BIN`` environment variable, then ``morpholog`` on
@@ -191,6 +215,8 @@ class Morpholog:
         # until then, ``True`` once it agreed, or the error a mismatch
         # raised, raised again on every later call.
         self._checked: bool | MorphologError | None = None
+        # The report the check read, until the first ``hash()`` takes it.
+        self._checked_report: envelopes.HashReport | None = None
         self._check_lock = threading.Lock()
 
     # ------------------------------------------------------------
@@ -258,6 +284,7 @@ class Morpholog:
                 )
                 raise self._checked
             self._checked = True
+            self._checked_report = report
 
     def _run_raw(
         self,
@@ -268,7 +295,8 @@ class Morpholog:
         stdout: IO[bytes] | None = None,
     ) -> subprocess.CompletedProcess[str]:
         """The one ``subprocess.run``. A timeout is operational, not a
-        decided outcome, so it raises ``MorphologError``. ``stdout``, when
+        decided outcome, so it raises ``MorphologError``; so is a binary
+        that cannot start (missing, not executable). ``stdout``, when
         given, receives the output instead of memory."""
         try:
             return subprocess.run(
@@ -279,6 +307,10 @@ class Morpholog:
                 input=stdin,
                 timeout=timeout,
             )
+        except OSError as exc:
+            raise MorphologError(
+                f"`{self.binary} {_redact_argv(args)}` failed to start: {exc}"
+            ) from None
         except subprocess.TimeoutExpired as exc:
             raise MorphologTimeout(
                 f"`{self.binary} {_redact_argv(args)}` timed out after {timeout}s",
@@ -325,6 +357,7 @@ class Morpholog:
         least_privilege: bool = False,
         reset: bool = False,
         i_know_this_deletes_data: bool = False,
+        role_prefix: str | None = None,
     ) -> envelopes.InitReport:
         """Provision the Morpholog tables.
 
@@ -333,6 +366,12 @@ class Morpholog:
         it. Both flags are passed straight through, so the pairing is
         enforced in one place - the binary - rather than re-implemented
         here where it could drift.
+
+        `role_prefix` names the deployment's roles `<prefix>writer` and
+        `<prefix>reader`, which the report's `least_privilege` carries.
+        Roles belong to the whole cluster, so a second deployment on one
+        needs its own. It goes with `least_privilege`; the binary refuses
+        it alone, and refuses an unlawful prefix.
         """
         args = ["init", "--database-url", self.database_url]
         if skip_if_exists:
@@ -343,6 +382,8 @@ class Morpholog:
             args.append("--reset")
         if i_know_this_deletes_data:
             args.append("--i-know-this-deletes-data")
+        if role_prefix is not None:
+            args.extend(["--role-prefix", role_prefix])
         return envelopes.InitReport.from_json(self._json(*args))
 
     def migrate(self, *, check: bool = False) -> envelopes.MigrationReport:
@@ -376,6 +417,7 @@ class Morpholog:
         self,
         *,
         dry_run: bool = False,
+        check: bool = False,
         prune: bool = False,
         with_programs: list[str] | None = None,
         timeout: float | None = None,
@@ -398,6 +440,12 @@ class Morpholog:
             if report.has_conflict:
                 ...
 
+        `check` plans and changes nothing, as `dry_run` does; a deploy step
+        gates on whether anything is outstanding:
+
+            if not client.provision_indexes(check=True).is_current:
+                ...
+
         ``timeout`` bounds this one call and defaults to unbounded,
         ignoring the client-wide timeout: an index build over a large
         table is the legitimate long case. A build cut short leaves an
@@ -407,6 +455,8 @@ class Morpholog:
         args.extend(["--database-url", self.database_url, "--json"])
         if dry_run:
             args.append("--dry-run")
+        if check:
+            args.append("--check")
         if prune:
             args.append("--prune")
         proc = self._run(args, timeout=timeout)
@@ -415,6 +465,14 @@ class Morpholog:
         return envelopes.ProvisionReport.from_json(json.loads(proc.stdout))
 
     def hash(self) -> envelopes.HashReport:
+        """The stamps the binary reports for the file. The first call after
+        the pinned check returns the report that check read, without a
+        second spawn; every later call asks the binary again."""
+        self._ensure_compatible()
+        with self._check_lock:
+            kept, self._checked_report = self._checked_report, None
+        if kept is not None:
+            return kept
         return envelopes.HashReport.from_json(self._json("hash", self.file))
 
     def check(self, strict: bool = False) -> envelopes.CheckReport:
@@ -452,14 +510,14 @@ class Morpholog:
         return self._commit(args, None, self.timeout, envelopes.parse_run_outcome)
 
     def submit(
-        self, request: object, actor: str, explain_on_reject: bool = False
+        self, request: Request, actor: str, explain_on_reject: bool = False
     ) -> envelopes.Committed | envelopes.Rejected:
         """Commit a generated request model: its class names the
         transformation, its fields encode themselves."""
         return self.propose(
-            request.TRANSFORMATION,  # type: ignore[attr-defined]
+            request.TRANSFORMATION,
             actor,
-            request.to_args_named(),  # type: ignore[attr-defined]
+            request.to_args_named(),
             explain_on_reject=explain_on_reject,
         )
 
@@ -579,6 +637,13 @@ class Morpholog:
         args = ["transact", self.file, "--acts", "-", "--database-url", self.database_url]
         return self._commit(args, ndjson, timeout, envelopes.parse_atomic_outcome)
 
+    def submit_all(
+        self, acts: Sequence[tuple[Request, str]], timeout: float | None = None
+    ) -> envelopes.AtomicCommitted | envelopes.AtomicRejected:
+        """``transact`` over generated request models, each with the
+        actor who proposes it: every act commits or none does."""
+        return self.transact(_act_rows(acts), timeout)
+
     def _commit(
         self,
         args: list[str],
@@ -643,26 +708,27 @@ class Morpholog:
     # Reading governed state back.
     # ------------------------------------------------------------
 
-    def claims(self, *predicates: str, as_of: str | None = None) -> list[envelopes.ClaimInstance]:
+    def claims(self, *predicates: str, as_of: str | None = None) -> list[envelopes.ClaimRead]:
         """The bare read: the claims table is the authority, an unknown
         predicate matches nothing. Tagged args decoded to bare values.
+        Each claim names the transition that made it present.
 
         `as_of` reads the claims as they were at a past moment - a
         transition id, or an RFC 3339 timestamp resolved to the last
         transition committed at or before it.
         """
-        return self._claims(predicates, named=False, as_of=as_of)
+        return self._claims(predicates, envelopes.ClaimRead.from_json, named=False, as_of=as_of)
 
     def claims_named(
         self,
         *predicates: str,
         as_of: str | None = None,
         where: dict[str, str] | None = None,
-    ) -> list[envelopes.NamedClaim]:
+    ) -> list[envelopes.NamedClaimRead]:
         """The named read: the programme is the authority, skew is a
         hard error on the binary side. Values stay wire-true; the
-        generated read models parse them by declared kind. `as_of` as
-        on ``claims``.
+        generated read models parse them by declared kind. `as_of` and
+        `asserted_in` as on ``claims``.
 
         `where` narrows by argument value - ``where={"invoice_id": "inv_1"}``
         - so rows that cannot match are never transferred or decoded.
@@ -673,26 +739,30 @@ class Morpholog:
         an empty list. Filtering runs in the database except under
         `as_of`, where the state is replayed first.
         """
-        return self._claims(predicates, named=True, as_of=as_of, where=where)
+        return self._claims(
+            predicates, envelopes.NamedClaimRead.from_json, named=True, as_of=as_of, where=where
+        )
 
     def _claims(
         self,
         predicates: tuple[str, ...],
+        parse: Callable[[object], _T],
         named: bool,
         as_of: str | None,
         where: dict[str, str] | None = None,
-    ) -> list[envelopes.ClaimInstance | envelopes.NamedClaim]:
+    ) -> list[_T]:
         argv = ["inspect", "claims"]
         argv += self._repeat("--predicate", list(predicates))
         argv += self._opt("--as-of", as_of)
         argv += self._repeat("--where", [f"{k}={v}" for k, v in (where or {}).items()])
-        cls = envelopes.NamedClaim if named else envelopes.ClaimInstance
         if named:
             argv += ["--named", self.file]
         payload = self._json(*argv, "--database-url", self.database_url)
-        return [cls.from_json(c) for c in payload]
+        return envelopes.parse_list(payload, parse)
 
-    def rejections(self, *, limit: int = 100) -> list[envelopes.RejectionRow]:
+    def rejections(
+        self, *, limit: int = 100, mentions: str | None = None
+    ) -> list[envelopes.RejectionRow]:
         """The most recent refusals, newest first, with the values the refused
         rule was reading where the kernel could pin them.
 
@@ -705,16 +775,20 @@ class Morpholog:
         refusal unrecorded; audit remains the only legitimacy-grade record.
         Read a row as a lead to follow, and never as proof of what did or
         did not happen.
+
+        ``mentions`` keeps only the refusals naming that subject in their
+        arguments, witness or compared values; ``limit`` then counts those.
         """
         payload = self._json(
             "inspect",
             "rejections",
+            *self._mentions(mentions),
             "--limit",
             str(limit),
             "--database-url",
             self.database_url,
         )
-        return [envelopes.RejectionRow.from_json(r) for r in payload]
+        return envelopes.parse_list(payload, envelopes.RejectionRow.from_json)
 
     def derived(self, name: str, *, as_of: str | None = None) -> list[envelopes.ClaimInstance]:
         """Compute a read-side view (a derived claim) directly from the
@@ -727,7 +801,7 @@ class Morpholog:
         the last transition committed at or before it. Diffing the same
         view at two coordinates is the correction blast-radius read.
         """
-        return self._derived(name, named=False, as_of=as_of)
+        return self._derived(name, envelopes.ClaimInstance.from_json, named=False, as_of=as_of)
 
     def derived_named(
         self, name: str, *, as_of: str | None = None, where: dict[str, str] | None = None
@@ -741,26 +815,32 @@ class Morpholog:
         the work - unlike the claims read, which pushes the comparison
         into the database.
         """
-        return self._derived(name, named=True, as_of=as_of, where=where)
+        return self._derived(
+            name, envelopes.NamedClaim.from_json, named=True, as_of=as_of, where=where
+        )
 
     def _derived(
         self,
         name: str,
+        parse: Callable[[object], _T],
         named: bool,
         as_of: str | None,
         where: dict[str, str] | None = None,
-    ) -> list[envelopes.ClaimInstance | envelopes.NamedClaim]:
+    ) -> list[_T]:
         argv = ["inspect", "derived", self.file, name]
-        cls = envelopes.NamedClaim if named else envelopes.ClaimInstance
         if named:
             argv.append("--named")
         argv += self._opt("--as-of", as_of)
         argv += self._repeat("--where", [f"{k}={v}" for k, v in (where or {}).items()])
         payload = self._json(*argv, "--database-url", self.database_url)
-        return [cls.from_json(c) for c in payload]
+        return envelopes.parse_list(payload, parse)
 
     def audit(
-        self, after: str | None = None, *, writer_roles: list[str] | None = None
+        self,
+        after: str | None = None,
+        *,
+        writer_roles: list[str] | None = None,
+        mentions: str | None = None,
     ) -> list[envelopes.AuditRow]:
         """The audit tail: committed transitions in commit order, one
         ``AuditRow`` per NDJSON line. ``after`` resumes strictly after
@@ -774,27 +854,53 @@ class Morpholog:
         against the catalog; superuser writes are the residue the
         assertion explicitly accepts, and role grants, memberships,
         and login attributes must stay unchanged until the command
-        establishes its read snapshot."""
+        establishes its read snapshot.
+
+        ``mentions`` keeps only the transitions naming that subject in
+        their arguments, claims or intents. ``after`` and the watermark
+        apply as without it, so a filtered tail withholds and resumes
+        exactly as the whole one; a sparse subject means the binary
+        walks the tail to find it, and an empty result moves no cursor."""
         return [
             envelopes.AuditRow.from_json(row)
-            for row in self._audit_lines(after, named=False, writer_roles=writer_roles)
+            for row in self._audit_lines(
+                after, named=False, writer_roles=writer_roles, mentions=mentions
+            )
         ]
 
     def audit_named(
-        self, after: str | None = None, *, writer_roles: list[str] | None = None
+        self,
+        after: str | None = None,
+        *,
+        writer_roles: list[str] | None = None,
+        mentions: str | None = None,
     ) -> list[envelopes.AuditRowNamed]:
         """The audit tail with asserted/retracted claims decoded by
         declared field name under this programme's authority (skew is
         a hard error on the binary side). ``arguments`` and intent
         payloads stay positional - a different vocabulary.
-        ``writer_roles`` as on ``audit``."""
+        ``writer_roles`` and ``mentions`` as on ``audit``."""
         return [
             envelopes.AuditRowNamed.from_json(row)
-            for row in self._audit_lines(after, named=True, writer_roles=writer_roles)
+            for row in self._audit_lines(
+                after, named=True, writer_roles=writer_roles, mentions=mentions
+            )
         ]
 
+    @staticmethod
+    def _mentions(subject: str | None) -> list[str]:
+        if subject is None:
+            return []
+        if subject == "":
+            raise ValueError("mentions needs a subject; an empty one names nothing")
+        return ["--mentions", subject]
+
     def _audit_lines(
-        self, after: str | None, named: bool, writer_roles: list[str] | None = None
+        self,
+        after: str | None,
+        named: bool,
+        writer_roles: list[str] | None = None,
+        mentions: str | None = None,
     ) -> list[dict[str, object]]:
         # Not _invoke: an empty tail is a lawful empty stdout, not a
         # protocol violation - so the discrimination here is on the
@@ -804,6 +910,7 @@ class Morpholog:
             argv.extend(["--after", after])
         if named:
             argv.extend(["--named", self.file])
+        argv += self._mentions(mentions)
         argv += self._repeat("--writer-role", writer_roles)
         argv.extend(["--database-url", self.database_url])
         proc = self._run(argv, timeout=self.timeout)
@@ -1115,6 +1222,62 @@ class Morpholog:
             args.extend(["--require-signing-key", str(require_signing_key)])
         return args
 
+    def audit_receipt(
+        self, derived: str, pack_file: str, path: str
+    ) -> envelopes.EvaluationReceipt:
+        """State what the derived read ``derived`` gives under this
+        client's programme over a complete-prefix pack, as a receipt
+        written to ``path`` - offline, no database. The file holds the
+        binary's output byte for byte and is written only once a receipt
+        was issued. A pack that does not verify as intact or is not a
+        complete prefix, or a read the programme does not derive, is an
+        operational error."""
+        text = self._invoke(
+            "audit", "receipt", self.file, "--pack", str(pack_file), "--derived", derived
+        )
+        receipt = envelopes.EvaluationReceipt.from_json(json.loads(text))
+        with open(path, "w", encoding="utf-8") as out:
+            out.write(text)
+        return receipt
+
+    def audit_verify_receipt(
+        self,
+        receipt_file: str,
+        pack_file: str,
+        anchor_file: str | None = None,
+        require_signatures: bool = False,
+        *,
+        require_signatures_from: int | None = None,
+        require_signing_key: str | None = None,
+        witnesses: bool = False,
+        trusted_tsa_file: str | None = None,
+    ) -> envelopes.ReceiptVerificationReport:
+        """Check a receipt offline by recomputing it under this client's
+        programme over a complete-prefix pack covering exactly the
+        receipt's checkpoint. The pack is verified as by
+        ``audit_verify_pack``, with the same trust arguments; a refused
+        receipt is a decided report, layer by layer, not an exception. It
+        proves the receipt's statement follows from that history and
+        programme, not that the receipt is the one originally issued."""
+        args = [
+            "audit",
+            "verify-receipt",
+            self.file,
+            "--receipt",
+            str(receipt_file),
+            "--pack",
+            str(pack_file),
+        ]
+        args += self._pack_trust_args(
+            anchor_file,
+            require_signatures,
+            require_signatures_from,
+            require_signing_key,
+            witnesses,
+            trusted_tsa_file,
+        )
+        return envelopes.ReceiptVerificationReport.from_json(self._json(*args))
+
     def _verify_pack(
         self,
         parse_verdict: Callable[[object], _Verdict],
@@ -1127,6 +1290,26 @@ class Morpholog:
         trusted_tsa_file: str | None,
     ) -> envelopes.PackVerificationReport[_Verdict]:
         args = ["audit", "verify-pack", str(pack_file)]
+        args += self._pack_trust_args(
+            anchor_file,
+            require_signatures,
+            require_signatures_from,
+            require_signing_key,
+            witnesses,
+            trusted_tsa_file,
+        )
+        return envelopes.PackVerificationReport.from_json(self._json(*args), parse_verdict)
+
+    def _pack_trust_args(
+        self,
+        anchor_file: str | None,
+        require_signatures: bool,
+        require_signatures_from: int | None,
+        require_signing_key: str | None,
+        witnesses: bool,
+        trusted_tsa_file: str | None,
+    ) -> list[str]:
+        args = []
         if anchor_file is not None:
             args.extend(["--anchor-file", str(anchor_file)])
         args.extend(
@@ -1138,7 +1321,7 @@ class Morpholog:
             args.append("--witnesses")
         if trusted_tsa_file is not None:
             args.extend(["--trusted-tsa-file", str(trusted_tsa_file)])
-        return envelopes.PackVerificationReport.from_json(self._json(*args), parse_verdict)
+        return args
 
     # ------------------------------------------------------------
     # The outbox lease protocol.

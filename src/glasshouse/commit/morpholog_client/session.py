@@ -35,14 +35,19 @@ import queue
 import subprocess
 import threading
 import time
+from typing import Callable, Sequence, TypeVar
 
 from . import envelopes
 from .adapter import (
     MorphologError,
     MorphologOutcomeUnknown,
     MorphologRequestError,
+    Request,
+    _act_rows,
     _redact_argv,
 )
+
+_T = TypeVar("_T")
 
 #: The wire version this client speaks; the ready line must agree.
 PROTOCOL = 1
@@ -68,7 +73,9 @@ class _ResponseContract(Exception):
         self.detail = detail
 
 
-def _decode_atomic(payload: object, expected_row: int) -> object:
+def _decode_atomic(
+    payload: object, expected_row: int
+) -> envelopes.AtomicCommitted | envelopes.AtomicRejected:
     """The transact decoder: the one atomic outcome, matched to the row
     THIS caller sent (the session adds it beside the outcome)."""
     if not isinstance(payload, dict) or payload.get("row") != expected_row:
@@ -86,7 +93,9 @@ def _decode_atomic(payload: object, expected_row: int) -> object:
         ) from None
 
 
-def _decode_receipt(payload: object, expected_row: int) -> object:
+def _decode_receipt(
+    payload: object, expected_row: int
+) -> envelopes.Committed | envelopes.Rejected:
     """The propose decoder: parse the receipt, match it to the row
     THIS caller sent, and refuse an error receipt where an outcome
     belongs (errors answer through the session's own path). Every check reads
@@ -113,18 +122,18 @@ def _decode_receipt(payload: object, expected_row: int) -> object:
     return receipt.outcome
 
 
-def _decode_rows(cls: type):
+def _decode_rows(parse: Callable[[object], _T]) -> Callable[[object, int], list[_T]]:
     """The read decoder: the pinned array shape, then every row
     against its envelope contract."""
 
-    def decode(payload: object, _expected_row: int) -> list[object]:
+    def decode(payload: object, _expected_row: int) -> list[_T]:
         if not isinstance(payload, list):
             raise _ResponseContract(
                 "a read response was not the pinned array shape",
                 f"malformed read response: {payload!r}",
             )
         try:
-            return [cls.from_json(r) for r in payload]
+            return [parse(r) for r in payload]
         except envelopes.EnvelopeError as exc:
             raise _ResponseContract(
                 "a read row did not match the pinned contract",
@@ -132,6 +141,13 @@ def _decode_rows(cls: type):
             ) from None
 
     return decode
+
+
+def _subject(mentions: str | None) -> str | None:
+    """A ``mentions`` filter, refused when empty, as on the one-shot client."""
+    if mentions == "":
+        raise ValueError("mentions needs a subject; an empty one names nothing")
+    return mentions
 
 
 class Session:
@@ -367,7 +383,13 @@ class Session:
     # The one exchange seam.
     # ------------------------------------------------------------
 
-    def _exchange(self, body: dict[str, object], *, commitful: bool, decode) -> object:
+    def _exchange(
+        self,
+        body: dict[str, object],
+        *,
+        commitful: bool,
+        decode: Callable[[object, int], _T],
+    ) -> _T:
         """Write one request line, wait for its one response line, and
         decode it - all in lockstep under the lock. Any break after the
         request has been flushed poisons the session; for a commitful
@@ -466,11 +488,11 @@ class Session:
                     raise MorphologOutcomeUnknown(exc.detail) from None
                 raise MorphologError(exc.detail) from None
             except Exception as exc:
-                # A decoder reaches value codecs that raise their own
-                # types, so the contract cannot be recognised by one
-                # exception class. Anything a decoder throws means the
-                # response was not understood, and a submitted proposal
-                # whose response was not understood is UNDECIDED - the
+                # A broken contract raises EnvelopeError, and a defect in
+                # a decoder must not pass for a decided outcome either:
+                # anything a decoder throws means the response was not
+                # understood, and a submitted proposal whose response was
+                # not understood is UNDECIDED - the
                 # one thing this client must never report as an
                 # ordinary error. BaseException is deliberately not
                 # caught: an interrupt still means what it says.
@@ -517,44 +539,51 @@ class Session:
         return self._exchange(body, commitful=True, decode=_decode_atomic)
 
     def submit(
-        self, request: object, actor: str, explain_on_reject: bool = False
+        self, request: Request, actor: str, explain_on_reject: bool = False
     ) -> envelopes.Committed | envelopes.Rejected:
         """Commit a generated request model through the session: its
         class names the transformation, its fields encode themselves."""
         return self.propose(
-            request.TRANSFORMATION,  # type: ignore[attr-defined]
+            request.TRANSFORMATION,
             actor,
-            request.to_args_named(),  # type: ignore[attr-defined]
+            request.to_args_named(),
             explain_on_reject=explain_on_reject,
         )
 
+    def submit_all(
+        self, acts: Sequence[tuple[Request, str]]
+    ) -> envelopes.AtomicCommitted | envelopes.AtomicRejected:
+        """``transact`` over generated request models, each with the
+        actor who proposes it, as on the one-shot client."""
+        return self.transact(_act_rows(acts))
+
     def claims(
         self, *predicates: str, as_of: str | None = None
-    ) -> list[envelopes.ClaimInstance]:
+    ) -> list[envelopes.ClaimRead]:
         """The bare claims read, as on the one-shot client: the claims
         table is the authority, an unknown predicate matches nothing."""
         body = self._claims_body(predicates, named=False, as_of=as_of)
-        return self._read_rows(body, envelopes.ClaimInstance)
+        return self._read_rows(body, envelopes.ClaimRead.from_json)
 
     def claims_named(
         self,
         *predicates: str,
         as_of: str | None = None,
         where: dict[str, str] | None = None,
-    ) -> list[envelopes.NamedClaim]:
+    ) -> list[envelopes.NamedClaimRead]:
         """The named claims read: the programme the session pinned is
         the authority; skew is a hard session error, not a request
         error."""
         body = self._claims_body(predicates, named=True, as_of=as_of)
         if where:
             body["where"] = dict(where)
-        return self._read_rows(body, envelopes.NamedClaim)
+        return self._read_rows(body, envelopes.NamedClaimRead.from_json)
 
     def derived(self, name: str, *, as_of: str | None = None) -> list[envelopes.ClaimInstance]:
         """Compute a read-side view through the session - always live,
         never the refresh cache, as on the one-shot client."""
         body = self._derived_body(name, named=False, as_of=as_of)
-        return self._read_rows(body, envelopes.ClaimInstance)
+        return self._read_rows(body, envelopes.ClaimInstance.from_json)
 
     def derived_named(
         self, name: str, *, as_of: str | None = None, where: dict[str, str] | None = None
@@ -564,7 +593,113 @@ class Session:
         body = self._derived_body(name, named=True, as_of=as_of)
         if where:
             body["where"] = dict(where)
-        return self._read_rows(body, envelopes.NamedClaim)
+        return self._read_rows(body, envelopes.NamedClaim.from_json)
+
+    def audit(
+        self,
+        after: str | None = None,
+        *,
+        writer_roles: list[str] | None = None,
+        mentions: str | None = None,
+        limit: int | None = None,
+    ) -> list[envelopes.AuditRow]:
+        """The audit tail through the session, as on the one-shot client:
+        committed transitions in commit order, ``after`` resuming strictly
+        after a seen transition id, rows of writers still in flight
+        withheld for a later call and never skipped. ``writer_roles`` and
+        ``mentions`` as on the one-shot client, except that an empty
+        ``writer_roles`` is refused here rather than read as no assertion.
+
+        The answer arrives whole, not streamed, so a resident loop should
+        pass ``limit``: at most that many rows come back, and the next call
+        resumes ``after`` the last of them. A full page does not mean more
+        rows are waiting, and a short one does not mean the tail is done;
+        keep reading until a call returns nothing.
+
+        A database that cannot give a sound resume horizon ends the
+        session rather than answering with a short list."""
+        body = self._audit_body(after, False, writer_roles, mentions, limit)
+        return self._read_rows(body, envelopes.AuditRow.from_json)
+
+    def audit_named(
+        self,
+        after: str | None = None,
+        *,
+        writer_roles: list[str] | None = None,
+        mentions: str | None = None,
+        limit: int | None = None,
+    ) -> list[envelopes.AuditRowNamed]:
+        """``audit`` with asserted and retracted claims decoded by
+        declared field name under the programme the session pinned."""
+        body = self._audit_body(after, True, writer_roles, mentions, limit)
+        return self._read_rows(body, envelopes.AuditRowNamed.from_json)
+
+    def rejections(
+        self, *, limit: int = 100, mentions: str | None = None
+    ) -> list[envelopes.RejectionRow]:
+        """The most recent refusals, newest first, as on the one-shot
+        client, with the values the refused rule was reading where the
+        kernel could pin them.
+
+        **An operational floor, not a ledger.** Writes are at-most-once and
+        happen after rollback, so a storm or an insert failure can leave a
+        refusal unrecorded; audit remains the only legitimacy-grade record.
+        Read a row as a lead to follow, and never as proof of what did or
+        did not happen."""
+        body: dict[str, object] = {"limit": limit, "op": "rejections"}
+        if _subject(mentions) is not None:
+            body["mentions"] = mentions
+        return self._read_rows(body, envelopes.RejectionRow.from_json)
+
+    def ping(self) -> envelopes.SessionReady:
+        """Check the session can reach its database and that the database's
+        recorded migrations still suit its binary, then answer with the
+        ready line again. An answer says both held just now; it does not promise the next
+        proposal will commit. A session that cannot reach its database
+        ends, and this raises like any lost response. A ready line other
+        than the handshake's poisons the session."""
+        return self._exchange({"op": "ping"}, commitful=False, decode=self._decode_ping)
+
+    def _decode_ping(self, payload: object, _expected_row: int) -> envelopes.SessionReady:
+        try:
+            ready = envelopes.SessionReady.from_json(payload)
+        except envelopes.EnvelopeError as exc:
+            raise _ResponseContract(
+                "a ping response did not match the ready line contract",
+                f"malformed ping response: {exc}",
+            ) from None
+        if ready != self.ready:
+            raise _ResponseContract(
+                "a ping answered with another ready line",
+                f"the session answered a ping with {ready}, not its handshake's {self.ready}",
+            )
+        return ready
+
+    def _audit_body(
+        self,
+        after: str | None,
+        named: bool,
+        writer_roles: list[str] | None,
+        mentions: str | None,
+        limit: int | None,
+    ) -> dict[str, object]:
+        body: dict[str, object] = {"op": "audit"}
+        if after is not None:
+            body["after"] = after
+        if named:
+            body["named"] = True
+        if _subject(mentions) is not None:
+            body["mentions"] = mentions
+        if writer_roles is not None:
+            if not writer_roles:
+                raise ValueError(
+                    "writer_roles asserts who writes audit; an empty list asserts nothing, "
+                    "so pass None for the default horizon"
+                )
+            body["writer_roles"] = list(writer_roles)
+        if limit is not None:
+            body["limit"] = limit
+        return body
 
     def _claims_body(
         self, predicates: tuple[str, ...], named: bool, as_of: str | None
@@ -586,9 +721,9 @@ class Session:
             body["as_of"] = as_of
         return body
 
-    def _read_rows(self, body: dict[str, object], cls: type) -> list[object]:
+    def _read_rows(self, body: dict[str, object], parse: Callable[[object], _T]) -> list[_T]:
         """One read exchange, decoded into `cls` rows under the lock. A
         row that does not match the pinned contract poisons the
         session: the framing is intact, but a binary/client contract
         mismatch will not heal on the next call."""
-        return self._exchange(body, commitful=False, decode=_decode_rows(cls))
+        return self._exchange(body, commitful=False, decode=_decode_rows(parse))

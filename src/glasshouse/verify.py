@@ -116,7 +116,12 @@ def _model_leg(client: GlasshouseClient) -> Leg:
     # file replaced under a long-lived client, the web app's for one, is
     # not its concern by upstream's own contract). verify is continuing
     # attestation, so the leg compares the live report against both
-    # committed stamps every time it runs.
+    # committed stamps every time it runs. From v0.0.15 the first `hash()`
+    # after that check returns the report the check read, however long
+    # ago (the web app's check runs at its first audit tail), and only
+    # later calls ask the binary again; so the leg asks twice and judges
+    # the second, which is always fresh (contract section 29).
+    client.hash()
     report = client.hash()
     agreed = report.hash == MODEL_HASH and report.morpholog_version == MORPHOLOG_VERSION
     if agreed:

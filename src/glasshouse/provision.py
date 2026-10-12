@@ -93,7 +93,14 @@ def reconcile_indexes(client: GlasshouseClient) -> envelopes.ProvisionReport:
     the exit code, and a conflict (an object under Morpholog's own name
     with another definition) applies nothing and needs an operator, so it
     refuses here rather than rendering as a completed deploy. Prune is
-    right because Glasshouse is the only programme on its database."""
+    right because Glasshouse is the only programme on its database.
+
+    Then `provision indexes --check`, which changes nothing and passes
+    only when every index and statistics object the programme needs is
+    in place: upstream's deploy sequence runs it after every apply and
+    before anything writes again (v0.0.15 `migrate` ends by naming it),
+    and this is the pre-deploy step, so an incomplete apply fails the
+    deploy here instead of surfacing as a walk under the lock later."""
     report = client.provision_indexes(prune=True)
     if report.has_conflict or not report.applied:
         entries: Iterable[ProvisionedIndex | ProvisionedStatistics] = chain(
@@ -112,6 +119,20 @@ def reconcile_indexes(client: GlasshouseClient) -> envelopes.ProvisionReport:
                 if conflicts
                 else " and reported no conflict; read the binary's own report"
             )
+        )
+    checked = client.provision_indexes(check=True)
+    if not checked.is_current:
+        planned: Iterable[ProvisionedIndex | ProvisionedStatistics] = chain(
+            checked.indexes, checked.statistics
+        )
+        outstanding = [
+            f"{entry.name} ({entry.action.replace('_', ' ')})"
+            for entry in planned
+            if entry.action not in ("keep", "satisfied_externally")
+        ]
+        raise ProvisionError(
+            "provision indexes applied, but its check still finds work outstanding: "
+            + "; ".join(outstanding)
         )
     return report
 

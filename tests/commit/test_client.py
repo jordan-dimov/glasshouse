@@ -25,6 +25,7 @@ NAMED_OFFICIAL_CURVE = json.dumps(
                 "as_of": "2026-06-08",
                 "version": "crv-v1",
             },
+            "asserted_in": "0197-transition-id",
         }
     ]
 )
@@ -58,6 +59,7 @@ def test_verify_passes_the_views_schema_flag_through(tmp_path: Path) -> None:
     # so this now pins the surface we depend on rather than a bridge.
     report_json = json.dumps(
         {
+            "passes": True,
             "replay": {"status": "consistent", "transitions": 1, "claims": 1},
             "tree": {"status": "intact", "checkpoints": 0, "tree_size": 0},
             "role_rebindings": {"status": "not_evaluated"},
@@ -77,6 +79,7 @@ def test_verify_without_the_flag_matches_the_generated_call(tmp_path: Path) -> N
     # generated body it mirrors.
     report_json = json.dumps(
         {
+            "passes": True,
             "replay": {"status": "consistent", "transitions": 1, "claims": 1},
             "tree": {"status": "intact", "checkpoints": 0, "tree_size": 0},
             "role_rebindings": {"status": "not_evaluated"},

@@ -111,21 +111,24 @@ predicate TradeValued(org: Subject, book: Subject, trade: Subject, curve_version
 invariant terms_belong_to_captured_trade:
     TradeTerms(org: org, trade: trade, ..) implies TradeCaptured(org: org, trade: trade, ..)
 
--- A trade for nothing, or for negative power, is not a trade. The trade
--- is named for the same reason as in delivery_period_is_ordered below:
--- the case of a single-pattern rule is what its pattern binds, and a
--- quantity is shared by many trades.
+-- A trade for nothing, or for negative power, is not a trade. The terms
+-- version is named for the same reason as in delivery_period_is_ordered
+-- below: the case of a single-pattern rule is what its pattern binds,
+-- and a quantity is shared by many trades.
 invariant quantity_is_positive:
-    TradeTerms(trade: trade, quantity: qty, ..) implies qty > 0 MW
+    TradeTerms(trade: trade, version: version, quantity: qty, ..) implies qty > 0 MW
 
--- A delivery period is a real interval on the timeline. The trade is
--- named so the rule's case is one trade's own terms: a case-bound check
--- is keyed on the variables the pattern binds, and a delivery window is
+-- A delivery period is a real interval on the timeline. The terms
+-- version is named so the rule's case is one row: a case-bound check is
+-- keyed on the variables the pattern binds, and a delivery window is
 -- shared by every trade on the same product, so binding only the two
 -- instants put every such trade in one case and the check read them all
--- under one lock (contract sections 27 and 28, morpholog#396).
+-- under one lock (contract sections 27 and 28, morpholog#396). Naming
+-- the trade narrowed the case to one trade's versions; naming `version`,
+-- the predicate's `unique by` key, narrows it to the one row a proposal
+-- asserts (`check --strict` requires it from v0.0.14, section 29).
 invariant delivery_period_is_ordered:
-    TradeTerms(trade: trade, delivery_start: delivery_start, delivery_end: delivery_end, ..)
+    TradeTerms(trade: trade, version: version, delivery_start: delivery_start, delivery_end: delivery_end, ..)
     implies delivery_start strictly_before delivery_end
 
 -- The official pointer can never name a version that was not
