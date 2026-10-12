@@ -81,11 +81,38 @@ class Leg:
 
 @dataclass(frozen=True)
 class VerifyReport:
+    """Six verdicts on consistency, plus one on readiness, kept apart.
+
+    `ok` says the operational database agrees with the ledger as far as
+    each leg has read it. It does not say the projections are complete:
+    a projector that has consumed 0 of 32 transitions agrees with the
+    empty prefix it consumed. `caught_up` is that second question,
+    answered against the ledger's own count: `None` when the count was
+    unavailable. Lag is not corruption, so `ok` (and the CLI's exit code)
+    ignores it; whatever needs completeness asks `caught_up`, or, like
+    the seed, checks completeness at the moment it matters."""
+
     legs: tuple[Leg, ...]
+    # Transitions the ledger holds beyond what the projections have
+    # consumed; None when the ledger's count could not be read.
+    projection_lag: int | None = None
 
     @property
     def ok(self) -> bool:
         return all(leg.ok for leg in self.legs)
+
+    @property
+    def caught_up(self) -> bool | None:
+        return None if self.projection_lag is None else self.projection_lag == 0
+
+    def readiness(self) -> str:
+        match self.caught_up:
+            case None:
+                return "unknown (the ledger's transition count was unavailable)"
+            case True:
+                return "caught up"
+            case False:
+                return f"NOT caught up ({self.projection_lag} transition(s) not yet projected)"
 
     def render(self) -> str:
         verdict = "consistent" if self.ok else "DIVERGENT"
@@ -93,6 +120,7 @@ class VerifyReport:
         lines += [
             f"  {'ok' if leg.ok else 'FAIL':<4} {leg.name:<12} {leg.detail}" for leg in self.legs
         ]
+        lines.append(f"  readiness: {self.readiness()}")
         return "\n".join(lines)
 
 
@@ -228,7 +256,7 @@ def _views_leg(engine: sa.Engine, seal: ViewsVerification | None) -> Leg:
 
 def _projection_leg(
     client: GlasshouseClient, engine: sa.Engine, ledger_transitions: int | None = None
-) -> Leg:
+) -> tuple[Leg, int | None]:
     # One REPEATABLE READ snapshot for the cursor AND the tables: the
     # projector advances both atomically, so a consistent snapshot of
     # our schema is internally coherent whatever a concurrent catch-up
@@ -252,8 +280,9 @@ def _projection_leg(
     try:
         replayed = replay(client, up_to=up_to)
     except ProjectionError as corruption:
-        return Leg("projections", False, str(corruption))
+        return Leg("projections", False, str(corruption)), None
     expected = replayed.tables
+    behind = None if ledger_transitions is None else ledger_transitions - replayed.transitions
 
     problems = []
     # Every table in the app schema's projection metadata is compared,
@@ -269,7 +298,7 @@ def _projection_leg(
         if missing or unexpected:
             problems.append(f"{name}: {missing} missing, {unexpected} unexpected")
     if problems:
-        return Leg("projections", False, "; ".join(problems))
+        return Leg("projections", False, "; ".join(problems)), behind
     total = sum(len(rows) for rows in expected.values())
     # Lag is not divergence (a live projector trails by a poll), so the
     # leg stays ok, but it says how far: "0 rows match" over an empty
@@ -279,11 +308,13 @@ def _projection_leg(
     # resume horizon can shorten.
     lag = ""
     if ledger_transitions is not None:
-        behind = ledger_transitions - replayed.transitions
         lag = f"; {replayed.transitions} of {ledger_transitions} transition(s) projected" + (
             f", {behind} not yet" if behind else ""
         )
-    return Leg("projections", True, f"{total} row(s) match a replay up to the cursor{lag}")
+    return (
+        Leg("projections", True, f"{total} row(s) match a replay up to the cursor{lag}"),
+        behind,
+    )
 
 
 def _payload_leg(client: GlasshouseClient, store: CurveStore) -> Leg:
@@ -350,13 +381,19 @@ def verify(client: GlasshouseClient, engine: sa.Engine, store: CurveStore) -> Ve
         tree = Leg("tree", False, unavailable)
         seal = None
         transitions = None
-    return VerifyReport(
-        (
-            _guarded("model", partial(_model_leg, client)),
-            ledger,
-            tree,
-            _guarded("projections", partial(_projection_leg, client, engine, transitions)),
-            _guarded("payloads", partial(_payload_leg, client, store)),
-            _guarded("views", partial(_views_leg, engine, seal)),
-        )
+    lag: int | None = None
+
+    def projections() -> Leg:
+        nonlocal lag
+        leg, lag = _projection_leg(client, engine, transitions)
+        return leg
+
+    legs = (
+        _guarded("model", partial(_model_leg, client)),
+        ledger,
+        tree,
+        _guarded("projections", projections),
+        _guarded("payloads", partial(_payload_leg, client, store)),
+        _guarded("views", partial(_views_leg, engine, seal)),
     )
+    return VerifyReport(legs, projection_lag=lag)

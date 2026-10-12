@@ -278,6 +278,24 @@ def test_the_report_renders_verdict_first() -> None:
     assert "FAIL ledger" in rendered
 
 
+def test_readiness_is_its_own_verdict_beside_consistency() -> None:
+    # Consistency and completeness are different questions: projections
+    # that consumed 0 of 32 transitions agree with the prefix they read,
+    # so the report stays ok, and says plainly that it is not caught up.
+    legs = (Leg("projections", True, "0 row(s) match"),)
+    behind = VerifyReport(legs, projection_lag=32)
+    assert behind.ok
+    assert behind.caught_up is False
+    assert behind.render().splitlines()[-1] == (
+        "  readiness: NOT caught up (32 transition(s) not yet projected)"
+    )
+    assert VerifyReport(legs, projection_lag=0).caught_up is True
+    assert VerifyReport(legs, projection_lag=0).readiness() == "caught up"
+    unknown = VerifyReport(legs)
+    assert unknown.caught_up is None
+    assert "unknown" in unknown.readiness()
+
+
 def test_an_old_pack_is_told_to_be_exported_again(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:

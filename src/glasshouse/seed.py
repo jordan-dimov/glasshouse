@@ -358,16 +358,20 @@ def project_everything(
             raise SeedError(
                 f"seeded, but the audit tail delivered {applied} of {expected} transition(s) "
                 f"within {patience:g} s, so the projections would not be complete. The tail "
-                "withholds rows while any session in this database holds a transaction "
-                f"older than them: {_tail_holders(engine)}"
+                "withholds every row younger than the oldest open transaction in this "
+                "database. Potential horizon blockers, oldest first (the oldest is the "
+                f"likely one): {_tail_holders(engine)}"
             )
         time.sleep(1.0)
 
 
 def _tail_holders(engine: sa.Engine) -> str:
-    """The open transactions that hold the tail's horizon back, oldest
-    first, as an operator can act on them. Best effort: a role that
-    cannot see other sessions gets a pointer instead."""
+    """The open transactions that may hold the tail's horizon back,
+    oldest first, as an operator can act on them. Potential, not proven:
+    this applies the binary's eligibility (this database, not this
+    session, not autovacuum) but not its watermark comparison, so a
+    younger transaction listed here may be innocent. Best effort: a role
+    that cannot see other sessions gets a pointer instead."""
     try:
         with engine.connect().execution_options(isolation_level="AUTOCOMMIT") as connection:
             rows = connection.execute(

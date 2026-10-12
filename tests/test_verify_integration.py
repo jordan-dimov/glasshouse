@@ -168,6 +168,7 @@ def test_a_consistent_stack_verifies_with_six_ok_legs(
     # The projection leg names its coverage against the ledger's own
     # count: current, so every transition the ledger holds is projected.
     assert re.search(r"(\d+) of \1 transition\(s\) projected$", _leg(report, "projections").detail)
+    assert report.caught_up is True
 
     # And through the CLI seam, with the verdict as the exit code.
     assert cli.main(["verify", "--database-url", DB]) == 0
@@ -406,7 +407,10 @@ def test_projections_behind_the_ledger_are_lag_and_say_so(
                     sa.insert(table).values(dict(zip(table.columns.keys(), row, strict=True)))
                 )
     try:
-        leg = _leg(verify(morpholog, engine, store), "projections")
+        report = verify(morpholog, engine, store)
+        assert report.ok  # consistent with the prefix it consumed...
+        assert report.caught_up is False  # ...and not complete, said separately
+        leg = _leg(report, "projections")
         assert leg.ok, leg.detail
         match = re.search(r"1 of (\d+) transition\(s\) projected, (\d+) not yet$", leg.detail)
         assert match, leg.detail

@@ -495,3 +495,14 @@ def test_the_ago_filter_speaks_in_the_coarsest_honest_unit() -> None:
     assert _ago(now - dt.timedelta(days=9), now=now) == "9d ago"
     # A clock ahead of the database is shown as itself, not as "just now".
     assert _ago(now + dt.timedelta(minutes=1), now=now) == "ahead of this clock"
+
+
+def test_the_verify_fragment_shows_readiness_beside_the_verdict() -> None:
+    legs = (Leg("projections", True, "0 row(s) match a replay up to the cursor"),)
+    fragment = templates.env.get_template("partials/verify_report.html")
+    behind = fragment.render(report=VerifyReport(legs, projection_lag=32))
+    assert "Verification: consistent" in behind
+    assert "badge--quarantined" in behind
+    assert "NOT caught up (32 transition(s) not yet projected)" in behind
+    assert "badge--ok" in fragment.render(report=VerifyReport(legs, projection_lag=0))
+    assert "badge--draft" in fragment.render(report=VerifyReport(legs))
