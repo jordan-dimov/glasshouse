@@ -4,6 +4,7 @@ restored. The committed history is a module fixture; tests are
 state-based and order-independent (tampers restore in finally)."""
 
 import datetime as dt
+import re
 from decimal import Decimal
 from typing import Any
 
@@ -25,7 +26,8 @@ from glasshouse.compute.curves import HourlyCurve
 from glasshouse.compute.marking import register_curve_version, value_trade
 from glasshouse.compute.store import CurveStore
 from glasshouse.compute.terms import terms_version_id
-from glasshouse.projections import catch_up
+from glasshouse.projections import catch_up, rebuild, replay
+from glasshouse.projections.tables import metadata as projection_metadata
 from glasshouse.verify import verify
 from tests.support import BINARY, DB, login_role, needs_live_stack, provision
 
@@ -163,6 +165,10 @@ def test_a_consistent_stack_verifies_with_six_ok_legs(
     # and the views leg verified the seal, not just hash and inventory.
     assert "checkpoint" in _leg(report, "tree").detail
     assert "seal intact" in _leg(report, "views").detail
+    # The projection leg names its coverage against the ledger's own
+    # count: current, so every transition the ledger holds is projected.
+    assert re.search(r"(\d+) of \1 transition\(s\) projected$", _leg(report, "projections").detail)
+    assert report.caught_up is True
 
     # And through the CLI seam, with the verdict as the exit code.
     assert cli.main(["verify", "--database-url", DB]) == 0
@@ -379,3 +385,35 @@ def test_a_tampered_projection_fails_the_projection_leg(
     finally:
         with engine.begin() as connection:
             connection.execute(tamper, {"delta": -1})
+
+
+def test_projections_behind_the_ledger_are_lag_and_say_so(
+    monday: None, morpholog: GlasshouseClient, engine: sa.Engine, store: CurveStore
+) -> None:
+    # Lag is not divergence - a live projector trails by a poll - so the
+    # leg stays ok, but it now says how far behind it is. Staged exactly:
+    # the tables hold a faithful replay of the first transition only,
+    # cursor included, as a projector one page in would leave them.
+    catch_up(morpholog, engine)
+    first = morpholog.audit_named()[0].transition_id
+    prefix = replay(morpholog, up_to=first)
+    with engine.begin() as connection:
+        for table in reversed(projection_metadata.sorted_tables):
+            connection.execute(sa.delete(table))
+        for name, rows in prefix.tables.items():
+            table = projection_metadata.tables[name]
+            for row in rows:
+                connection.execute(
+                    sa.insert(table).values(dict(zip(table.columns.keys(), row, strict=True)))
+                )
+    try:
+        report = verify(morpholog, engine, store)
+        assert report.ok  # consistent with the prefix it consumed...
+        assert report.caught_up is False  # ...and not complete, said separately
+        leg = _leg(report, "projections")
+        assert leg.ok, leg.detail
+        match = re.search(r"1 of (\d+) transition\(s\) projected, (\d+) not yet$", leg.detail)
+        assert match, leg.detail
+        assert int(match.group(1)) - 1 == int(match.group(2)) > 0
+    finally:
+        rebuild(morpholog, engine)

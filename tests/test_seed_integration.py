@@ -19,7 +19,7 @@ from glasshouse.projections.tables import (
     trade_terms_version,
     trade_valuation,
 )
-from glasshouse.seed import SEED_LOCK_KEY
+from glasshouse.seed import SEED_LOCK_KEY, SeedError, run_seed
 from tests.support import BINARY, DB, needs_live_stack, provision
 
 pytestmark = needs_live_stack
@@ -89,3 +89,24 @@ def test_seed_refuses_to_overlap_itself(capsys: pytest.CaptureFixture[str]) -> N
             assert "already running" in capsys.readouterr().err
         finally:
             guard.execute(sa.text("select pg_advisory_unlock(:key)"), {"key": SEED_LOCK_KEY})
+
+
+def test_a_tail_held_short_fails_the_seed_by_name() -> None:
+    # The audit tail withholds every row younger than the oldest open
+    # transaction in the database (the binary's slow-writer horizon:
+    # withheld, never lost). A TimescaleDB background worker in a fresh
+    # database has held one across a whole seed, which projected nothing
+    # and still reported "verify: consistent". A transaction held open
+    # here plays that worker: the seed must refuse, naming it.
+    provision()
+    holder_engine = sa.create_engine(
+        engine_url(DB), connect_args={"application_name": "held-open-by-test"}
+    )
+    try:
+        with holder_engine.connect() as holder:
+            holder.execute(sa.text("SELECT 1"))  # autobegin: a transaction is now open
+            with pytest.raises(SeedError, match=r"delivered 0 of \d+ transition") as refused:
+                run_seed(DB, reset=True, patience=0)
+            assert "held-open-by-test" in str(refused.value)
+    finally:
+        holder_engine.dispose()

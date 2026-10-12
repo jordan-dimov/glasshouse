@@ -19,6 +19,7 @@ from glasshouse.projections.projector import (
     catch_up,
     fold_transition,
     rebuild,
+    replay,
 )
 from glasshouse.projections.runner import follow, start_projector_thread
 from glasshouse.projections.tables import (
@@ -39,6 +40,7 @@ __all__ = [
     "position_hour",
     "projection_progress",
     "rebuild",
+    "replay",
     "start_projector_thread",
     "trade_terms_version",
     "trade_valuation",

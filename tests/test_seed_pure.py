@@ -4,14 +4,17 @@ reset preflight refuses before any destructive statement, and the report
 renders stably.
 """
 
+import json
 from pathlib import Path
 
 import pytest
 import sqlalchemy as sa
 
 from glasshouse import cli, seed
+from glasshouse.commit import GlasshouseClient
 from glasshouse.compute.store import engine_url
 from glasshouse.seed import SeedError, SeedReport, refuse_unsafe_reset, reset_app_state
+from tests.support import fake_binary
 
 DEAD_DB = "postgresql://127.0.0.1:1/nowhere"
 
@@ -74,4 +77,42 @@ def test_the_report_renders_stably() -> None:
     assert report.render() == (
         "seeded acme-energy: 2 book(s), 6 trade(s), 2 curve version(s), 1 amendment(s), "
         "13 valuation(s); verify: consistent"
+    )
+
+
+def _consistent(tmp_path: Path, transitions: int) -> GlasshouseClient:
+    report = {
+        "passes": True,
+        "replay": {"status": "consistent", "transitions": transitions, "claims": 1},
+        "tree": {"status": "intact", "checkpoints": 0, "tree_size": 0},
+        "role_rebindings": {"status": "not_evaluated"},
+    }
+    binary = fake_binary(tmp_path, json.dumps(report))
+    return GlasshouseClient("model.morph", "postgres:///x", binary=str(binary))
+
+
+def test_a_short_tail_is_refused_by_name_not_reported_consistent(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The ledger's replay says 32; the tail delivered none. The seed waits
+    # out its patience, then refuses with both numbers and where to look,
+    # instead of projecting nothing and calling it consistent.
+    monkeypatch.setattr(seed, "rebuild", lambda _client, _engine: 0)
+    engine = sa.create_engine(engine_url(DEAD_DB))
+    try:
+        with pytest.raises(SeedError, match="delivered 0 of 32 transition") as refused:
+            seed.project_everything(_consistent(tmp_path, 32), engine, patience=0)
+    finally:
+        engine.dispose()
+    assert "Potential horizon blockers" in str(refused.value)
+    assert "pg_stat_activity" in str(refused.value)  # the dead database: a pointer, not a crash
+
+
+def test_a_complete_tail_returns_what_it_projected(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(seed, "rebuild", lambda _client, _engine: 32)
+    assert (
+        seed.project_everything(_consistent(tmp_path, 32), sa.create_engine(engine_url(DEAD_DB)))
+        == 32
     )

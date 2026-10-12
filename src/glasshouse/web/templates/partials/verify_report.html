@@ -1,5 +1,6 @@
 {% from "_macros.html" import badge %}
 <h2>Verification: {{ "consistent" if report.ok else "DIVERGENT" }}</h2>
+<p>Readiness: {{ badge("ok" if report.caught_up else ("quarantined" if report.caught_up is false else "draft"), report.readiness()) }}</p>
 <div class="table-scroll">
   <table class="data-table" aria-label="glasshouse verify legs">
     <thead>
