@@ -7,20 +7,20 @@ regenerate when the programme changes. The model hash in
 
 import sys
 
-if sys.version_info < (3, 10):
+if sys.version_info < (3, 12):
     raise RuntimeError(
-        f"morpholog_client requires Python 3.10+ "
+        f"morpholog_client requires Python 3.12+ "
         f"(running {sys.version_info.major}.{sys.version_info.minor}); "
         f"the generated code holds a conservative floor on purpose"
     )
 
 PROGRAM = "glasshouse"
-MODEL_HASH = "sha256:5438bd9d897a93a3ec82a124ac39bce60964c0e03c8c56ac61dddc9844b5e08b"
-MORPHOLOG_VERSION = "0.0.13"
-PYTHON_FLOOR = (3, 10)
+MODEL_HASH = "sha256:972e70fdf62d107dbc8a5b4ab3944b269f3c1fe1222528f530a4c37aa5dba83d"
+MORPHOLOG_VERSION = "0.0.15"
+PYTHON_FLOOR = (3, 12)
 
 from . import envelopes, models, values  # noqa: E402
-from .adapter import Morpholog, MorphologBatchIncomplete, MorphologError  # noqa: E402
+from .adapter import Morpholog, MorphologBatchIncomplete, MorphologError, Request  # noqa: E402
 from .session import (  # noqa: E402
     MorphologOutcomeUnknown,
     MorphologRequestError,
@@ -83,6 +83,7 @@ __all__ = [
     "MorphologError",
     "MorphologOutcomeUnknown",
     "MorphologRequestError",
+    "Request",
     "Session",
     "open_client",
     "open_session",

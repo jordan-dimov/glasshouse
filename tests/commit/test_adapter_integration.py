@@ -88,18 +88,17 @@ def test_the_model_stays_compiled() -> None:
     # rule lives in the gates (contract section 26), because a record
     # invariant over the generated selector both refused intra-day
     # amendments of a marked trade and put the whole programme on the
-    # interpreted route (morpholog#407). Parsed from the verbose text
-    # summary, because `check --json` carries no plan field; a future
-    # invariant falling out of the fragment fails here by name.
-    proc = subprocess.run(
-        [str(BINARY), "check", "--verbose", str(MODEL_FILE)],
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    assert proc.returncode == 0, proc.stderr
-    plan = proc.stdout.split("invariant checks:", 1)[1].strip()
-    assert plan == "compiled", plan
+    # interpreted route (morpholog#407). Read from the typed `check`
+    # report since v0.0.14 put each invariant's route in `check --json`
+    # (the verbose text this used to parse grew a line in v0.0.15 and
+    # broke it, contract section 29); a future invariant falling out of
+    # the fragment, or one whose admission checks the whole state, fails
+    # here by name.
+    client = GlasshouseClient(str(MODEL_FILE), "postgres:///unused", binary=str(BINARY))
+    invariants = client.check().invariants
+    assert invariants is not None
+    assert {i.name: i.route for i in invariants if i.route != "compiled"} == {}
+    assert {i.name: i.cases.because for i in invariants if i.cases.kind != "bound"} == {}
 
 
 def test_the_needle_lifecycle(morpholog: GlasshouseClient) -> None:

@@ -107,14 +107,26 @@ class GlasshouseClient(Morpholog):
     # pins the argv each one emits - the decorator proves the method is
     # reached, the test proves it sends the flag.
     @override
-    def audit(self, after: str | None = None, *, writer_roles: list[str] | None = None) -> list:  # type: ignore[type-arg]
-        return super().audit(after, writer_roles=self._asserted(writer_roles))
+    def audit(
+        self,
+        after: str | None = None,
+        *,
+        writer_roles: list[str] | None = None,
+        mentions: str | None = None,
+    ) -> list[envelopes.AuditRow]:
+        return super().audit(after, writer_roles=self._asserted(writer_roles), mentions=mentions)
 
     @override
     def audit_named(
-        self, after: str | None = None, *, writer_roles: list[str] | None = None
-    ) -> list:  # type: ignore[type-arg]
-        return super().audit_named(after, writer_roles=self._asserted(writer_roles))
+        self,
+        after: str | None = None,
+        *,
+        writer_roles: list[str] | None = None,
+        mentions: str | None = None,
+    ) -> list[envelopes.AuditRowNamed]:
+        return super().audit_named(
+            after, writer_roles=self._asserted(writer_roles), mentions=mentions
+        )
 
     @override
     def audit_checkpoint(

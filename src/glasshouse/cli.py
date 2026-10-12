@@ -36,7 +36,10 @@ from glasshouse.commit import (
 from glasshouse.commit.morpholog_client.envelopes import (
     CheckpointCreated,
     RoleRebindingsEvaluated,
+    TreeChainBroken,
     TreeIntact,
+    TreeMalformedPack,
+    TreeUnsupportedPack,
 )
 from glasshouse.compute.store import CurveStore, engine_url
 from glasshouse.config import Settings, get_settings
@@ -303,8 +306,19 @@ def evidence_verify_command(
     client = GlasshouseClient(str(MODEL_FILE), "")
     report = client.audit_verify_pack(str(pack), anchor_file=str(anchor) if anchor else None)
     verdict = report.verdict
-    intact = isinstance(verdict, TreeIntact)
-    print(f"evidence verify: {'intact' if intact else type(verdict).__name__.removeprefix('Tree')}")
+    # The verdicts that carry the binary's own reason keep it: an old pack
+    # (v0.0.15 reads one pack format) is told to be exported again, not
+    # just called unsupported.
+    match verdict:
+        case TreeIntact():
+            line = "intact"
+        case TreeUnsupportedPack(detail=detail) | TreeMalformedPack(detail=detail):
+            line = f"{type(verdict).__name__.removeprefix('Tree')}: {detail}"
+        case TreeChainBroken(detail=detail):
+            line = f"ChainBroken: {detail}"
+        case _:
+            line = type(verdict).__name__.removeprefix("Tree")
+    print(f"evidence verify: {line}")
     # A login role seen under a new OID among the pack's rows: the role
     # was dropped and created again. A finding for the reader, never a
     # verdict - the rows still hash as they did.
@@ -316,7 +330,7 @@ def evidence_verify_command(
                 f"{change.last_observed_transition}, oid {change.new_oid} from "
                 f"{change.first_observed_transition}"
             )
-    if not intact:
+    if not isinstance(verdict, TreeIntact):
         raise typer.Exit(code=1)
 
 

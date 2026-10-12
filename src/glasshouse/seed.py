@@ -30,6 +30,7 @@ import sqlalchemy as sa
 
 from alembic import command
 from glasshouse.commit import MODEL_FILE, Committed, GlasshouseClient, apply_views, models
+from glasshouse.commit.morpholog_client import Request
 from glasshouse.commit.morpholog_client.envelopes import AtomicCommitted
 from glasshouse.compute.amendment import amend_trade
 from glasshouse.compute.curves import HourlyCurve
@@ -180,7 +181,7 @@ def seed_demo(client: GlasshouseClient, store: CurveStore, engine: sa.Engine) ->
     reconcile_indexes(client)
     apply_views(engine)
 
-    grants: tuple[object, ...] = (
+    grants: tuple[Request, ...] = (
         *(models.GrantCaptureAuthorityRequest(principal="alice", org=ORG, book=b) for b in BOOKS),
         models.GrantCurveAuthorityRequest(principal="carol", org=ORG, market=MARKET),
         *(

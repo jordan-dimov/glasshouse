@@ -10,7 +10,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import date, datetime
 from decimal import Decimal
-from typing import ClassVar
+from typing import ClassVar, Protocol
 
 from . import values
 
@@ -220,13 +220,12 @@ class MayCaptureTradeClaim:
 
     @classmethod
     def from_named(cls, args: dict[str, object]) -> MayCaptureTradeClaim:
-        raw = args["actor"]
-        actor = raw
-        raw = args["org"]
-        org = raw
-        raw = args["book"]
-        book = raw
-        return cls(actor=actor, org=org, book=book)
+        values.named_fields("MayCaptureTrade", args, ("actor", "org", "book"))
+        return cls(
+            actor=values.named_text("MayCaptureTrade.actor", args["actor"]),
+            org=values.named_text("MayCaptureTrade.org", args["org"]),
+            book=values.named_text("MayCaptureTrade.book", args["book"]),
+        )
 
 
 @dataclass(frozen=True)
@@ -241,13 +240,12 @@ class MayRegisterCurveClaim:
 
     @classmethod
     def from_named(cls, args: dict[str, object]) -> MayRegisterCurveClaim:
-        raw = args["actor"]
-        actor = raw
-        raw = args["org"]
-        org = raw
-        raw = args["market"]
-        market = raw
-        return cls(actor=actor, org=org, market=market)
+        values.named_fields("MayRegisterCurve", args, ("actor", "org", "market"))
+        return cls(
+            actor=values.named_text("MayRegisterCurve.actor", args["actor"]),
+            org=values.named_text("MayRegisterCurve.org", args["org"]),
+            market=values.named_text("MayRegisterCurve.market", args["market"]),
+        )
 
 
 @dataclass(frozen=True)
@@ -262,13 +260,12 @@ class MayValueTradeClaim:
 
     @classmethod
     def from_named(cls, args: dict[str, object]) -> MayValueTradeClaim:
-        raw = args["actor"]
-        actor = raw
-        raw = args["org"]
-        org = raw
-        raw = args["book"]
-        book = raw
-        return cls(actor=actor, org=org, book=book)
+        values.named_fields("MayValueTrade", args, ("actor", "org", "book"))
+        return cls(
+            actor=values.named_text("MayValueTrade.actor", args["actor"]),
+            org=values.named_text("MayValueTrade.org", args["org"]),
+            book=values.named_text("MayValueTrade.book", args["book"]),
+        )
 
 
 @dataclass(frozen=True)
@@ -286,19 +283,15 @@ class TradeCapturedClaim:
 
     @classmethod
     def from_named(cls, args: dict[str, object]) -> TradeCapturedClaim:
-        raw = args["org"]
-        org = raw
-        raw = args["book"]
-        book = raw
-        raw = args["trade"]
-        trade = raw
-        raw = args["counterparty"]
-        counterparty = raw
-        raw = args["market"]
-        market = raw
-        raw = args["direction"]
-        direction = raw
-        return cls(org=org, book=book, trade=trade, counterparty=counterparty, market=market, direction=direction)
+        values.named_fields("TradeCaptured", args, ("org", "book", "trade", "counterparty", "market", "direction"))
+        return cls(
+            org=values.named_text("TradeCaptured.org", args["org"]),
+            book=values.named_text("TradeCaptured.book", args["book"]),
+            trade=values.named_text("TradeCaptured.trade", args["trade"]),
+            counterparty=values.named_text("TradeCaptured.counterparty", args["counterparty"]),
+            market=values.named_text("TradeCaptured.market", args["market"]),
+            direction=values.named_text("TradeCaptured.direction", args["direction"]),
+        )
 
 
 @dataclass(frozen=True)
@@ -319,23 +312,17 @@ class TradeTermsClaim:
 
     @classmethod
     def from_named(cls, args: dict[str, object]) -> TradeTermsClaim:
-        raw = args["org"]
-        org = raw
-        raw = args["trade"]
-        trade = raw
-        raw = args["version"]
-        version = raw
-        raw = args["quantity"]
-        quantity = values.parse_decimal(raw)
-        raw = args["price"]
-        price = values.parse_decimal(raw)
-        raw = args["delivery_start"]
-        delivery_start = values.parse_timestamp(raw)
-        raw = args["delivery_end"]
-        delivery_end = values.parse_timestamp(raw)
-        raw = args["effective_from"]
-        effective_from = values.parse_date(raw)
-        return cls(org=org, trade=trade, version=version, quantity=quantity, price=price, delivery_start=delivery_start, delivery_end=delivery_end, effective_from=effective_from)
+        values.named_fields("TradeTerms", args, ("org", "trade", "version", "quantity", "price", "delivery_start", "delivery_end", "effective_from"))
+        return cls(
+            org=values.named_text("TradeTerms.org", args["org"]),
+            trade=values.named_text("TradeTerms.trade", args["trade"]),
+            version=values.named_text("TradeTerms.version", args["version"]),
+            quantity=values.named_decimal("TradeTerms.quantity", args["quantity"]),
+            price=values.named_decimal("TradeTerms.price", args["price"]),
+            delivery_start=values.named_timestamp("TradeTerms.delivery_start", args["delivery_start"]),
+            delivery_end=values.named_timestamp("TradeTerms.delivery_end", args["delivery_end"]),
+            effective_from=values.named_date("TradeTerms.effective_from", args["effective_from"]),
+        )
 
 
 @dataclass(frozen=True)
@@ -349,11 +336,11 @@ class TradeTermsSupersedesClaim:
 
     @classmethod
     def from_named(cls, args: dict[str, object]) -> TradeTermsSupersedesClaim:
-        raw = args["new_version"]
-        new_version = raw
-        raw = args["prior_version"]
-        prior_version = raw
-        return cls(new_version=new_version, prior_version=prior_version)
+        values.named_fields("TradeTermsSupersedes", args, ("new_version", "prior_version"))
+        return cls(
+            new_version=values.named_text("TradeTermsSupersedes.new_version", args["new_version"]),
+            prior_version=values.named_text("TradeTermsSupersedes.prior_version", args["prior_version"]),
+        )
 
 
 @dataclass(frozen=True)
@@ -370,17 +357,14 @@ class CurveRegisteredClaim:
 
     @classmethod
     def from_named(cls, args: dict[str, object]) -> CurveRegisteredClaim:
-        raw = args["org"]
-        org = raw
-        raw = args["market"]
-        market = raw
-        raw = args["as_of"]
-        as_of = values.parse_date(raw)
-        raw = args["version"]
-        version = raw
-        raw = args["payload_hash"]
-        payload_hash = raw
-        return cls(org=org, market=market, as_of=as_of, version=version, payload_hash=payload_hash)
+        values.named_fields("CurveRegistered", args, ("org", "market", "as_of", "version", "payload_hash"))
+        return cls(
+            org=values.named_text("CurveRegistered.org", args["org"]),
+            market=values.named_text("CurveRegistered.market", args["market"]),
+            as_of=values.named_date("CurveRegistered.as_of", args["as_of"]),
+            version=values.named_text("CurveRegistered.version", args["version"]),
+            payload_hash=values.named_text("CurveRegistered.payload_hash", args["payload_hash"]),
+        )
 
 
 @dataclass(frozen=True)
@@ -396,15 +380,13 @@ class OfficialCurveClaim:
 
     @classmethod
     def from_named(cls, args: dict[str, object]) -> OfficialCurveClaim:
-        raw = args["org"]
-        org = raw
-        raw = args["market"]
-        market = raw
-        raw = args["as_of"]
-        as_of = values.parse_date(raw)
-        raw = args["version"]
-        version = raw
-        return cls(org=org, market=market, as_of=as_of, version=version)
+        values.named_fields("OfficialCurve", args, ("org", "market", "as_of", "version"))
+        return cls(
+            org=values.named_text("OfficialCurve.org", args["org"]),
+            market=values.named_text("OfficialCurve.market", args["market"]),
+            as_of=values.named_date("OfficialCurve.as_of", args["as_of"]),
+            version=values.named_text("OfficialCurve.version", args["version"]),
+        )
 
 
 @dataclass(frozen=True)
@@ -418,11 +400,11 @@ class CurveSupersedesClaim:
 
     @classmethod
     def from_named(cls, args: dict[str, object]) -> CurveSupersedesClaim:
-        raw = args["new_version"]
-        new_version = raw
-        raw = args["prior_version"]
-        prior_version = raw
-        return cls(new_version=new_version, prior_version=prior_version)
+        values.named_fields("CurveSupersedes", args, ("new_version", "prior_version"))
+        return cls(
+            new_version=values.named_text("CurveSupersedes.new_version", args["new_version"]),
+            prior_version=values.named_text("CurveSupersedes.prior_version", args["prior_version"]),
+        )
 
 
 @dataclass(frozen=True)
@@ -441,21 +423,27 @@ class TradeValuedClaim:
 
     @classmethod
     def from_named(cls, args: dict[str, object]) -> TradeValuedClaim:
-        raw = args["org"]
-        org = raw
-        raw = args["book"]
-        book = raw
-        raw = args["trade"]
-        trade = raw
-        raw = args["curve_version"]
-        curve_version = raw
-        raw = args["terms_version"]
-        terms_version = raw
-        raw = args["mtm"]
-        mtm = values.parse_decimal(raw)
-        return cls(org=org, book=book, trade=trade, curve_version=curve_version, terms_version=terms_version, mtm=mtm)
+        values.named_fields("TradeValued", args, ("org", "book", "trade", "curve_version", "terms_version", "mtm"))
+        return cls(
+            org=values.named_text("TradeValued.org", args["org"]),
+            book=values.named_text("TradeValued.book", args["book"]),
+            trade=values.named_text("TradeValued.trade", args["trade"]),
+            curve_version=values.named_text("TradeValued.curve_version", args["curve_version"]),
+            terms_version=values.named_text("TradeValued.terms_version", args["terms_version"]),
+            mtm=values.named_decimal("TradeValued.mtm", args["mtm"]),
+        )
 
 
-INTENT_PAYLOADS = {
+class IntentPayloadModel(Protocol):
+    """What every payload model offers: its intent's name, and a build from
+    an outbox row's decoded arguments."""
+
+    INTENT: ClassVar[str]
+
+    @classmethod
+    def from_args(cls, args: list[object]) -> IntentPayloadModel: ...
+
+
+INTENT_PAYLOADS: dict[str, type[IntentPayloadModel]] = {
 
 }

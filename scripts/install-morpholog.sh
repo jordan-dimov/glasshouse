@@ -37,10 +37,10 @@
 # for the substrate canary, which is deliberately never a merge gate.
 set -eu
 
-VERSION=v0.0.13
-SHA256_LINUX_X86_64=4c4cdebea1c9496680d8e194c3b921c8b70fcb1a02e63c1fefa355595d665d1c
-SHA256_LINUX_ARM64=9f627f4542ec709a7b2d97743c0a51e042be7ce3b948625c373a85a1a6d2cab1
-SHA256_MACOS_ARM64=262cb1e1879b22d0b5c77d08bec65bc7455fc25554f75535853a1407dcda6cfe
+VERSION=v0.0.15
+SHA256_LINUX_X86_64=bc54051b852ed8b5cafe7aae288fc5921cffdf065a52995f71efb8105227ce2f
+SHA256_LINUX_ARM64=6a1c36ca318c443fbf8946fbbde20bc333852968fca91e3bfeef6c8c45e42aa5
+SHA256_MACOS_ARM64=69f425e992f92ad784d05c4b334c3b4d277bc7075e797e9be22f62cc5f574ee8
 
 dest=${1:?usage: install-morpholog.sh <dest-dir> [main-latest]}
 channel=${2:-pinned}

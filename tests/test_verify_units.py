@@ -8,6 +8,7 @@ from pathlib import Path
 import pytest
 import sqlalchemy as sa
 
+from glasshouse import cli
 from glasshouse import verify as verify_module
 from glasshouse.commit import (
     MODEL_HASH,
@@ -52,7 +53,12 @@ def client_with(
 
 def _verify_report(tmp_path: Path, replay: dict, tree: dict):  # type: ignore[type-arg, no-untyped-def]
     """The typed `verify` envelope, via a fake binary playing it back."""
-    report = {"replay": replay, "tree": tree, "role_rebindings": {"status": "not_evaluated"}}
+    report = {
+        "passes": replay["status"] == "consistent" and tree["status"] == "intact",
+        "replay": replay,
+        "tree": tree,
+        "role_rebindings": {"status": "not_evaluated"},
+    }
     return client_with(tmp_path, json.dumps(report)).audit_verify()
 
 
@@ -73,7 +79,9 @@ def test_the_model_leg_names_the_binary_version_and_the_hash(tmp_path: Path) -> 
 
 
 @pytest.mark.parametrize(
-    "changed", [{"hash": "sha256:0000"}, {"morpholog_version": "0.0.99"}], ids=["rules", "binary"]
+    "changed",
+    [{"hash": "sha256:" + "0" * 64}, {"morpholog_version": "0.0.99"}],
+    ids=["rules", "binary"],
 )
 def test_the_model_leg_keeps_attesting_after_the_first_use_check(
     tmp_path: Path, changed: dict[str, object]
@@ -268,3 +276,27 @@ def test_the_report_renders_verdict_first() -> None:
     rendered = report.render()
     assert rendered.splitlines()[0] == "glasshouse verify: DIVERGENT"
     assert "FAIL ledger" in rendered
+
+
+def test_an_old_pack_is_told_to_be_exported_again(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # From v0.0.15 the verifier reads one pack format and calls any other
+    # unsupported_pack with its reason. The CLI keeps the reason, so the
+    # holder of an old pack learns what to do rather than just that it
+    # failed; and it fails closed.
+    detail = "unsupported pack format 13: this verifier reads format 17 only"
+    report = {
+        "passes": False,
+        "verdict": {
+            "status": "unsupported_pack",
+            "pack_format_version": 13,
+            "reads": 17,
+            "written_by": None,
+            "detail": detail,
+        },
+        "role_rebindings": {"status": "not_evaluated"},
+    }
+    monkeypatch.setenv("GLASSHOUSE_MORPHOLOG_BIN", str(fake_binary(tmp_path, json.dumps(report))))
+    assert cli.main(["evidence-verify", str(tmp_path / "old.ndjson")]) == 1
+    assert f"evidence verify: UnsupportedPack: {detail}" in capsys.readouterr().out

@@ -213,3 +213,32 @@ def test_a_clean_plan_is_returned_for_the_report(tmp_path: Path) -> None:
     )
     client = GlasshouseClient("model.morph", "postgres:///x", binary=str(clean))
     assert reconcile_indexes(client).applied
+    # The last call is the gate: the check, after the apply.
+    argv = (tmp_path / "argv.txt").read_text().splitlines()
+    assert "--check" in argv
+    assert "--prune" not in argv
+
+
+def test_an_apply_the_check_still_finds_incomplete_fails_the_deploy(tmp_path: Path) -> None:
+    # Upstream's deploy sequence (v0.0.15): apply, then `--check` before
+    # anything writes. The fake binary answers both calls alike, so the
+    # check meets an index still to create and the deploy refuses by name
+    # rather than reporting done.
+    outstanding = fake_binary(
+        tmp_path,
+        json.dumps(
+            provision_envelope(
+                indexes=[
+                    _entry("keep", "morpholog_ci_tradeterms_0"),
+                    _entry("create", "morpholog_ci_tradeterms_1"),
+                ],
+                statistics=[_entry("create", "morpholog_cs_vk1_p1", statistics=True)],
+            )
+        ),
+    )
+    client = GlasshouseClient("model.morph", "postgres:///x", binary=str(outstanding))
+    with pytest.raises(ProvisionError, match="check still finds work outstanding") as refused:
+        reconcile_indexes(client)
+    assert "morpholog_ci_tradeterms_1 (create)" in str(refused.value)
+    assert "morpholog_cs_vk1_p1 (create)" in str(refused.value)
+    assert "morpholog_ci_tradeterms_0" not in str(refused.value)
