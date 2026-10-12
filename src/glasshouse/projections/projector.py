@@ -536,9 +536,24 @@ def catch_up(client: GlasshouseClient, engine: sa.Engine) -> int:
         applied += len(page)
 
 
+@dataclass(frozen=True)
+class Replay:
+    """The in-memory replay and how many transitions it folded: the count
+    is what lets `verify` say how far the projections trail the ledger,
+    rather than vouch for an empty prefix as if it were the whole."""
+
+    tables: dict[str, set[tuple[object, ...]]]
+    transitions: int
+
+
 def accumulate(
     client: GlasshouseClient, up_to: str | None = None
 ) -> dict[str, set[tuple[object, ...]]]:
+    """`replay(...).tables`: the row sets alone."""
+    return replay(client, up_to).tables
+
+
+def replay(client: GlasshouseClient, up_to: str | None = None) -> Replay:
     """Replay the tail through the pure folds into in-memory row sets
     matching the projection tables' column order - the non-destructive
     half of `glasshouse verify`'s projection leg. Reads the blessed
@@ -557,6 +572,7 @@ def accumulate(
     positions: dict[tuple[str, str, str, dt.datetime], tuple[Decimal, str]] = {}
     valuations: dict[tuple[str, str, str, str], tuple[object, ...]] = {}
     cursor: tuple[object, ...] | None = None
+    folded = 0
     reached_up_to = up_to is None
     for row in client.audit_named():
         if up_to is not None and reached_up_to:
@@ -604,6 +620,7 @@ def accumulate(
                 valuation.terms_version,
             )
         cursor = (CURSOR, at, tid)
+        folded += 1
         if tid == up_to:
             reached_up_to = True
     if not reached_up_to:
@@ -611,13 +628,14 @@ def accumulate(
             f"the projection cursor names transition {up_to!r}, which the audit tail "
             "does not contain - the cursor does not describe this ledger"
         )
-    return {
+    tables: dict[str, set[tuple[object, ...]]] = {
         "blotter_trade": {row.as_tuple() for row in blotter.values()},
         "trade_terms_version": set(history.values()),
         "position_hour": {(*key, net, tid) for key, (net, tid) in positions.items()},
         "trade_valuation": set(valuations.values()),
         "projection_progress": {cursor} if cursor else set(),
     }
+    return Replay(tables, folded)
 
 
 def rebuild(client: GlasshouseClient, engine: sa.Engine) -> int:

@@ -64,7 +64,7 @@ from glasshouse.commit.morpholog_client.envelopes import (
     VerifyReport as LedgerVerifyReport,
 )
 from glasshouse.compute.store import CurveStore, StoreError, curve_payload_period
-from glasshouse.projections import ProjectionError, accumulate
+from glasshouse.projections import ProjectionError, replay
 from glasshouse.projections.projector import CURSOR as PROJECTION_CURSOR
 from glasshouse.projections.tables import metadata as projection_metadata
 from glasshouse.projections.tables import projection_progress
@@ -226,7 +226,9 @@ def _views_leg(engine: sa.Engine, seal: ViewsVerification | None) -> Leg:
     return Leg("views", False, f"seal broken - {'; '.join(tampered)}")
 
 
-def _projection_leg(client: GlasshouseClient, engine: sa.Engine) -> Leg:
+def _projection_leg(
+    client: GlasshouseClient, engine: sa.Engine, ledger_transitions: int | None = None
+) -> Leg:
     # One REPEATABLE READ snapshot for the cursor AND the tables: the
     # projector advances both atomically, so a consistent snapshot of
     # our schema is internally coherent whatever a concurrent catch-up
@@ -248,9 +250,10 @@ def _projection_leg(client: GlasshouseClient, engine: sa.Engine) -> Leg:
             actual[name] = {tuple(row) for row in connection.execute(sa.select(table))}
 
     try:
-        expected = accumulate(client, up_to=up_to)
+        replayed = replay(client, up_to=up_to)
     except ProjectionError as corruption:
         return Leg("projections", False, str(corruption))
+    expected = replayed.tables
 
     problems = []
     # Every table in the app schema's projection metadata is compared,
@@ -268,7 +271,19 @@ def _projection_leg(client: GlasshouseClient, engine: sa.Engine) -> Leg:
     if problems:
         return Leg("projections", False, "; ".join(problems))
     total = sum(len(rows) for rows in expected.values())
-    return Leg("projections", True, f"{total} row(s) match a replay up to the cursor")
+    # Lag is not divergence (a live projector trails by a poll), so the
+    # leg stays ok, but it says how far: "0 rows match" over an empty
+    # prefix once read as a clean bill of health while the projections
+    # held nothing at all (contract section 31). The ledger's count is
+    # the replay `audit verify` ran over the table itself, which no
+    # resume horizon can shorten.
+    lag = ""
+    if ledger_transitions is not None:
+        behind = ledger_transitions - replayed.transitions
+        lag = f"; {replayed.transitions} of {ledger_transitions} transition(s) projected" + (
+            f", {behind} not yet" if behind else ""
+        )
+    return Leg("projections", True, f"{total} row(s) match a replay up to the cursor{lag}")
 
 
 def _payload_leg(client: GlasshouseClient, store: CurveStore) -> Leg:
@@ -326,17 +341,21 @@ def verify(client: GlasshouseClient, engine: sa.Engine, store: CurveStore) -> Ve
         report = client.audit_verify(views_schema=VIEWS_SCHEMA)
         ledger, tree = _ledger_leg(report), _tree_leg(report)
         seal = report.views
+        transitions = (
+            report.replay.transitions if isinstance(report.replay, ReplayConsistent) else None
+        )
     except (MorphologError, OSError) as failure:
         unavailable = f"could not run: {failure}"
         ledger = Leg("ledger", False, unavailable)
         tree = Leg("tree", False, unavailable)
         seal = None
+        transitions = None
     return VerifyReport(
         (
             _guarded("model", partial(_model_leg, client)),
             ledger,
             tree,
-            _guarded("projections", partial(_projection_leg, client, engine)),
+            _guarded("projections", partial(_projection_leg, client, engine, transitions)),
             _guarded("payloads", partial(_payload_leg, client, store)),
             _guarded("views", partial(_views_leg, engine, seal)),
         )

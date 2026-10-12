@@ -29,6 +29,10 @@ jobs:
       postgres:
         image: timescale/timescaledb:latest-pg18
         env:
+          # TimescaleDB's telemetry worker holds a transaction open in a fresh
+          # database, and the audit tail withholds every row younger than any
+          # open transaction (contract section 31). Read at initdb.
+          TIMESCALEDB_TELEMETRY: "off"
           POSTGRES_USER: postgres
           POSTGRES_PASSWORD: postgres
           POSTGRES_DB: morpholog_scratch

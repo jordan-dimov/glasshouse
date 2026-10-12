@@ -473,3 +473,23 @@ The evaluation's history is the demo's 32-transition canonical example, so a gre
 **Python, measured.** Hand-written source +61/-17. The removals are the duplicated direction checks; the additions are the refusal rendering and the API's `rule`/`compared`. Moving rules into the model mostly adds guarantees rather than deleting code here, because the Python that remains is computation the kernel is designed not to do (MTM over a hash-anchored payload, curve validation, projection folds).
 
 **Friction, for the upstream prompt:** no generated `evaluate`; `evaluate` reports `"semantics": "case_bound_admission_v5"` where the release notes say semantics version 3, two numbers a reader will try to reconcile.
+
+## 31. A short tail agreed with itself: the seed's false green, traced to a TimescaleDB worker: 12/10/2026, no model change, no re-pin
+
+**The symptom.** On a freshly created database, `seed --reset` sometimes projected 0 of its 32 transitions, left every screen empty, and still printed `verify: consistent`. It reproduced on v0.0.13 and v0.0.15, on main and on a branch, and failed to reproduce minutes later on the same code. The demo never showed it.
+
+**The cause, measured.** Instrumenting the seed to list open transactions just before its rebuild showed the same session in every blind run: TimescaleDB's `Telemetry Reporter` background worker, with an open transaction (`xact_start` before every audit row) in the new database. The binary's resume horizon is the oldest `xact_start` over every other session in the database except autovacuum workers (`audit_resume_watermark`, `morpholog-postgres/src/audit.rs`). So the tail correctly withheld every row younger than that transaction: withheld, never lost. The reporter calls home, so how long it holds the transaction depends on the network, hence the intermittency. The demo is immune because `GLASSHOUSE_AUDIT_WRITER_ROLES` restricts the horizon to the application's role, which excludes the extension's workers.
+
+**Why verify agreed.** The projection leg compares the tables with a replay of the same tail, folded up to the projector's cursor. With no cursor and a tail that delivered nothing, both sides were empty and "0 row(s) match a replay up to the cursor" passed. (With a complete tail, empty tables do fail, as missing rows; the false green needed both.)
+
+**The fix.**
+- **The projection leg names its coverage** against the ledger's own count: the `audit verify` replay, which reads the audit table and is not subject to the horizon. "N of M transition(s) projected", plus ", K not yet" when behind. Lag stays ok: a live projector trails by a poll, and lag is not divergence. But it is no longer silent.
+- **The seed demands completeness**: `project_everything` rebuilds until the projections cover every transition the ledger holds, waiting up to 30 s for the horizon to pass, then refuses naming the open transactions holding it (pid, application name or backend type, open since). The seed's "already has transitions" check counts the ledger the same way, so a blind tail can no longer make a ledger with history look empty.
+- **Telemetry off where we own the image**: `TIMESCALEDB_TELEMETRY: "off"` on the compose database and the CI and canary services (read at initdb). Self-hosted deployments on TimescaleDB should do the same, or set `GLASSHOUSE_AUDIT_WRITER_ROLES`, which is the general answer to any long transaction from a role that cannot write audit.
+
+**Tests.**
+- Pure: a short tail is refused with both numbers, and a dead database yields a pointer rather than a crash.
+- Live: a transaction held open by a session named `held-open-by-test` blinds the tail deterministically, and the seed refuses naming it.
+- Live: the verify leg reports "N of N transition(s) projected" when current, and, staged with a faithful one-transition prefix, "1 of N, N-1 not yet" while staying ok.
+
+**For upstream (in the prompt, not filed):** the horizon excludes autovacuum workers because they "hold long transactions and never write audit". TimescaleDB's background workers (telemetry, job scheduler) are the same class, and so is any extension's background worker. Only the binary writes audit, through a client backend. Counting `backend_type = 'client backend'` sessions (plus hidden ones) would remove this whole class of stall without weakening the guarantee.

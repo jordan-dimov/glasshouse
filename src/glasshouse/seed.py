@@ -23,10 +23,12 @@ overlap. This module never prints; the CLI renders the report and turns
 from __future__ import annotations
 
 import datetime as dt
+import time
 from dataclasses import dataclass
 from decimal import Decimal
 
 import sqlalchemy as sa
+from sqlalchemy.exc import SQLAlchemyError
 
 from alembic import command
 from glasshouse.commit import (
@@ -38,7 +40,7 @@ from glasshouse.commit import (
     models,
 )
 from glasshouse.commit.morpholog_client import Request
-from glasshouse.commit.morpholog_client.envelopes import AtomicCommitted
+from glasshouse.commit.morpholog_client.envelopes import AtomicCommitted, ReplayConsistent
 from glasshouse.compute.amendment import amend_trade
 from glasshouse.compute.curves import HourlyCurve
 from glasshouse.compute.marking import correct_and_remark, register_curve_version, value_trade
@@ -114,7 +116,17 @@ _TRADES: tuple[tuple[str, str, str, str, str, str, int, int], ...] = (
 
 class SeedError(Exception):
     """The seed cannot proceed honestly (wrong environment, a ledger
-    that is not empty, an overlapping run, or a failed verification)."""
+    that is not empty, an overlapping run, projections the audit tail
+    would not complete, or a failed verification)."""
+
+
+# How long the seed waits for the audit tail to deliver every transition
+# it committed before refusing. The tail withholds rows while any session
+# in the database holds a transaction older than them (the binary's
+# slow-writer horizon: withheld, never lost), and a TimescaleDB
+# background worker in a freshly created database has been seen holding
+# one across a whole seed (contract section 31).
+PROJECTION_PATIENCE_SECONDS = 30.0
 
 
 @dataclass(frozen=True)
@@ -173,13 +185,21 @@ def reset_app_state(engine: sa.Engine, database_url: str) -> None:
     command.upgrade(config, "head")
 
 
-def seed_demo(client: GlasshouseClient, store: CurveStore, engine: sa.Engine) -> SeedReport:
+def seed_demo(
+    client: GlasshouseClient,
+    store: CurveStore,
+    engine: sa.Engine,
+    *,
+    patience: float = PROJECTION_PATIENCE_SECONDS,
+) -> SeedReport:
     """Provision, apply the inspection model, then run the Monday-morning
     story as governed traffic: grants, captures, the official curve, one
-    mark per trade, projections rebuilt. Refuses a ledger with any
-    history - idempotent by refusal, never additive by accident."""
+    mark per trade, projections rebuilt over every one of them. Refuses
+    a ledger with any history - idempotent by refusal, never additive by
+    accident. History is counted by the ledger's own replay, not the
+    audit tail, which a held-open transaction can make look empty."""
     client.init(skip_if_exists=True)
-    if client.audit():
+    if ledger_transitions(client):
         raise SeedError("the ledger already has transitions; use seed --reset")
     # The reset re-initialises the governed schema with the cron's own
     # binary, which lays down no managed indexes: the demo would run its
@@ -284,7 +304,7 @@ def seed_demo(client: GlasshouseClient, store: CurveStore, engine: sa.Engine) ->
     )
     _committed(value_trade(client, store, actor="risk-engine", org=ORG, book=book, trade=trade))
 
-    rebuild(client, engine)
+    project_everything(client, engine, patience=patience)
     return SeedReport(
         org=ORG,
         books=len(BOOKS),
@@ -310,12 +330,73 @@ def establish_ledger_root(
     _committed(outcome)
 
 
+def ledger_transitions(client: GlasshouseClient) -> int:
+    """How many transitions the ledger holds, from `audit verify`'s replay
+    over the audit table itself: the count no resume horizon shortens."""
+    replay = client.audit_verify().replay
+    if not isinstance(replay, ReplayConsistent):
+        raise SeedError("the ledger's replay diverges from its claims; run glasshouse verify")
+    return replay.transitions
+
+
+def project_everything(
+    client: GlasshouseClient, engine: sa.Engine, *, patience: float = PROJECTION_PATIENCE_SECONDS
+) -> int:
+    """Rebuild the projections until they cover every transition the
+    ledger holds, waiting up to `patience` seconds for the audit tail to
+    release what it withholds, then refuse by name. A seed that reported
+    "consistent" over projections holding nothing was the bug this
+    exists for: verify's projection leg compares the tables with a
+    replay of the same tail, so a short tail agreed with itself."""
+    expected = ledger_transitions(client)
+    deadline = time.monotonic() + patience
+    while True:
+        applied = rebuild(client, engine)
+        if applied >= expected:
+            return applied
+        if time.monotonic() >= deadline:
+            raise SeedError(
+                f"seeded, but the audit tail delivered {applied} of {expected} transition(s) "
+                f"within {patience:g} s, so the projections would not be complete. The tail "
+                "withholds rows while any session in this database holds a transaction "
+                f"older than them: {_tail_holders(engine)}"
+            )
+        time.sleep(1.0)
+
+
+def _tail_holders(engine: sa.Engine) -> str:
+    """The open transactions that hold the tail's horizon back, oldest
+    first, as an operator can act on them. Best effort: a role that
+    cannot see other sessions gets a pointer instead."""
+    try:
+        with engine.connect().execution_options(isolation_level="AUTOCOMMIT") as connection:
+            rows = connection.execute(
+                sa.text(
+                    "SELECT pid, coalesce(nullif(application_name, ''), backend_type) AS who,"
+                    " xact_start FROM pg_stat_activity"
+                    " WHERE datname = current_database() AND pid <> pg_backend_pid()"
+                    " AND xact_start IS NOT NULL"
+                    " AND backend_type IS DISTINCT FROM 'autovacuum worker'"
+                    " ORDER BY xact_start LIMIT 5"
+                )
+            ).all()
+    except SQLAlchemyError:
+        rows = []
+    if not rows:
+        return "none visible to this role now; see pg_stat_activity"
+    return "; ".join(
+        f"pid {pid} ({who}) open since {since.isoformat()}" for pid, who, since in rows
+    )
+
+
 def _committed(outcome: object) -> None:
     if not isinstance(outcome, Committed):
         raise SeedError(f"a seed write was not committed: {outcome!r}")
 
 
-def run_seed(database_url: str, *, reset: bool) -> SeedReport:
+def run_seed(
+    database_url: str, *, reset: bool, patience: float = PROJECTION_PATIENCE_SECONDS
+) -> SeedReport:
     """The whole operation: fence, lock, (reset,) seed, verify. The
     report only returns - and the CLI only prints it - after all six
     verification legs are green, so a nightly reset that seeded a
@@ -372,7 +453,7 @@ def run_seed(database_url: str, *, reset: bool) -> SeedReport:
                     writer_roles=get_settings().audit_writer_roles,
                 )
                 store = CurveStore(engine)
-                report = seed_demo(client, store, engine)
+                report = seed_demo(client, store, engine, patience=patience)
                 verification = verify(client, engine, store)
                 if not verification.ok:
                     raise SeedError(f"seeded, but verification failed:\n{verification.render()}")
