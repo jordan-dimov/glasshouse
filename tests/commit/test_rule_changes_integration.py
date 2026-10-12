@@ -1,0 +1,56 @@
+"""A rule change judged against history before it ships.
+
+Since v0.0.14 every audit row names the programme that admitted it, so a
+ledger can outlive a change of rules that does not reshape a predicate.
+What makes that safe is knowing, before deploying, whether the new rules
+would have refused anything the old ones admitted. `morpholog evaluate`
+answers it: it replays a record under a candidate's invariants and
+reports, per invariant, the admitted transitions it would have refused.
+
+The record here is the demo's history as the previous rulebook admitted
+it (`tests/fixtures/demo-history-972e70fd.ndjson`: the seed under
+MODEL_HASH 972e70fd, exported by v0.0.15 as a complete-prefix pack), so
+the gate runs offline with no database. A candidate that would refuse
+any of it fails by name. Gates are not scored: `evaluate` replays
+invariants only, so a tightened gate still needs its own test.
+
+The pack is format 17. A re-pin that changes the pack format makes this
+fail as `unsupported_pack` rather than pass: re-export the fixture with
+the pinned binary (`glasshouse seed --reset`, `checkpoint`,
+`evidence-export`) under the rulebook then on main, and rename it.
+"""
+
+import json
+import subprocess
+from pathlib import Path
+
+from glasshouse.commit import MODEL_FILE, MODEL_HASH
+from tests.support import BINARY, needs_live_stack
+
+pytestmark = needs_live_stack
+
+HISTORY = Path(__file__).parents[1] / "fixtures" / "demo-history-972e70fd.ndjson"
+
+
+def test_no_invariant_would_refuse_the_history_the_previous_rules_admitted() -> None:
+    # Called on the binary directly, as the drift gate calls `generate`:
+    # the generated client has no `evaluate` method yet, and this is a
+    # test, not a production path.
+    proc = subprocess.run(
+        [str(BINARY), "evaluate", str(MODEL_FILE), "--pack", str(HISTORY)],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert proc.returncode == 0, proc.stderr
+    report = json.loads(proc.stdout)
+    assert report["program_hash"] == MODEL_HASH
+    assert report["transitions_replayed"] == 32
+    refusing = {
+        i["invariant"]: i["refused_transitions"]
+        for i in report["invariants"]
+        if i["would_refuse"] or not i["initially_holds"]
+    }
+    assert refusing == {}
+    # Every invariant of the programme was scored, the new ones included.
+    assert len(report["invariants"]) == 17

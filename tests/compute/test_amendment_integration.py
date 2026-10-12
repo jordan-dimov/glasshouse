@@ -57,6 +57,7 @@ def _desk(
     """Grants, a buy and a sell on the market (10 MW over two hours at
     80), and an official curve for AS_OF."""
     for grant in (
+        models.EstablishOrganisationRequest(org=org),
         models.GrantCaptureAuthorityRequest(principal="alice", org=org, book=BOOK),
         models.GrantCurveAuthorityRequest(principal="carol", org=org, market=MARKET),
         models.GrantValuationAuthorityRequest(principal="risk-engine", org=org, book=BOOK),

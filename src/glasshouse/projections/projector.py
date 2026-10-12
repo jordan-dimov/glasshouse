@@ -74,6 +74,7 @@ IGNORED = frozenset(
         "MayCaptureTrade",
         "MayRegisterCurve",
         "MayValueTrade",
+        "MayGrantAuthority",
         "CurveRegistered",
         "OfficialCurve",
         "CurveSupersedes",
@@ -218,10 +219,6 @@ def fold_transition(
                 pass
             case name:
                 raise ProjectionError(f"no fold covers asserted predicate {name!r}")
-
-    for identity in captured.values():
-        if identity.direction not in SIGNS:
-            raise ProjectionError(f"no position sign for direction {identity.direction!r}")
 
     # A terms version is a capture's first version when its trade was
     # captured in this transition and no lineage names it; an amendment

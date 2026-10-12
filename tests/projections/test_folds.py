@@ -262,8 +262,6 @@ def test_refusals_are_loud() -> None:
             ],
             [],
         )
-    with pytest.raises(ProjectionError, match="no position sign"):
-        fold_transition([captured(direction="long"), terms()], [])
 
 
 def test_a_capture_and_its_amendment_in_one_transaction_both_apply() -> None:

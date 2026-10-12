@@ -37,13 +37,11 @@ def anchored() -> GlasshouseClient:
     provision()
     client = GlasshouseClient(str(MODEL_FILE), DB, binary=str(BINARY))
     assert client.init().status == "initialised"
-    assert isinstance(
-        client.submit(
-            models.GrantCaptureAuthorityRequest(principal="alice", org=ORG, book=BOOK),
-            actor="bootstrap",
-        ),
-        Committed,
-    )
+    for request in (
+        models.EstablishOrganisationRequest(org=ORG),
+        models.GrantCaptureAuthorityRequest(principal="alice", org=ORG, book=BOOK),
+    ):
+        assert isinstance(client.submit(request, actor="bootstrap"), Committed)
     outcome = client.audit_checkpoint()
     assert isinstance(outcome, CheckpointCreated)
     assert outcome.checkpoint.tree_size > 0

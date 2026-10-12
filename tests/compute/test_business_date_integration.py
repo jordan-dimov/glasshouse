@@ -42,6 +42,7 @@ def stack() -> tuple[GlasshouseClient, CurveStore, sa.Engine]:
     client.init()
     store = CurveStore(engine)
     for grant in (
+        models.EstablishOrganisationRequest(org=ORG),
         models.GrantCaptureAuthorityRequest(principal="alice", org=ORG, book=BOOK),
         models.GrantCurveAuthorityRequest(principal="carol", org=ORG, market=MARKET),
         models.GrantValuationAuthorityRequest(principal="risk-engine", org=ORG, book=BOOK),

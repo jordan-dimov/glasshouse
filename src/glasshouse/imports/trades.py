@@ -63,10 +63,6 @@ COLUMNS = frozenset(
     }
 )
 
-# The ledger's Subject is opaque, but the compute zone's MTM only knows
-# these two; anything else is quarantined rather than coerced.
-DIRECTIONS = frozenset({"buy", "sell"})
-
 
 class ImportFormatError(ValueError):
     """The file as a whole does not match the column contract."""
@@ -89,8 +85,6 @@ def _request(row: dict[str, str], org: str) -> models.CaptureTradeRequest:
         raise ValueError("row has fewer fields than the header")
     if row.get(None) is not None:  # type: ignore[call-overload]
         raise ValueError("row has more fields than the header")
-    if row["direction"] not in DIRECTIONS:
-        raise ValueError(f"direction must be buy or sell, got {row['direction']!r}")
     try:
         quantity = Decimal(row["quantity"])
         price = Decimal(row["price"])

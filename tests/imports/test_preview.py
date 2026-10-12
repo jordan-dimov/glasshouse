@@ -85,3 +85,63 @@ def test_an_all_quarantined_preview_never_reaches_the_binary(tmp_path: Path) -> 
     assert report.count("quarantined") == 1
     assert len(report.outcomes) == 1
     assert not (tmp_path / "argv.txt").exists()
+
+
+def test_why_leads_with_the_named_rule_and_the_values_it_compared() -> None:
+    # From v0.0.15 a refusal carries the two values its failing comparison
+    # compared, and every Glasshouse gate has a name: the line a desk
+    # reads is the ledger's own numbers under the rule's own name, with
+    # nothing recomputed here.
+    late = envelopes.Explanation.from_json(
+        {
+            "transition": REFUSAL["transition"],
+            "verdict": {
+                "rejected": {
+                    "kind": "gate",
+                    "gate": "TradeTerms(...) and (effective_from after prior_from)",
+                    "rule": "amendment_takes_effect_later",
+                    "statement_kind": "require",
+                    "directly_missing_claims": [],
+                    "compared": {
+                        "op": "after",
+                        "left": {"type": "date", "value": "2026-06-08"},
+                        "right": {"type": "date", "value": "2026-06-09"},
+                    },
+                }
+            },
+        }
+    )
+    assert why(late) == "amendment_takes_effect_later: 2026-06-08 after 2026-06-09 does not hold"
+    duplicate = envelopes.Explanation.from_json(
+        {
+            "transition": REFUSAL["transition"],
+            "verdict": {
+                "rejected": {
+                    "kind": "gate",
+                    "gate": "not TradeCaptured(_, _, trade, _, _, _)",
+                    "rule": "trade_is_new",
+                    "statement_kind": "require",
+                    "directly_missing_claims": [],
+                }
+            },
+        }
+    )
+    assert why(duplicate) == "trade_is_new: not TradeCaptured(_, _, trade, _, _, _) refused"
+    zero = envelopes.Explanation.from_json(
+        {
+            "transition": REFUSAL["transition"],
+            "verdict": {
+                "rejected": {
+                    "kind": "invariant",
+                    "name": "quantity_is_positive",
+                    "rule": "...",
+                    "compared": {
+                        "op": ">",
+                        "left": {"type": "decimal", "value": "0"},
+                        "right": {"type": "decimal", "value": "0"},
+                    },
+                }
+            },
+        }
+    )
+    assert why(zero) == "would break invariant quantity_is_positive: 0 > 0 does not hold"

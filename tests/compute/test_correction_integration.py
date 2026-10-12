@@ -47,6 +47,7 @@ def stack() -> tuple[GlasshouseClient, CurveStore]:
 def _desk(client: GlasshouseClient, store: CurveStore, org: str) -> None:
     """Grants, a buy and a sell on the market, and v1 official."""
     for grant in (
+        models.EstablishOrganisationRequest(org=org),
         models.GrantCaptureAuthorityRequest(principal="alice", org=org, book=BOOK),
         models.GrantCurveAuthorityRequest(principal="carol", org=org, market=MARKET),
         models.GrantValuationAuthorityRequest(principal="risk-engine", org=org, book=BOOK),

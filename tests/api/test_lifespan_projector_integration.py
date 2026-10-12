@@ -36,13 +36,11 @@ def test_a_write_becomes_visible_without_manual_catch_up(
     provision()
     client = GlasshouseClient(str(MODEL_FILE), DB, binary=str(BINARY))
     assert client.init().status == "initialised"
-    assert isinstance(
-        client.submit(
-            models.GrantCaptureAuthorityRequest(principal="alice", org=ORG, book=BOOK),
-            actor="bootstrap",
-        ),
-        Committed,
-    )
+    for request in (
+        models.EstablishOrganisationRequest(org=ORG),
+        models.GrantCaptureAuthorityRequest(principal="alice", org=ORG, book=BOOK),
+    ):
+        assert isinstance(client.submit(request, actor="bootstrap"), Committed)
 
     monkeypatch.setenv("GLASSHOUSE_DATABASE_URL", DB)
     monkeypatch.setenv("GLASSHOUSE_MORPHOLOG_BIN", str(BINARY))

@@ -44,6 +44,7 @@ def seeded() -> sa.Engine:
     assert client.init().status == "initialised"
     store = CurveStore(engine)
     for grant in (
+        models.EstablishOrganisationRequest(org=ORG),
         models.GrantCaptureAuthorityRequest(principal="alice", org=ORG, book=BOOK),
         models.GrantCurveAuthorityRequest(principal="carol", org=ORG, market=MARKET),
         models.GrantValuationAuthorityRequest(principal="risk-engine", org=ORG, book=BOOK),

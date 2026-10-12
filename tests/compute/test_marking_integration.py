@@ -22,6 +22,7 @@ import sqlalchemy as sa
 from glasshouse.commit import MODEL_FILE, Committed, GlasshouseClient, Rejected
 from glasshouse.commit.morpholog_client.models import (
     CaptureTradeRequest,
+    EstablishOrganisationRequest,
     GrantCaptureAuthorityRequest,
     GrantCurveAuthorityRequest,
     GrantValuationAuthorityRequest,
@@ -78,6 +79,7 @@ def monday(morpholog: GlasshouseClient, store: CurveStore) -> None:
     register v1 (90/88/86.25), mark (55.00), correct to v2 (+1.00 every
     hour), re-mark (85.00). Tests assert the resulting state."""
     for grant in (
+        EstablishOrganisationRequest(org=ORG),
         GrantCaptureAuthorityRequest(principal="alice", org=ORG, book=BOOK),
         GrantCurveAuthorityRequest(principal="carol", org=ORG, market=MARKET),
         GrantValuationAuthorityRequest(principal="risk-engine", org=ORG, book=BOOK),

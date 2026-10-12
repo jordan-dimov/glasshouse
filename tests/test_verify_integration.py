@@ -58,6 +58,7 @@ def store(engine: sa.Engine) -> CurveStore:
 @pytest.fixture(scope="module")
 def monday(morpholog: GlasshouseClient, engine: sa.Engine, store: CurveStore) -> None:
     for grant in (
+        models.EstablishOrganisationRequest(org=ORG),
         models.GrantCaptureAuthorityRequest(principal="alice", org=ORG, book=BOOK),
         models.GrantCurveAuthorityRequest(principal="carol", org=ORG, market=MARKET),
         models.GrantValuationAuthorityRequest(principal="risk-engine", org=ORG, book=BOOK),

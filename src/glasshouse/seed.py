@@ -182,6 +182,7 @@ def seed_demo(client: GlasshouseClient, store: CurveStore, engine: sa.Engine) ->
     apply_views(engine)
 
     grants: tuple[Request, ...] = (
+        models.EstablishOrganisationRequest(org=ORG),
         *(models.GrantCaptureAuthorityRequest(principal="alice", org=ORG, book=b) for b in BOOKS),
         models.GrantCurveAuthorityRequest(principal="carol", org=ORG, market=MARKET),
         *(

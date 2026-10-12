@@ -71,6 +71,7 @@ def history(morpholog: GlasshouseClient, engine: sa.Engine) -> tuple[int, str]:
     not project anything: tests own their read-side entry."""
     store = CurveStore(engine)
     for grant in (
+        models.EstablishOrganisationRequest(org=ORG),
         models.GrantCaptureAuthorityRequest(principal="alice", org=ORG, book=BOOK),
         models.GrantCurveAuthorityRequest(principal="carol", org=ORG, market=MARKET),
         models.GrantValuationAuthorityRequest(principal="risk-engine", org=ORG, book=BOOK),
@@ -157,7 +158,7 @@ def history(morpholog: GlasshouseClient, engine: sa.Engine) -> tuple[int, str]:
         value_trade(morpholog, store, actor="risk-engine", org=ORG, book=BOOK, trade="T-001"),
         Committed,
     )
-    return 10, captured.transition_id
+    return 11, captured.transition_id
 
 
 def _rows(engine: sa.Engine) -> dict[str, list[tuple[object, ...]]]:
