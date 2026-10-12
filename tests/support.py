@@ -33,6 +33,7 @@ import sqlalchemy as sa
 from alembic.config import Config
 
 from alembic import command
+from glasshouse.commit import Committed, GlasshouseClient, Rejected, models
 from glasshouse.commit.morpholog_client import MODEL_HASH, MORPHOLOG_VERSION, PROGRAM
 from glasshouse.compute.store import engine_url
 from glasshouse.compute.store import metadata as payload_metadata
@@ -48,6 +49,30 @@ BINARY = (
     if os.environ.get("GLASSHOUSE_MORPHOLOG_BIN")
     else REPO / "target" / "release" / "morpholog"
 )
+
+
+def login_role(database_url: str = DB) -> str:
+    """The login this suite's connections assert actors from: the
+    ledger root is restricted to it (`establish_ledger`)."""
+    engine = sa.create_engine(engine_url(database_url))
+    try:
+        with engine.connect() as connection:
+            return str(connection.execute(sa.text("SELECT session_user")).scalar_one())
+    finally:
+        engine.dispose()
+
+
+def ensure_ledger_root(client: GlasshouseClient) -> None:
+    """Establish the ledger root from this suite's login, unless an earlier
+    organisation in the same ledger already did (a refusal by
+    `ledger_is_new` is that, and nothing else is accepted)."""
+    outcome = client.submit(
+        models.EstablishLedgerRequest(login_role=login_role()), actor="bootstrap"
+    )
+    if isinstance(outcome, Rejected):
+        assert outcome.rule == "ledger_is_new", outcome
+    else:
+        assert isinstance(outcome, Committed), outcome
 
 
 def provision(database_url: str = DB) -> sa.Engine:

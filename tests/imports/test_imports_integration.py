@@ -13,7 +13,7 @@ import pytest
 
 from glasshouse import cli
 from glasshouse.commit import MODEL_FILE, Committed, GlasshouseClient, models
-from tests.support import DB, needs_live_stack, provision
+from tests.support import DB, login_role, needs_live_stack, provision
 
 ORG, BOOK, MARKET = "acme-energy", "spec-de", "de-power"
 
@@ -49,6 +49,8 @@ def provisioned(cli_binary: None) -> None:
     client = GlasshouseClient(str(MODEL_FILE), DB)
     assert client.init().status == "initialised"
     for grant, actor in (
+        (models.EstablishLedgerRequest(login_role=login_role()), "bootstrap"),
+        (models.EstablishOrganisationRequest(org=ORG), "bootstrap"),
         (models.GrantCaptureAuthorityRequest(principal="alice", org=ORG, book=BOOK), "bootstrap"),
         (models.GrantCurveAuthorityRequest(principal="carol", org=ORG, market=MARKET), "bootstrap"),
     ):
@@ -69,15 +71,17 @@ def test_trades_import_partial_admission(
         ["import-trades", str(csv_file), "--org", ORG, "--actor", "alice", "--project"], capsys
     )
 
-    # 2 committed, the in-file duplicate lawfully rejected with the
-    # gate's why attached, the bad direction quarantined - and the
-    # exit code was 0 throughout.
+    # 2 committed, and two lawful rejections with the ledger's why
+    # attached - exit code 0 throughout. The bad direction is the
+    # model's rule now (`direction_is_buy_or_sell`), not the parser's,
+    # so it reaches the ledger and is refused there by name.
     assert "2 committed" in out
-    assert "1 rejected" in out
-    assert "1 quarantined" in out
+    assert "2 rejected" in out
+    assert "quarantined" not in out
+    assert "would break invariant direction_is_buy_or_sell" in out
     # The duplicate trips a negative gate (nothing is "missing");
-    # the why names the gate that refused.
-    assert "gate not TradeCaptured" in out
+    # the why leads with the gate's name.
+    assert "trade_is_new: not TradeCaptured" in out
     # The inline projector mode rode the same invocation. The count is
     # whatever was unprojected (this module makes no ordering promises),
     # so the claim is that the catch-up happened, not its size.
@@ -100,9 +104,9 @@ def test_preview_as_an_ungranted_actor_refuses_everything_and_commits_nothing(
     out = _run(
         ["import-trades", str(csv_file), "--org", ORG, "--actor", "mallory", "--preview"], capsys
     )
-    assert "3 refused" in out
-    assert "1 quarantined" in out
-    assert "missing MayCaptureTrade(mallory" in out
+    assert "4 refused" in out
+    assert "quarantined" not in out
+    assert "may_capture_trade: missing MayCaptureTrade(mallory" in out
     assert "supplied by grant_capture_authority" in out
 
     client = GlasshouseClient(str(MODEL_FILE), DB)

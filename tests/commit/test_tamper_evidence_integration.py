@@ -20,7 +20,7 @@ from glasshouse.commit.morpholog_client.envelopes import (
     RoleRebindingsEvaluated,
     TreeIntact,
 )
-from tests.support import BINARY, DB, needs_live_stack, provision
+from tests.support import BINARY, DB, login_role, needs_live_stack, provision
 
 # usefixtures("cli_binary") pins GLASSHOUSE_MORPHOLOG_BIN for the legs
 # that drive cli.main (the CLI builds its own client and CI has no
@@ -37,13 +37,12 @@ def anchored() -> GlasshouseClient:
     provision()
     client = GlasshouseClient(str(MODEL_FILE), DB, binary=str(BINARY))
     assert client.init().status == "initialised"
-    assert isinstance(
-        client.submit(
-            models.GrantCaptureAuthorityRequest(principal="alice", org=ORG, book=BOOK),
-            actor="bootstrap",
-        ),
-        Committed,
-    )
+    for request in (
+        models.EstablishLedgerRequest(login_role=login_role()),
+        models.EstablishOrganisationRequest(org=ORG),
+        models.GrantCaptureAuthorityRequest(principal="alice", org=ORG, book=BOOK),
+    ):
+        assert isinstance(client.submit(request, actor="bootstrap"), Committed)
     outcome = client.audit_checkpoint()
     assert isinstance(outcome, CheckpointCreated)
     assert outcome.checkpoint.tree_size > 0

@@ -72,6 +72,13 @@ program glasshouse
 -- The capability predicates carry no discipline on purpose: they are
 -- only ever admitted in v0, and revocation, when it arrives, is a
 -- governed retraction that `append only` would forbid statically.
+-- `MayGrantAuthority` is the root of them in one organisation: who may
+-- hand out the others. `MayEstablishOrganisations` is the ledger's own
+-- root: who may bring an organisation into being. Without them any actor
+-- could grant itself any capability, and the authority law would rest
+-- on the application never exposing a grant. Every actor that can hand
+-- out authority is restricted to the database login that may assert it
+-- (Morpholog's "restrict the actors that hand out authority, first").
 --
 -- Units are contractual labels on exact decimals: a quantity is
 -- `Decimal[MW]`, an MTM is `Decimal[EUR]`, and mixing them is
@@ -81,6 +88,14 @@ program glasshouse
 predicate MayCaptureTrade(actor: Subject, org: Subject, book: Subject)
 predicate MayRegisterCurve(actor: Subject, org: Subject, market: Subject)
 predicate MayValueTrade(actor: Subject, org: Subject, book: Subject)
+predicate MayGrantAuthority(actor: Subject, org: Subject)
+predicate MayEstablishOrganisations(actor: Subject)
+-- Morpholog's reserved assertion policy: once an actor is restricted, a
+-- proposal naming it is refused before evaluation unless the database
+-- login making it holds the matching authority. The runtime recognises
+-- the names and shapes; we govern them through our own transformations.
+predicate ActorAssertionRestricted(actor: Subject)
+predicate ActorAssertionAuthority(actor: Subject, login_role: Subject)
 predicate TradeCaptured(org: Subject, book: Subject, trade: Subject, counterparty: Subject, market: Subject, direction: Subject)
     unique by (trade)
     append only
@@ -106,6 +121,13 @@ predicate TradeValued(org: Subject, book: Subject, trade: Subject, curve_version
 -- The referential and value rules that must always hold, by any path.
 -- (Uniqueness, the official-pointer singleton and no-fork lineage are
 -- generated from the discipline clauses above.)
+
+-- A trade is bought or sold; nothing else has a position sign. The
+-- trade is named so the case is one capture (section 29's case-width
+-- hint), and the `or` sits last in the consequent, where it compiles.
+invariant direction_is_buy_or_sell:
+    TradeCaptured(trade: trade, direction: direction, ..)
+    implies (direction = #buy or direction = #sell)
 
 -- Terms belong to a captured trade, in the same organisation.
 invariant terms_belong_to_captured_trade:
@@ -179,17 +201,54 @@ invariant terms_lineage_stays_within_the_trade:
 
 -- The only ways state may change.
 
--- Authority grants are ungated in v0: bootstrap seeds capabilities at
--- organisation setup. Maker-checker on grants is a v1 two-step
--- transformation pattern, deliberately deferred - the grant is already
--- a governed, attributable, as-of-queryable transition.
+-- Every gate is named, so a refusal, the rejection log and coverage
+-- carry a stable rule rather than the rendered expression (which any
+-- rewording changes), and the explanation a desk reads is keyed by it.
+
+-- Establish the ledger's root, once, from the provisioning path: its
+-- actor may establish organisations, and is restricted in the same act
+-- to the login that established it, so no other credential can assert
+-- it. This is the trust boundary, stated plainly: the root is whoever
+-- provisions first, and it is only as distinct as the credentials are.
+-- Where every service shares one login (the demo, until glasshouse#85),
+-- every service can still assert it; with per-service credentials,
+-- none but the provisioner can.
+transformation establish_ledger(login_role):
+    require ledger_is_new: not MayEstablishOrganisations(..)
+    admit MayEstablishOrganisations(actor)
+    admit ActorAssertionRestricted(actor)
+    admit ActorAssertionAuthority(actor, login_role)
+
+-- Establish an organisation: the ledger root holds the grant authority
+-- for it, and nobody can establish it again while anyone does.
+transformation establish_organisation(org):
+    require may_establish_organisations: MayEstablishOrganisations(actor)
+    require organisation_is_new: not MayGrantAuthority(org: org, ..)
+    admit MayGrantAuthority(actor, org)
+
+-- Authority grants are gated on the grant authority for the
+-- organisation. Maker-checker on grants is a v1 two-step pattern,
+-- deliberately deferred - each grant is already a governed,
+-- attributable, as-of-queryable transition.
+-- A delegate grant authority is restricted to the login that will act
+-- as it, in the same act that empowers it: an unrestricted actor able to
+-- grant would make every restriction below it decoration.
+transformation grant_grant_authority(principal, org, login_role):
+    require may_grant_authority: MayGrantAuthority(actor, org)
+    admit MayGrantAuthority(principal, org)
+    admit ActorAssertionRestricted(principal)
+    admit ActorAssertionAuthority(principal, login_role)
+
 transformation grant_capture_authority(principal, org, book):
+    require may_grant_authority: MayGrantAuthority(actor, org)
     admit MayCaptureTrade(principal, org, book)
 
 transformation grant_curve_authority(principal, org, market):
+    require may_grant_authority: MayGrantAuthority(actor, org)
     admit MayRegisterCurve(principal, org, market)
 
 transformation grant_valuation_authority(principal, org, book):
+    require may_grant_authority: MayGrantAuthority(actor, org)
     admit MayValueTrade(principal, org, book)
 
 -- Capture a trade: identity and the first version of its terms in one
@@ -198,9 +257,9 @@ transformation grant_valuation_authority(principal, org, book):
 -- captured (a change of terms is an amendment, never an overwrite).
 -- The version id is the caller's, like a curve version's.
 transformation capture_trade(org, book, trade, counterparty, market, direction, version, quantity, price, delivery_start, delivery_end, trade_date):
-    require MayCaptureTrade(actor, org, book)
-    require not TradeCaptured(trade: trade, ..)
-    require not TradeTerms(version: version, ..)
+    require may_capture_trade: MayCaptureTrade(actor, org, book)
+    require trade_is_new: not TradeCaptured(trade: trade, ..)
+    require terms_version_is_new: not TradeTerms(version: version, ..)
     admit TradeCaptured(org, book, trade, counterparty, market, direction)
     admit TradeTerms(org, trade, version, quantity, price, delivery_start, delivery_end, trade_date)
 
@@ -211,11 +270,11 @@ transformation capture_trade(org, book, trade, counterparty, market, direction, 
 -- `TradeCaptured`. The capture capability for the trade's book is the
 -- amendment capability: whoever may book a trade may re-book its terms.
 transformation amend_trade(org, trade, prior_version, new_version, quantity, price, delivery_start, delivery_end, effective_from):
-    require TradeCaptured(org: org, trade: trade, book: book, ..) and MayCaptureTrade(actor, org, book)
-    require TradeTerms(org: org, trade: trade, version: prior_version, effective_from: prior_from, ..)
+    require may_amend_trade: TradeCaptured(org: org, trade: trade, book: book, ..) and MayCaptureTrade(actor, org, book)
+    require amendment_takes_effect_later: TradeTerms(org: org, trade: trade, version: prior_version, effective_from: prior_from, ..)
     and effective_from after prior_from
-    require not TradeTermsSupersedes(prior_version: prior_version, ..)
-    require not TradeTerms(version: new_version, ..)
+    require prior_terms_are_the_latest: not TradeTermsSupersedes(prior_version: prior_version, ..)
+    require terms_version_is_new: not TradeTerms(version: new_version, ..)
     admit TradeTerms(org, trade, new_version, quantity, price, delivery_start, delivery_end, effective_from)
     admit TradeTermsSupersedes(new_version, prior_version)
 
@@ -225,9 +284,9 @@ transformation amend_trade(org, trade, prior_version, new_version, quantity, pri
 -- which keeps lineage - so this gate refuses rather than quietly
 -- replacing.
 transformation register_curve(org, market, as_of, version, payload_hash):
-    require MayRegisterCurve(actor, org, market)
-    require not CurveRegistered(version: version, ..)
-    require not OfficialCurve(org: org, market: market, as_of: as_of, version: _)
+    require may_register_curve: MayRegisterCurve(actor, org, market)
+    require curve_version_is_new: not CurveRegistered(version: version, ..)
+    require no_official_curve_yet: not OfficialCurve(org: org, market: market, as_of: as_of, version: _)
     admit CurveRegistered(org, market, as_of, version, payload_hash)
     admit OfficialCurve(org, market, as_of, version)
 
@@ -237,10 +296,10 @@ transformation register_curve(org, market, as_of, version, payload_hash):
 -- admitted under the prior version are untouched; the correction
 -- governs what may be valued next.
 transformation correct_curve(org, market, as_of, prior_version, new_version, payload_hash):
-    require MayRegisterCurve(actor, org, market)
-    require OfficialCurve(org, market, as_of, prior_version)
-    require not CurveSupersedes(prior_version: prior_version, ..)
-    require not CurveRegistered(version: new_version, ..)
+    require may_register_curve: MayRegisterCurve(actor, org, market)
+    require prior_curve_is_official: OfficialCurve(org, market, as_of, prior_version)
+    require prior_curve_is_the_latest: not CurveSupersedes(prior_version: prior_version, ..)
+    require curve_version_is_new: not CurveRegistered(version: new_version, ..)
     admit CurveRegistered(org, market, as_of, new_version, payload_hash)
     admit CurveSupersedes(new_version, prior_version)
     retract OfficialCurve(org, market, as_of, prior_version)
@@ -261,9 +320,9 @@ transformation correct_curve(org, market, as_of, prior_version, new_version, pay
 -- selector, whose payload holes are wildcarded positionally
 -- (definitions take parameters, not fields, so they cannot be named).
 transformation admit_valuation(org, book, trade, curve_version, terms_version, mtm):
-    require MayValueTrade(actor, org, book)
-    require TradeCaptured(org: org, book: book, trade: trade, market: market, ..)
+    require may_value_trade: MayValueTrade(actor, org, book)
+    require valued_against_official_curve_and_terms_in_force: TradeCaptured(org: org, book: book, trade: trade, market: market, ..)
     and OfficialCurve(org: org, market: market, as_of: as_of, version: curve_version)
     and trade_terms_in_force_on(trade, as_of, org, terms_version, _, _, _, _)
-    require not TradeValued(trade: trade, curve_version: curve_version, terms_version: terms_version, ..)
+    require valuation_is_new: not TradeValued(trade: trade, curve_version: curve_version, terms_version: terms_version, ..)
     admit TradeValued(org, book, trade, curve_version, terms_version, mtm)

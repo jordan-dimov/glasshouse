@@ -23,6 +23,7 @@ from fastapi import APIRouter, Header, HTTPException
 
 from glasshouse.api.deps import ClientDep
 from glasshouse.api.schemas import (
+    Compared,
     ErrorRejection,
     ExplainRequest,
     ExplainResponse,
@@ -33,11 +34,18 @@ from glasshouse.api.schemas import (
 )
 from glasshouse.commit import MorphologError
 from glasshouse.commit.morpholog_client import envelopes
+from glasshouse.imports.report import wire_text
 from glasshouse.logging import get_logger
 
 router = APIRouter(tags=["explain"])
 
 log = get_logger("glasshouse.api")
+
+
+def _compared(compared: envelopes.Compared | None) -> Compared | None:
+    if compared is None:
+        return None
+    return Compared(op=compared.op, left=wire_text(compared.left), right=wire_text(compared.right))
 
 
 def _flatten(rejection: object) -> Rejection | None:
@@ -48,6 +56,7 @@ def _flatten(rejection: object) -> Rejection | None:
         case envelopes.GateRejection():
             return GateRejection(
                 gate=rejection.gate,
+                rule=rejection.rule,
                 statement_kind=rejection.statement_kind,
                 directly_missing_claims=[
                     MissingClaim(
@@ -59,9 +68,14 @@ def _flatten(rejection: object) -> Rejection | None:
                     )
                     for claim in rejection.directly_missing_claims
                 ],
+                compared=_compared(rejection.compared),
             )
         case envelopes.InvariantRejection():
-            return InvariantRejection(name=rejection.name, rule=rejection.rule)
+            return InvariantRejection(
+                name=rejection.name,
+                rule=rejection.rule,
+                compared=_compared(rejection.compared),
+            )
         case envelopes.ErrorRejection():
             return ErrorRejection(message=rejection.message)
         case _:  # pragma: no cover - the envelope's union is closed

@@ -32,8 +32,9 @@ MIXED = "\n".join(
         "spec-de,T-2,2026-06-30,cp,de-power,buy,10,86.25,2026-07-01T00:00:00,2026-07-02T00:00:00Z",
         # line 4: a quantity that is not a decimal
         "spec-de,T-3,2026-06-30,cp,de-power,buy,ten,86.25,2026-07-01T00:00:00Z,2026-07-02T00:00:00Z",
-        # line 5: a direction the MTM does not know
-        "spec-de,T-4,2026-06-30,cp,de-power,long,10,86.25,2026-07-01T00:00:00Z,2026-07-02T00:00:00Z",
+        # line 5: a trade date that is not a date (a direction the MTM
+        # does not know is the ledger's to refuse, not the parser's)
+        "spec-de,T-4,2026-13-40,cp,de-power,buy,10,86.25,2026-07-01T00:00:00Z,2026-07-02T00:00:00Z",
         GOOD.format(n=5),  # line 6: reaches the batch
     ]
 )
@@ -65,7 +66,7 @@ def test_parse_quarantines_each_dishonest_row_with_its_reason() -> None:
     reasons = {line: outcome.detail for line, outcome in quarantined}
     assert "offset" in reasons[3]  # the codec refuses the naive instant
     assert "exact decimals" in reasons[4]
-    assert "buy or sell" in reasons[5]
+    assert "ISO date" in reasons[5]
 
 
 def test_header_mismatch_refuses_the_whole_file() -> None:
@@ -175,7 +176,7 @@ def test_an_all_quarantined_file_never_reaches_the_binary(tmp_path: Path) -> Non
     text = "\n".join(
         [
             HEADER,
-            "spec-de,T-1,2026-06-30,cp,de-power,long,10,86.25,2026-07-01T00:00:00Z,2026-07-02T00:00:00Z",
+            "spec-de,T-1,2026-13-40,cp,de-power,buy,10,86.25,2026-07-01T00:00:00Z,2026-07-02T00:00:00Z",
             "spec-de,T-2,2026-06-30,cp,de-power,buy,ten,86.25,2026-07-01T00:00:00Z,2026-07-02T00:00:00Z",
         ]
     )

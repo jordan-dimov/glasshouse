@@ -36,7 +36,7 @@ from glasshouse.projections import (
     trade_terms_version,
     trade_valuation,
 )
-from tests.support import BINARY, DB, needs_live_stack, provision
+from tests.support import BINARY, DB, login_role, needs_live_stack, provision
 
 ORG, BOOK, MARKET = "acme-energy", "spec-de", "de-power"
 AS_OF = dt.date(2026, 6, 8)
@@ -71,6 +71,8 @@ def history(morpholog: GlasshouseClient, engine: sa.Engine) -> tuple[int, str]:
     not project anything: tests own their read-side entry."""
     store = CurveStore(engine)
     for grant in (
+        models.EstablishLedgerRequest(login_role=login_role()),
+        models.EstablishOrganisationRequest(org=ORG),
         models.GrantCaptureAuthorityRequest(principal="alice", org=ORG, book=BOOK),
         models.GrantCurveAuthorityRequest(principal="carol", org=ORG, market=MARKET),
         models.GrantValuationAuthorityRequest(principal="risk-engine", org=ORG, book=BOOK),
@@ -157,7 +159,7 @@ def history(morpholog: GlasshouseClient, engine: sa.Engine) -> tuple[int, str]:
         value_trade(morpholog, store, actor="risk-engine", org=ORG, book=BOOK, trade="T-001"),
         Committed,
     )
-    return 10, captured.transition_id
+    return 12, captured.transition_id
 
 
 def _rows(engine: sa.Engine) -> dict[str, list[tuple[object, ...]]]:

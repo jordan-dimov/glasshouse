@@ -18,7 +18,7 @@ from glasshouse.compute.curves import HourlyCurve
 from glasshouse.compute.marking import correct_and_remark, register_curve_version
 from glasshouse.compute.store import CurveStore, StoreError
 from glasshouse.compute.terms import terms_version_id
-from tests.support import BINARY, DB, needs_live_stack, provision
+from tests.support import BINARY, DB, ensure_ledger_root, needs_live_stack, provision
 
 pytestmark = needs_live_stack
 
@@ -46,7 +46,9 @@ def stack() -> tuple[GlasshouseClient, CurveStore]:
 
 def _desk(client: GlasshouseClient, store: CurveStore, org: str) -> None:
     """Grants, a buy and a sell on the market, and v1 official."""
+    ensure_ledger_root(client)
     for grant in (
+        models.EstablishOrganisationRequest(org=org),
         models.GrantCaptureAuthorityRequest(principal="alice", org=org, book=BOOK),
         models.GrantCurveAuthorityRequest(principal="carol", org=org, market=MARKET),
         models.GrantValuationAuthorityRequest(principal="risk-engine", org=org, book=BOOK),

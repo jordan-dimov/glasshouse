@@ -29,7 +29,14 @@ from decimal import Decimal
 import sqlalchemy as sa
 
 from alembic import command
-from glasshouse.commit import MODEL_FILE, Committed, GlasshouseClient, apply_views, models
+from glasshouse.commit import (
+    MODEL_FILE,
+    Committed,
+    GlasshouseClient,
+    Rejected,
+    apply_views,
+    models,
+)
 from glasshouse.commit.morpholog_client import Request
 from glasshouse.commit.morpholog_client.envelopes import AtomicCommitted
 from glasshouse.compute.amendment import amend_trade
@@ -181,7 +188,9 @@ def seed_demo(client: GlasshouseClient, store: CurveStore, engine: sa.Engine) ->
     reconcile_indexes(client)
     apply_views(engine)
 
+    establish_ledger_root(client, engine)
     grants: tuple[Request, ...] = (
+        models.EstablishOrganisationRequest(org=ORG),
         *(models.GrantCaptureAuthorityRequest(principal="alice", org=ORG, book=b) for b in BOOKS),
         models.GrantCurveAuthorityRequest(principal="carol", org=ORG, market=MARKET),
         *(
@@ -284,6 +293,21 @@ def seed_demo(client: GlasshouseClient, store: CurveStore, engine: sa.Engine) ->
         amendments=1,
         valuations=2 * len(_TRADES) + 1,
     )
+
+
+def establish_ledger_root(
+    client: GlasshouseClient, engine: sa.Engine, *, actor: str = "bootstrap"
+) -> None:
+    """Establish the ledger's root actor from this provisioning path,
+    restricted in the same act to this connection's own login, so no
+    other credential can assert it. Already established is not an error
+    here; anything else is."""
+    with engine.connect() as connection:
+        login = connection.execute(sa.text("SELECT session_user")).scalar_one()
+    outcome = client.submit(models.EstablishLedgerRequest(login_role=login), actor=actor)
+    if isinstance(outcome, Rejected) and outcome.rule == "ledger_is_new":
+        return
+    _committed(outcome)
 
 
 def _committed(outcome: object) -> None:

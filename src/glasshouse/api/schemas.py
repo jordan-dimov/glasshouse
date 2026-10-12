@@ -234,17 +234,31 @@ class MissingClaim(BaseModel):
     candidate_supplier_transformations: list[str]
 
 
+class Compared(BaseModel):
+    """The two values a refused comparison compared, as the ledger
+    compared them (wire text: decimals as written, instants ISO 8601)."""
+
+    op: str
+    left: str
+    right: str
+
+
 class GateRejection(BaseModel):
     kind: Literal["gate"] = "gate"
     gate: str
+    # The gate's stable name (every Glasshouse gate has one); `gate` is the
+    # rendered expression, which any rewording changes.
+    rule: str | None = None
     statement_kind: str
     directly_missing_claims: list[MissingClaim]
+    compared: Compared | None = None
 
 
 class InvariantRejection(BaseModel):
     kind: Literal["invariant"] = "invariant"
     name: str
     rule: str
+    compared: Compared | None = None
 
 
 class ErrorRejection(BaseModel):

@@ -21,7 +21,7 @@ from glasshouse.compute.marking import correct_curve_version, register_curve_ver
 from glasshouse.compute.store import CurveStore
 from glasshouse.compute.terms import terms_version_id
 from glasshouse.projections import rebuild
-from tests.support import BINARY, DB, needs_live_stack, provision
+from tests.support import BINARY, DB, login_role, needs_live_stack, provision
 
 pytestmark = needs_live_stack
 
@@ -44,6 +44,8 @@ def seeded() -> sa.Engine:
     assert client.init().status == "initialised"
     store = CurveStore(engine)
     for grant in (
+        models.EstablishLedgerRequest(login_role=login_role()),
+        models.EstablishOrganisationRequest(org=ORG),
         models.GrantCaptureAuthorityRequest(principal="alice", org=ORG, book=BOOK),
         models.GrantCurveAuthorityRequest(principal="carol", org=ORG, market=MARKET),
         models.GrantValuationAuthorityRequest(principal="risk-engine", org=ORG, book=BOOK),

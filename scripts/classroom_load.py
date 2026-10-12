@@ -74,7 +74,15 @@ from glasshouse.compute.marking import correct_and_remark, register_curve_versio
 from glasshouse.compute.store import CurveStore, engine_url
 from glasshouse.compute.terms import terms_version_id
 from glasshouse.provision import run_provision
-from glasshouse.seed import AS_OF, CORRECTED_CURVE, CURVE, DAY, MARKET, TRADE_DATE
+from glasshouse.seed import (
+    AS_OF,
+    CORRECTED_CURVE,
+    CURVE,
+    DAY,
+    MARKET,
+    TRADE_DATE,
+    establish_ledger_root,
+)
 
 # The demo's own market, day, curve and Tuesday correction (glasshouse.seed),
 # so each organisation's story is the demo's story, twenty times at once.
@@ -156,13 +164,16 @@ def _filler(database_url: str, orgs: list[str], max_attempts: int) -> Tally:
     for org in orgs:
         actor = f"trader-{org}"
         try:
-            grant = models.GrantCaptureAuthorityRequest(principal=actor, org=org, book=BOOK)
-            _retrying(
-                tally,
-                "grant",
-                partial(client.submit, grant, actor="bootstrap"),
-                max_attempts=max_attempts,
-            )
+            for grant in (
+                models.EstablishOrganisationRequest(org=org),
+                models.GrantCaptureAuthorityRequest(principal=actor, org=org, book=BOOK),
+            ):
+                _retrying(
+                    tally,
+                    "grant",
+                    partial(client.submit, grant, actor="bootstrap"),
+                    max_attempts=max_attempts,
+                )
             for i in range(10):
                 _retrying(
                     tally,
@@ -184,6 +195,7 @@ def _story(database_url: str, org: str, trades: int, max_attempts: int) -> Tally
     trader, curator, risk = f"trader-{org}", f"curator-{org}", f"risk-{org}"
     try:
         for request in (
+            models.EstablishOrganisationRequest(org=org),
             models.GrantCaptureAuthorityRequest(principal=trader, org=org, book=BOOK),
             models.GrantCurveAuthorityRequest(principal=curator, org=org, market=MARKET),
             models.GrantValuationAuthorityRequest(principal=risk, org=org, book=BOOK),
@@ -396,6 +408,7 @@ def build(args: argparse.Namespace) -> int:
     report = run_provision(args.database_url)
     print(report.render())
     engine = sa.create_engine(engine_url(args.database_url), isolation_level="AUTOCOMMIT")
+    establish_ledger_root(_client(args.database_url), engine)
     orgs = [f"filler-{i:04d}" for i in range(args.filler)]
     started = time.monotonic()
     try:
@@ -436,6 +449,7 @@ def burst(args: argparse.Namespace) -> int:
     report = run_provision(args.database_url)
     print(report.render())
     engine = sa.create_engine(engine_url(args.database_url), isolation_level="AUTOCOMMIT")
+    establish_ledger_root(_client(args.database_url), engine)
     try:
         _analyze(engine)
         claims_before = _claims(engine)

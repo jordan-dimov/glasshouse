@@ -111,7 +111,22 @@ def test_invariant_rejection_is_flattened(tmp_path: Path, monkeypatch: pytest.Mo
         "kind": "invariant",
         "name": "trade_terms_unique_by_version",
         "rule": "TradeTerms unique by (version)",
+        "compared": None,
     }
+
+
+def test_a_refusal_carries_its_rule_and_the_values_it_compared(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    compared = {
+        "op": ">",
+        "left": {"type": "decimal", "value": "0"},
+        "right": {"type": "decimal", "value": "0"},
+    }
+    verdict = json.loads(INVARIANT_REJECTED)
+    verdict["verdict"]["rejected"].update(name="quantity_is_positive", compared=compared)
+    response = _post(tmp_path, monkeypatch, json.dumps(verdict))
+    assert response.json()["rejection"]["compared"] == {"op": ">", "left": "0", "right": "0"}
 
 
 def test_error_rejection_is_flattened(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

@@ -28,7 +28,7 @@ from glasshouse.commit import (
     views_model_hash,
 )
 from glasshouse.compute.store import engine_url
-from tests.support import BINARY, DB, needs_live_stack, provision
+from tests.support import BINARY, DB, login_role, needs_live_stack, provision
 
 pytestmark = needs_live_stack
 
@@ -42,13 +42,12 @@ def applied() -> sa.Engine:
     provision()
     client = GlasshouseClient(str(MODEL_FILE), DB, binary=str(BINARY))
     assert client.init().status == "initialised"
-    assert isinstance(
-        client.submit(
-            models.GrantCaptureAuthorityRequest(principal="alice", org=ORG, book=BOOK),
-            actor="bootstrap",
-        ),
-        Committed,
-    )
+    for request in (
+        models.EstablishLedgerRequest(login_role=login_role()),
+        models.EstablishOrganisationRequest(org=ORG),
+        models.GrantCaptureAuthorityRequest(principal="alice", org=ORG, book=BOOK),
+    ):
+        assert isinstance(client.submit(request, actor="bootstrap"), Committed)
     engine = sa.create_engine(engine_url(DB))
     apply_views(engine)
     return engine
@@ -93,10 +92,10 @@ def test_the_applied_surface_seals_itself(applied: sa.Engine) -> None:
     # The script records each view's stored definition hash at apply
     # time (upstream #190, our #184); the binary's cross-check of
     # catalogue, seal and live views verifies intact over the whole
-    # inventory: nine predicate views plus the catalogue itself.
+    # inventory: fourteen predicate views plus the catalogue itself.
     client = GlasshouseClient(str(MODEL_FILE), DB, binary=str(BINARY))
     verdict = client.audit_verify(views_schema=VIEWS_SCHEMA).views
-    assert verdict == envelopes.ViewsIntact(views_checked=11)
+    assert verdict == envelopes.ViewsIntact(views_checked=15)
 
 
 def test_applying_does_not_leak_autocommit(applied: sa.Engine) -> None:

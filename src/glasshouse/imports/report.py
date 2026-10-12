@@ -14,6 +14,7 @@ attempted` for the rows behind it, which never ran.
 
 from __future__ import annotations
 
+import datetime as dt
 from dataclasses import dataclass
 
 from glasshouse.commit import envelopes
@@ -41,16 +42,34 @@ _STATUSES = (
 )
 
 
+def wire_text(value: object) -> str:
+    """One compared value as a desk reads it: decimals as written,
+    instants and dates in ISO 8601, subjects bare."""
+    if isinstance(value, dt.datetime | dt.date):
+        return value.isoformat()
+    return str(value)
+
+
+def comparison(compared: envelopes.Compared) -> str:
+    """The two values the refused rule compared, and how, exactly as the
+    ledger compared them. Nothing here recomputes the rule: from v0.0.15
+    a refusal carries its own numbers."""
+    return f"{wire_text(compared.left)} {compared.op} {wire_text(compared.right)} does not hold"
+
+
 def why(explanation: envelopes.Explanation | None) -> str:
     """One line of business-terms why, from the same-snapshot
-    explanation: what is missing and which transformations could supply
-    it, or which invariant the proposal would break."""
+    explanation, led by the named rule that refused: what is missing and
+    which transformations could supply it, the two values a failing
+    comparison compared, or which invariant the proposal would break."""
     if explanation is None:
         return ""
     match explanation.rejection:
         case None:
             return "admissible"
-        case envelopes.GateRejection(directly_missing_claims=missing, gate=gate):
+        case envelopes.GateRejection(
+            directly_missing_claims=missing, gate=gate, rule=rule, compared=compared
+        ):
             parts = [
                 f"missing {claim.rendered}"
                 + (
@@ -60,9 +79,14 @@ def why(explanation: envelopes.Explanation | None) -> str:
                 )
                 for claim in missing
             ]
-            return "; ".join(parts) or f"gate {gate} refused"
-        case envelopes.InvariantRejection(name=name):
-            return f"would break invariant {name}"
+            if compared is not None:
+                parts.append(comparison(compared))
+            detail = "; ".join(parts) or f"{gate} refused"
+            return f"{rule}: {detail}" if rule else detail
+        case envelopes.InvariantRejection(name=name, compared=compared):
+            return f"would break invariant {name}" + (
+                f": {comparison(compared)}" if compared is not None else ""
+            )
         case envelopes.ErrorRejection(message=message):
             return message
 

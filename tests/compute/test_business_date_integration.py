@@ -18,7 +18,7 @@ from glasshouse.compute.curves import HourlyCurve
 from glasshouse.compute.marking import MarkingError, register_curve_version, value_trade
 from glasshouse.compute.store import CurveStore
 from glasshouse.compute.terms import terms_version_id
-from tests.support import BINARY, DB, needs_live_stack, provision
+from tests.support import BINARY, DB, login_role, needs_live_stack, provision
 
 # The first terms version's effective date: on or before every curve
 # business date these tests value under.
@@ -42,6 +42,8 @@ def stack() -> tuple[GlasshouseClient, CurveStore, sa.Engine]:
     client.init()
     store = CurveStore(engine)
     for grant in (
+        models.EstablishLedgerRequest(login_role=login_role()),
+        models.EstablishOrganisationRequest(org=ORG),
         models.GrantCaptureAuthorityRequest(principal="alice", org=ORG, book=BOOK),
         models.GrantCurveAuthorityRequest(principal="carol", org=ORG, market=MARKET),
         models.GrantValuationAuthorityRequest(principal="risk-engine", org=ORG, book=BOOK),
