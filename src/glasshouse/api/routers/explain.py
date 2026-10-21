@@ -31,6 +31,7 @@ from glasshouse.api.schemas import (
     InvariantRejection,
     MissingClaim,
     Rejection,
+    WitnessBinding,
 )
 from glasshouse.commit import MorphologError
 from glasshouse.commit.morpholog_client import envelopes
@@ -46,6 +47,10 @@ def _compared(compared: envelopes.Compared | None) -> Compared | None:
     if compared is None:
         return None
     return Compared(op=compared.op, left=wire_text(compared.left), right=wire_text(compared.right))
+
+
+def _witness(witness: list[envelopes.WitnessBinding]) -> list[WitnessBinding]:
+    return [WitnessBinding(var=binding.var, value=wire_text(binding.value)) for binding in witness]
 
 
 def _flatten(rejection: object) -> Rejection | None:
@@ -69,12 +74,14 @@ def _flatten(rejection: object) -> Rejection | None:
                     for claim in rejection.directly_missing_claims
                 ],
                 compared=_compared(rejection.compared),
+                witness=_witness(rejection.witness),
             )
         case envelopes.InvariantRejection():
             return InvariantRejection(
                 name=rejection.name,
                 rule=rejection.rule,
                 compared=_compared(rejection.compared),
+                witness=_witness(rejection.witness),
             )
         case envelopes.ErrorRejection():
             return ErrorRejection(message=rejection.message)

@@ -95,7 +95,7 @@ def test_the_applied_surface_seals_itself(applied: sa.Engine) -> None:
     # inventory: fourteen predicate views plus the catalogue itself.
     client = GlasshouseClient(str(MODEL_FILE), DB, binary=str(BINARY))
     verdict = client.audit_verify(views_schema=VIEWS_SCHEMA).views
-    assert verdict == envelopes.ViewsIntact(views_checked=15)
+    assert verdict == envelopes.ViewsIntact(views_checked=17)
 
 
 def test_applying_does_not_leak_autocommit(applied: sa.Engine) -> None:

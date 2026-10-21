@@ -63,6 +63,8 @@ _ALEMBIC_INI = ALEMBIC_INI
 ORG = "acme-energy"
 MARKET = "de-power"
 BOOKS = ("spec-de", "hedge-de")
+# The per-hour position cap of each book, in MW.
+LIMITS = {"spec-de": Decimal("25"), "hedge-de": Decimal("20")}
 # Two versions, deliberately non-overlapping ids (neither is a substring
 # of the other, so tests may count occurrences without aliasing).
 CURVE_V1 = "crv-2026-07-01-v1"
@@ -137,6 +139,7 @@ class SeedReport:
     curves: int
     amendments: int
     valuations: int
+    limits: int = 0
     # The tree size of the checkpoint recorded over the close. None only
     # in a report built without seeding (the tests' stable-render fixture).
     checkpoint_rows: int | None = None
@@ -150,7 +153,8 @@ class SeedReport:
         return (
             f"seeded {self.org}: {self.books} book(s), {self.trades} trade(s), "
             f"{self.curves} curve version(s), {self.amendments} amendment(s), "
-            f"{self.valuations} valuation(s){anchored}; verify: consistent"
+            f"{self.valuations} valuation(s), {self.limits} position limit(s){anchored}; "
+            "verify: consistent"
         )
 
 
@@ -230,9 +234,21 @@ def seed_demo(
         *(models.GrantCaptureAuthorityRequest(principal="demo", org=ORG, book=b) for b in BOOKS),
         models.GrantCurveAuthorityRequest(principal="demo", org=ORG, market=MARKET),
         *(models.GrantValuationAuthorityRequest(principal="demo", org=ORG, book=b) for b in BOOKS),
+        models.GrantLimitAuthorityRequest(principal="risk-manager", org=ORG),
+        models.GrantLimitAuthorityRequest(principal="demo", org=ORG),
     )
     for grant in grants:
         _committed(client.submit(grant, actor="bootstrap"))
+    # Each book's per-hour position cap, set by risk before the desk
+    # trades: wide enough for the story below (spec-de peaks at 20 MW
+    # net, hedge-de at 15 MW short), tight enough that the workbench can
+    # show a refusal that names the hour.
+    for book, cap in LIMITS.items():
+        _committed(
+            client.submit(
+                models.SetPositionLimitRequest(org=ORG, book=book, cap=cap), actor="risk-manager"
+            )
+        )
 
     for trade, book, counterparty, direction, quantity, price, start, end in _TRADES:
         _committed(
@@ -330,6 +346,7 @@ def seed_demo(
         curves=2,
         amendments=1,
         valuations=2 * len(_TRADES) + 1,
+        limits=len(LIMITS),
         checkpoint_rows=anchored.checkpoint.tree_size,
     )
 

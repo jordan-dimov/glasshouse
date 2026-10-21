@@ -89,6 +89,9 @@ predicate MayCaptureTrade(actor: Subject, org: Subject, book: Subject)
 predicate MayRegisterCurve(actor: Subject, org: Subject, market: Subject)
 predicate MayValueTrade(actor: Subject, org: Subject, book: Subject)
 predicate MayGrantAuthority(actor: Subject, org: Subject)
+-- Who may set a book's position limit in an organisation: risk, not the
+-- desk. A limit is a governed claim like any grant.
+predicate MaySetLimit(actor: Subject, org: Subject)
 predicate MayEstablishOrganisations(actor: Subject)
 -- Morpholog's reserved assertion policy: once an actor is restricted, a
 -- proposal naming it is refused before evaluation unless the database
@@ -117,6 +120,16 @@ predicate CurveSupersedes(new_version: Subject, prior_version: Subject)
 predicate TradeValued(org: Subject, book: Subject, trade: Subject, curve_version: Subject, terms_version: Subject, mtm: Decimal[EUR])
     unique by (trade, curve_version, terms_version)
     append only
+-- A book's cap on its net position (bought less sold) in any one
+-- delivery hour. One standing cap per book: a change retracts the
+-- standing cap and admits the new one in one act, so the audit log
+-- keeps every cap that ever stood and the claims table holds the one
+-- that does (law 2). Deliberately not append only: a cap is the current
+-- rule for a book, like the official-curve pointer, not a record of a
+-- trade. The cap is enforced at capture and amendment (below); lowering
+-- it under open trades raises a breach to manage, never unwinds them.
+predicate PositionLimit(org: Subject, book: Subject, cap: Decimal[MW])
+    unique by (org, book)
 
 -- The referential and value rules that must always hold, by any path.
 -- (Uniqueness, the official-pointer singleton and no-fork lineage are
@@ -128,6 +141,11 @@ predicate TradeValued(org: Subject, book: Subject, trade: Subject, curve_version
 invariant direction_is_buy_or_sell:
     TradeCaptured(trade: trade, direction: direction, ..)
     implies (direction = #buy or direction = #sell)
+
+-- A cap is a positive figure; the singleton per book is generated from
+-- `unique by`. The keys are named so the case is one book.
+invariant position_limit_is_positive:
+    PositionLimit(org: org, book: book, cap: cap) implies cap > 0 MW
 
 -- Terms belong to a captured trade, in the same organisation.
 invariant terms_belong_to_captured_trade:
@@ -251,15 +269,64 @@ transformation grant_valuation_authority(principal, org, book):
     require may_grant_authority: MayGrantAuthority(actor, org)
     admit MayValueTrade(principal, org, book)
 
+transformation grant_limit_authority(principal, org):
+    require may_grant_authority: MayGrantAuthority(actor, org)
+    admit MaySetLimit(principal, org)
+
+-- Set a book's position limit, once; a book with no limit is uncapped
+-- and the hour gate below is vacuous for it. Changing a standing cap is
+-- the other act, which keeps the one it replaces in the log.
+transformation set_position_limit(org, book, cap):
+    require may_set_limit: MaySetLimit(actor, org)
+    require limit_is_new: not PositionLimit(org: org, book: book, ..)
+    admit PositionLimit(org, book, cap)
+
+transformation change_position_limit(org, book, cap):
+    require may_set_limit: MaySetLimit(actor, org)
+    bind PositionLimit(org, book, standing)
+    retract PositionLimit(org, book, standing)
+    admit PositionLimit(org, book, cap)
+
 -- Capture a trade: identity and the first version of its terms in one
 -- transition, effective from the trade date. The gate ties the actor's
 -- capability to this org and this book; the trade id is fixed once
 -- captured (a change of terms is an amendment, never an overwrite).
 -- The version id is the caller's, like a curve version's.
+-- The position limit holds in every delivery hour the trade touches
+-- (example 23 of the substrate's gallery is the shape; morpholog#563
+-- forced the grid). The window is bounded first, as the grid requires
+-- and as the product requires: nothing here delivers for longer than a
+-- leap year. The grid is the start of every hour the window meets; a
+-- window that is whole hours meets exactly as many hours as its length
+-- holds, so the alignment gate refuses a trade starting at half past
+-- (the compute zone's own rule, now the ledger's). Then, for each cap
+-- the book has (none: uncapped, the gate is vacuous) and each hour, the
+-- book's net position as its terms stand in force on this trade's
+-- trade date, plus this trade signed by its direction, must sit within
+-- the cap either way round. The refusal names the hour in its witness.
+-- The window is forward first: an inverted window has an empty grid,
+-- which the alignment gate would refuse with a number no desk can read;
+-- the record invariant delivery_period_is_ordered still holds by any
+-- path.
+-- A gate, not an invariant, on purpose: a pre-trade limit is checked
+-- when the trade is captured, and lowering a cap later does not unwind
+-- trades (the invariant form of the same cap is morpholog#606).
 transformation capture_trade(org, book, trade, counterparty, market, direction, version, quantity, price, delivery_start, delivery_end, trade_date):
     require may_capture_trade: MayCaptureTrade(actor, org, book)
     require trade_is_new: not TradeCaptured(trade: trade, ..)
     require terms_version_is_new: not TradeTerms(version: version, ..)
+    require delivery_is_forward: delivery_start strictly_before delivery_end
+    require delivery_is_at_most_a_year: delivery_end - delivery_start no_longer_than duration(PT8784H)
+    let hours = periods(delivery_start, delivery_end, duration(PT1H))
+    require delivery_is_whole_hours: (delivery_end - delivery_start) / duration(PT1H) = sum(1 | h in hours)
+    require hour_within_limit: (forall cap in PositionLimit(org, book, cap): forall h in hours:
+        abs(sum(q | trade_terms_in_force_on(trade: t, as_of: trade_date, quantity: q, delivery_start: s, delivery_end: e, ..)
+                    and TradeCaptured(org: org, book: book, trade: t, direction: #buy, ..)
+                    and s at_or_before h and h strictly_before e)
+            - sum(q | trade_terms_in_force_on(trade: t, as_of: trade_date, quantity: q, delivery_start: s, delivery_end: e, ..)
+                    and TradeCaptured(org: org, book: book, trade: t, direction: #sell, ..)
+                    and s at_or_before h and h strictly_before e)
+            + if(direction = #buy, quantity, 0 MW - quantity)) <= cap)
     admit TradeCaptured(org, book, trade, counterparty, market, direction)
     admit TradeTerms(org, trade, version, quantity, price, delivery_start, delivery_end, trade_date)
 
@@ -270,11 +337,24 @@ transformation capture_trade(org, book, trade, counterparty, market, direction, 
 -- `TradeCaptured`. The capture capability for the trade's book is the
 -- amendment capability: whoever may book a trade may re-book its terms.
 transformation amend_trade(org, trade, prior_version, new_version, quantity, price, delivery_start, delivery_end, effective_from):
-    require may_amend_trade: TradeCaptured(org: org, trade: trade, book: book, ..) and MayCaptureTrade(actor, org, book)
+    bind trade_is_captured: TradeCaptured(org, book, trade, _, _, direction)
+    require may_amend_trade: MayCaptureTrade(actor, org, book)
     require amendment_takes_effect_later: TradeTerms(org: org, trade: trade, version: prior_version, effective_from: prior_from, ..)
     and effective_from after prior_from
     require prior_terms_are_the_latest: not TradeTermsSupersedes(prior_version: prior_version, ..)
     require terms_version_is_new: not TradeTerms(version: new_version, ..)
+    require delivery_is_forward: delivery_start strictly_before delivery_end
+    require delivery_is_at_most_a_year: delivery_end - delivery_start no_longer_than duration(PT8784H)
+    let hours = periods(delivery_start, delivery_end, duration(PT1H))
+    require delivery_is_whole_hours: (delivery_end - delivery_start) / duration(PT1H) = sum(1 | h in hours)
+    require hour_within_limit: (forall cap in PositionLimit(org, book, cap): forall h in hours:
+        abs(sum(q | trade_terms_in_force_on(trade: t, as_of: effective_from, quantity: q, delivery_start: s, delivery_end: e, ..)
+                    and TradeCaptured(org: org, book: book, trade: t, direction: #buy, ..)
+                    and t != trade and s at_or_before h and h strictly_before e)
+            - sum(q | trade_terms_in_force_on(trade: t, as_of: effective_from, quantity: q, delivery_start: s, delivery_end: e, ..)
+                    and TradeCaptured(org: org, book: book, trade: t, direction: #sell, ..)
+                    and t != trade and s at_or_before h and h strictly_before e)
+            + if(direction = #buy, quantity, 0 MW - quantity)) <= cap)
     admit TradeTerms(org, trade, new_version, quantity, price, delivery_start, delivery_end, effective_from)
     admit TradeTermsSupersedes(new_version, prior_version)
 
