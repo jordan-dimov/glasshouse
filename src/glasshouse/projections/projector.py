@@ -81,6 +81,11 @@ IGNORED = frozenset(
         "CurveRegistered",
         "OfficialCurve",
         "CurveSupersedes",
+        # A book's position cap and who may set it: enforced by the
+        # ledger at capture and amendment, read from governed state, not
+        # a projection (yet).
+        "MaySetLimit",
+        "PositionLimit",
     }
 )
 

@@ -15,6 +15,7 @@ attempted` for the rows behind it, which never ran.
 from __future__ import annotations
 
 import datetime as dt
+import re
 from dataclasses import dataclass
 
 from glasshouse.commit import envelopes
@@ -53,6 +54,8 @@ def wire_text(value: object) -> str:
         return value.isoformat()
     if isinstance(value, values.Quantity):
         return f"{value.amount} {value.unit}"
+    if isinstance(value, list):
+        return "[" + ", ".join(wire_text(item) for item in value) + "]"
     return str(value)
 
 
@@ -61,6 +64,27 @@ def comparison(compared: envelopes.Compared) -> str:
     ledger compared them. Nothing here recomputes the rule: from v0.0.15
     a refusal carries its own numbers."""
     return f"{wire_text(compared.left)} {compared.op} {wire_text(compared.right)} does not hold"
+
+
+# A quantifier's binder over a collection (`forall h in hours:`), not one
+# over a claim pattern (`forall cap in PositionLimit(..)`), whose value the
+# comparison already shows.
+_BINDER = re.compile(r"\b(?:forall|exists)\s+(\w+)\s+in\s+\w+\s*:")
+
+
+def witnessed(rule_text: str, witness: list[envelopes.WitnessBinding]) -> str:
+    """Where the refused rule failed, for the line a desk reads: of the
+    bindings the ledger reports beside the comparison (every variable in
+    scope, the proposal's own arguments and the whole hour grid among
+    them), only the binders of the rule's quantifiers over collections -
+    the hour a per-hour limit broke in - rendered as
+    `(h = 2026-07-01T08:00:00+00:00)`.
+    The full witness is on the API for a screen to use."""
+    binders = set(_BINDER.findall(rule_text))
+    shown = [b for b in witness if b.var in binders]
+    if not shown:
+        return ""
+    return " (" + ", ".join(f"{b.var} = {wire_text(b.value)}" for b in shown) + ")"
 
 
 def why(explanation: envelopes.Explanation | None) -> str:
@@ -74,7 +98,11 @@ def why(explanation: envelopes.Explanation | None) -> str:
         case None:
             return "admissible"
         case envelopes.GateRejection(
-            directly_missing_claims=missing, gate=gate, rule=rule, compared=compared
+            directly_missing_claims=missing,
+            gate=gate,
+            rule=rule,
+            compared=compared,
+            witness=witness,
         ):
             parts = [
                 f"missing {claim.rendered}"
@@ -86,12 +114,14 @@ def why(explanation: envelopes.Explanation | None) -> str:
                 for claim in missing
             ]
             if compared is not None:
-                parts.append(comparison(compared))
+                parts.append(comparison(compared) + witnessed(gate, witness))
             detail = "; ".join(parts) or f"{gate} refused"
             return f"{rule}: {detail}" if rule else detail
-        case envelopes.InvariantRejection(name=name, compared=compared):
+        case envelopes.InvariantRejection(name=name, rule=rule, compared=compared, witness=witness):
             return f"would break invariant {name}" + (
-                f": {comparison(compared)}" if compared is not None else ""
+                f": {comparison(compared)}{witnessed(rule, witness)}"
+                if compared is not None
+                else ""
             )
         case envelopes.ErrorRejection(message=message):
             return message

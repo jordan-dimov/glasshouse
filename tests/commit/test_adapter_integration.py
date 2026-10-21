@@ -148,6 +148,27 @@ def test_the_needle_lifecycle(morpholog: GlasshouseClient) -> None:
     )
     assert isinstance(delegated, Committed), delegated
 
+    # The book's position cap: set by whoever holds the limit authority,
+    # changed by the same act's sibling (the standing cap retracted, the
+    # new one admitted, both in the log). Set wide enough that the
+    # captures below sit under it; the gate itself is proved in
+    # test_limits_integration.
+    entitled = morpholog.submit(
+        models.GrantLimitAuthorityRequest(principal="risk", org=ORG), actor="bootstrap"
+    )
+    assert isinstance(entitled, Committed), entitled
+    capped = morpholog.submit(
+        models.SetPositionLimitRequest(org=ORG, book=BOOK, cap=Decimal("25")), actor="risk"
+    )
+    assert isinstance(capped, Committed), capped
+    changed = morpholog.submit(
+        models.ChangePositionLimitRequest(org=ORG, book=BOOK, cap=Decimal("30")), actor="risk"
+    )
+    assert isinstance(changed, Committed), changed
+    assert {c.predicate for c in changed.retracted_claims} == {"PositionLimit"}
+    (cap,) = morpholog.read(models.PositionLimitClaim)
+    assert (cap.book, cap.cap) == (BOOK, Decimal("30"))
+
     # Law 9 at the codec: an instant must carry its offset, so a naive
     # delivery instant is refused before it can reach the wire.
     naive = models.CaptureTradeRequest(
@@ -447,6 +468,14 @@ def test_the_needle_lifecycle(morpholog: GlasshouseClient) -> None:
         assert isinstance(refused_capture, Rejected)
         assert refused_capture.explanation is not None
         violated = refused_capture.explanation.rejection
+        if invariant == "delivery_period_is_ordered":
+            # The capture and amendment gates refuse an inverted window
+            # by name before the hour grid is built (limits); the record
+            # invariant of the same name holds by any path and is
+            # exercised by every committed capture.
+            assert isinstance(violated, GateRejection)
+            assert violated.rule == "delivery_is_forward"
+            continue
         assert isinstance(violated, InvariantRejection)
         assert violated.name == invariant
         if invariant == "quantity_is_positive":
@@ -488,6 +517,6 @@ def test_the_needle_lifecycle(morpholog: GlasshouseClient) -> None:
     # no invariant's condition has gone unexercised by committed history.
     report = morpholog.coverage()
     in_programme = [t for t in report.transformations if not t.not_in_programme]
-    assert len(in_programme) == 11
+    assert len(in_programme) == 14
     assert all(t.transitions > 0 for t in in_programme)
     assert not [i.invariant for i in report.invariants if i.verdict == "never_fired"]

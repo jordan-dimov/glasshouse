@@ -18,6 +18,7 @@ is the separate-worker loop.
 from __future__ import annotations
 
 import sys
+from decimal import Decimal
 from pathlib import Path
 from typing import Annotated
 
@@ -31,8 +32,10 @@ from glasshouse.commit import (
     VIEWS_SCHEMA,
     GlasshouseClient,
     MorphologError,
+    Rejected,
     apply_views,
 )
+from glasshouse.commit.morpholog_client.adapter import Request
 from glasshouse.commit.morpholog_client.envelopes import (
     CheckpointCreated,
     RoleRebindingsEvaluated,
@@ -40,6 +43,11 @@ from glasshouse.commit.morpholog_client.envelopes import (
     TreeIntact,
     TreeMalformedPack,
     TreeUnsupportedPack,
+)
+from glasshouse.commit.morpholog_client.models import (
+    ChangePositionLimitRequest,
+    PositionLimitClaim,
+    SetPositionLimitRequest,
 )
 from glasshouse.compute.store import CurveStore, engine_url
 from glasshouse.config import Settings, get_settings
@@ -50,6 +58,7 @@ from glasshouse.imports import (
     import_trades,
     preview_curves,
     preview_trades,
+    why,
 )
 from glasshouse.logging import configure_logging, get_logger
 from glasshouse.projections import catch_up, follow
@@ -205,6 +214,36 @@ def seed_command(
     database_url: DatabaseUrl = "",
 ) -> None:
     print(run_seed(_db(database_url), reset=reset).render())
+
+
+@app.command(
+    "set-limit",
+    help="Set a book's per-hour position limit (the cap on its net position in any delivery "
+    "hour), or change the standing one; enforced by the ledger at capture and amendment.",
+)
+def set_limit_command(
+    org: Annotated[str, typer.Option(help="the organisation")],
+    book: Annotated[str, typer.Option(help="the book the cap applies to")],
+    cap: Annotated[str, typer.Option(help="the cap in MW, as written (never a float)")],
+    actor: Annotated[str, typer.Option(help="the actor setting it (holds the limit authority)")],
+    database_url: DatabaseUrl = "",
+) -> None:
+    client = _client(_db(database_url))
+    cap_mw = Decimal(cap)
+    standing = [limit for limit in client.read(PositionLimitClaim) if limit.book == book]
+    request: Request = (
+        ChangePositionLimitRequest(org=org, book=book, cap=cap_mw)
+        if standing
+        else SetPositionLimitRequest(org=org, book=book, cap=cap_mw)
+    )
+    outcome = client.submit(request, actor=actor, explain_on_reject=True)
+    if isinstance(outcome, Rejected):
+        print(f"refused: {why(outcome.explanation)}", file=sys.stderr)
+        raise typer.Exit(code=1)
+    was = f" (was {standing[0].cap} MW)" if standing else ""
+    print(
+        f"position limit for {book} in {org}: {cap_mw} MW{was}; transition {outcome.transition_id}"
+    )
 
 
 @app.command("verify", help="Prove the operational database still agrees with the governed ledger.")

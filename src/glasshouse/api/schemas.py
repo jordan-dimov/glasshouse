@@ -244,6 +244,14 @@ class Compared(BaseModel):
     right: str
 
 
+class WitnessBinding(BaseModel):
+    """A variable and the value it held where the refused rule failed
+    (the hour a per-hour limit was exceeded in), in the same wire text."""
+
+    var: str
+    value: str
+
+
 class GateRejection(BaseModel):
     kind: Literal["gate"] = "gate"
     gate: str
@@ -253,6 +261,7 @@ class GateRejection(BaseModel):
     statement_kind: str
     directly_missing_claims: list[MissingClaim]
     compared: Compared | None = None
+    witness: list[WitnessBinding] = []
 
 
 class InvariantRejection(BaseModel):
@@ -260,6 +269,7 @@ class InvariantRejection(BaseModel):
     name: str
     rule: str
     compared: Compared | None = None
+    witness: list[WitnessBinding] = []
 
 
 class ErrorRejection(BaseModel):

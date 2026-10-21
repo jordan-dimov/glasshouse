@@ -112,6 +112,7 @@ def test_invariant_rejection_is_flattened(tmp_path: Path, monkeypatch: pytest.Mo
         "name": "trade_terms_unique_by_version",
         "rule": "TradeTerms unique by (version)",
         "compared": None,
+        "witness": [],
     }
 
 
@@ -123,11 +124,17 @@ def test_a_refusal_carries_its_rule_and_the_values_it_compared(
         "left": {"type": "quantity", "value": {"amount": "0", "unit": "MW"}},
         "right": {"type": "quantity", "value": {"amount": "0", "unit": "MW"}},
     }
+    witness = [{"var": "h", "value": {"type": "timestamp", "value": "2026-07-01T10:00:00Z"}}]
     verdict = json.loads(INVARIANT_REJECTED)
-    verdict["verdict"]["rejected"].update(name="quantity_is_positive", compared=compared)
+    verdict["verdict"]["rejected"].update(
+        name="quantity_is_positive", compared=compared, witness=witness
+    )
     response = _post(tmp_path, monkeypatch, json.dumps(verdict))
-    # A quantity is rendered with the unit the codec now keeps (v0.0.16).
-    assert response.json()["rejection"]["compared"] == {"op": ">", "left": "0 MW", "right": "0 MW"}
+    rejection = response.json()["rejection"]
+    # A quantity is rendered with the unit the codec now keeps (v0.0.16),
+    # and the witness (where the rule failed) travels in the same wire text.
+    assert rejection["compared"] == {"op": ">", "left": "0 MW", "right": "0 MW"}
+    assert rejection["witness"] == [{"var": "h", "value": "2026-07-01T10:00:00+00:00"}]
 
 
 def test_error_rejection_is_flattened(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

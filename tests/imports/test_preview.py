@@ -2,11 +2,13 @@
 verdicts on a fake binary. The ledger-true previews (refusals naming
 missing grants) live in the integration leg."""
 
+import datetime as dt
 import json
 from pathlib import Path
 
 from glasshouse.commit import GlasshouseClient, envelopes
 from glasshouse.imports import preview_trades, why
+from glasshouse.imports.report import wire_text
 from tests.imports.test_trades import HEADER, MIXED
 from tests.support import fake_binary
 
@@ -147,3 +149,50 @@ def test_why_leads_with_the_named_rule_and_the_values_it_compared() -> None:
     # From v0.0.16 the codec keeps a quantity's unit, and the line a desk
     # reads carries it: the rule compares megawatts, so the refusal says so.
     assert why(zero) == "would break invariant quantity_is_positive: 0 MW > 0 MW does not hold"
+    # A per-hour limit's refusal: the ledger's witness carries every
+    # binding in scope (the proposal's arguments, the cap, the whole hour
+    # grid); the desk's line shows the quantifier's binder, the hour.
+    over_limit = envelopes.Explanation.from_json(
+        {
+            "transition": REFUSAL["transition"],
+            "verdict": {
+                "rejected": {
+                    "kind": "gate",
+                    "gate": "(forall cap in PositionLimit(org, book, cap): forall h in hours: ...)",
+                    "rule": "hour_within_limit",
+                    "statement_kind": "require",
+                    "directly_missing_claims": [],
+                    "compared": {
+                        "op": "<=",
+                        "left": {"type": "quantity", "value": {"amount": "13", "unit": "MW"}},
+                        "right": {"type": "quantity", "value": {"amount": "10", "unit": "MW"}},
+                    },
+                    "witness": [
+                        {"var": "book", "value": {"type": "subject", "value": "spec-de"}},
+                        {
+                            "var": "cap",
+                            "value": {"type": "quantity", "value": {"amount": "10", "unit": "MW"}},
+                        },
+                        {
+                            "var": "h",
+                            "value": {"type": "timestamp", "value": "2026-07-01T10:00:00Z"},
+                        },
+                        {
+                            "var": "hours",
+                            "value": {
+                                "type": "collection",
+                                "value": [
+                                    {"type": "timestamp", "value": "2026-07-01T10:00:00Z"},
+                                    {"type": "timestamp", "value": "2026-07-01T11:00:00Z"},
+                                ],
+                            },
+                        },
+                    ],
+                }
+            },
+        }
+    )
+    assert why(over_limit) == (
+        "hour_within_limit: 13 MW <= 10 MW does not hold (h = 2026-07-01T10:00:00+00:00)"
+    )
+    assert wire_text([dt.datetime(2026, 7, 1, 10, tzinfo=dt.UTC)]) == "[2026-07-01T10:00:00+00:00]"

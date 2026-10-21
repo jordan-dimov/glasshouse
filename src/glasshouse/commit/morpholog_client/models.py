@@ -116,6 +116,60 @@ class GrantValuationAuthorityRequest:
 
 
 @dataclass(frozen=True)
+class GrantLimitAuthorityRequest:
+    """Arguments for `grant_limit_authority`."""
+
+    TRANSFORMATION: ClassVar[str] = "grant_limit_authority"
+
+    principal: str
+    org: str
+
+    def to_args_named(self) -> dict[str, object]:
+        return {
+            "principal": values.encode_named(self.principal),
+            "org": values.encode_named(self.org),
+        }
+
+
+@dataclass(frozen=True)
+class SetPositionLimitRequest:
+    """Arguments for `set_position_limit`."""
+
+    TRANSFORMATION: ClassVar[str] = "set_position_limit"
+
+    org: str
+    book: str
+    cap: Decimal
+    # amount in MW (the declaration carries the unit)
+
+    def to_args_named(self) -> dict[str, object]:
+        return {
+            "org": values.encode_named(self.org),
+            "book": values.encode_named(self.book),
+            "cap": values.encode_named(self.cap),
+        }
+
+
+@dataclass(frozen=True)
+class ChangePositionLimitRequest:
+    """Arguments for `change_position_limit`."""
+
+    TRANSFORMATION: ClassVar[str] = "change_position_limit"
+
+    org: str
+    book: str
+    cap: Decimal
+    # amount in MW (the declaration carries the unit)
+
+    def to_args_named(self) -> dict[str, object]:
+        return {
+            "org": values.encode_named(self.org),
+            "book": values.encode_named(self.book),
+            "cap": values.encode_named(self.cap),
+        }
+
+
+@dataclass(frozen=True)
 class CaptureTradeRequest:
     """Arguments for `capture_trade`."""
 
@@ -329,6 +383,24 @@ class MayGrantAuthorityClaim:
         return cls(
             actor=values.named_text("MayGrantAuthority.actor", args["actor"]),
             org=values.named_text("MayGrantAuthority.org", args["org"]),
+        )
+
+
+@dataclass(frozen=True)
+class MaySetLimitClaim:
+    """One admitted `MaySetLimit` claim, decoded by declared kind."""
+
+    PREDICATE: ClassVar[str] = "MaySetLimit"
+
+    actor: str
+    org: str
+
+    @classmethod
+    def from_named(cls, args: dict[str, object]) -> MaySetLimitClaim:
+        values.named_fields("MaySetLimit", args, ("actor", "org"))
+        return cls(
+            actor=values.named_text("MaySetLimit.actor", args["actor"]),
+            org=values.named_text("MaySetLimit.org", args["org"]),
         )
 
 
@@ -614,6 +686,27 @@ class TradeValuedClaim:
                 args["terms_version"],
             ),
             mtm=values.named_decimal("TradeValued.mtm", args["mtm"]),
+        )
+
+
+@dataclass(frozen=True)
+class PositionLimitClaim:
+    """One admitted `PositionLimit` claim, decoded by declared kind."""
+
+    PREDICATE: ClassVar[str] = "PositionLimit"
+
+    org: str
+    book: str
+    cap: Decimal
+    # amount in MW (the declaration carries the unit)
+
+    @classmethod
+    def from_named(cls, args: dict[str, object]) -> PositionLimitClaim:
+        values.named_fields("PositionLimit", args, ("org", "book", "cap"))
+        return cls(
+            org=values.named_text("PositionLimit.org", args["org"]),
+            book=values.named_text("PositionLimit.book", args["book"]),
+            cap=values.named_decimal("PositionLimit.cap", args["cap"]),
         )
 
 
