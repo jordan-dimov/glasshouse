@@ -86,9 +86,10 @@ class MorphologError(RuntimeError):
     business rejection, which is a decided outcome on stdout."""
 
     #: Whether re-submitting the same request is known to be safe. False
-    #: for every error but a ``serialization_failure`` receipt: an
-    #: unknown outcome may already have committed, and any other failure
-    #: needs its cause fixed first. The one retry predicate.
+    #: for every error but a ``serialization_failure`` receipt and a
+    #: checkpoint's ``transition_not_covered`` refusal: an unknown outcome
+    #: may already have committed, and any other failure needs its cause
+    #: fixed first. The one retry predicate.
     retriable: bool = False
 
 
@@ -111,6 +112,43 @@ class MorphologRequestError(MorphologError):
     @property
     def retriable(self) -> bool:  # type: ignore[override]
         return self.code == "serialization_failure"
+
+
+class MorphologNotCovered(MorphologError):
+    """``audit_checkpoint(covering=...)`` refused: the transition is
+    committed but outside the stable prefix that run could checkpoint.
+    Nothing was recorded, so the call is safe to repeat after the prefix
+    advances. An id the log does not hold is a plain ``MorphologError``."""
+
+    retriable = True
+
+    def __init__(self, refusal: envelopes.CheckpointRefusal) -> None:
+        super().__init__(refusal.error)
+        self.code = refusal.code
+        self.transition_id = refusal.transition_id
+        self.tree_size = refusal.tree_size
+
+
+class MorphologWitnessFailed(MorphologError):
+    """``audit_checkpoint(witnesses=...)`` or ``audit_witness`` recorded
+    the checkpoint and stored every witness that arrived, and at least
+    one authority did not answer with one. ``checkpoint`` is the head as
+    now stored, so the caller sees which witnesses did land; the message
+    is the binary's own account of each failed authority and the command
+    that retries exactly those. Repeating the witness call for the same
+    tree size adds to the recorded head and never records a checkpoint,
+    and a proof already stored is not stored twice, so the retry is safe;
+    whether the authority answers next time is its own affair. A head
+    short of the witnesses it needs is not a witnessed close."""
+
+    retriable = True
+
+    def __init__(self, checkpoint: envelopes.Checkpoint, stderr: str) -> None:
+        super().__init__(
+            f"the checkpoint at tree size {checkpoint.tree_size} is recorded, "
+            f"but a witness submission failed:\n{stderr}"
+        )
+        self.checkpoint = checkpoint
 
 
 class MorphologTimeout(MorphologError):
@@ -215,8 +253,6 @@ class Morpholog:
         # until then, ``True`` once it agreed, or the error a mismatch
         # raised, raised again on every later call.
         self._checked: bool | MorphologError | None = None
-        # The report the check read, until the first ``hash()`` takes it.
-        self._checked_report: envelopes.HashReport | None = None
         self._check_lock = threading.Lock()
 
     # ------------------------------------------------------------
@@ -236,18 +272,19 @@ class Morpholog:
         self._ensure_compatible()
         return self._run_raw(args, stdin, timeout=timeout, stdout=stdout)
 
-    def _ensure_compatible(self) -> None:
+    def _ensure_compatible(self) -> envelopes.HashReport | None:
         """Refuse a binary of another version, or one serving other rules,
         before anything else runs. Asked of `hash`, whose report carries
         both, once per client, immediately before its first operation: a
         mismatch stays refused. It detects deployment skew at first use;
         it does not protect against replacing the binary or the programme
-        file under a client already checked."""
+        file under a client already checked. Returns the report when this
+        call ran the check."""
         if self._expected_version is None and self._expected_model_hash is None:
-            return
+            return None
         with self._check_lock:
             if self._checked is True:
-                return
+                return None
             if isinstance(self._checked, MorphologError):
                 raise self._checked
             args = ["hash", self.file]
@@ -284,7 +321,7 @@ class Morpholog:
                 )
                 raise self._checked
             self._checked = True
-            self._checked_report = report
+            return report
 
     def _run_raw(
         self,
@@ -330,10 +367,13 @@ class Morpholog:
 
     def _invoke(self, *args: str, stdin: str | None = None) -> str:
         proc = self._run(list(args), stdin=stdin, timeout=self.timeout)
+        return self._decided(proc, list(args))
+
+    def _decided(self, proc: subprocess.CompletedProcess[str], args: list[str]) -> str:
+        """Stdout is the decided result, whatever the exit code; empty
+        stdout is an operational failure."""
         if not proc.stdout.strip():
-            raise MorphologError(
-                f"`{_redact_argv(list(args))}`:\n{self._redact_stderr(proc.stderr)}"
-            )
+            raise MorphologError(f"`{_redact_argv(args)}`:\n{self._redact_stderr(proc.stderr)}")
         return proc.stdout
 
     def _json(self, *args: str) -> object:
@@ -400,7 +440,7 @@ class Morpholog:
         `SELECT` on the record, so a readiness probe can run as either.
 
         `check` reports and changes nothing. The binary exits non-zero when
-        the database is behind, but this client reads stdout rather than the
+        the database is not current, but this client reads stdout rather than the
         exit code, so you get the report either way - which is the more
         useful outcome, because a raise would throw away what is pending.
         Gate on the report:
@@ -465,21 +505,54 @@ class Morpholog:
         return envelopes.ProvisionReport.from_json(json.loads(proc.stdout))
 
     def hash(self) -> envelopes.HashReport:
-        """The stamps the binary reports for the file. The first call after
-        the pinned check returns the report that check read, without a
-        second spawn; every later call asks the binary again."""
-        self._ensure_compatible()
-        with self._check_lock:
-            kept, self._checked_report = self._checked_report, None
-        if kept is not None:
-            return kept
+        """The stamps the binary reports for the file. When this call runs
+        the pinned check, it returns the report the check read; otherwise
+        it asks the binary."""
+        checked = self._ensure_compatible()
+        if checked is not None:
+            return checked
         return envelopes.HashReport.from_json(self._json("hash", self.file))
 
-    def check(self, strict: bool = False) -> envelopes.CheckReport:
+    def check(self, strict: bool = False, *, with_database: bool = False) -> envelopes.CheckReport:
+        """Check the programme. With ``with_database``, also check that it
+        fits the claims this client's database holds now: a deploy step,
+        not a guard on every call."""
         args = ["check", "--json", self.file]
         if strict:
             args.append("--strict")
+        if with_database:
+            args.extend(["--database-url", self.database_url])
         return envelopes.CheckReport.from_json(self._json(*args))
+
+    def guarantees(self) -> list[envelopes.Guarantee]:
+        """Every invariant of this client's programme file, generated ones
+        included, in the programme's order, each with the state it rules
+        out. Invariants only: a gate on one transformation is not here.
+        The rule text comes from this binary's formatter, so another
+        version may render it differently."""
+        return envelopes.parse_list(
+            self._json("inspect", "guarantees", self.file, "--json"),
+            envelopes.Guarantee.from_json,
+        )
+
+    def evaluate(
+        self, pack: str | None = None, *, train_until: str | None = None
+    ) -> envelopes.ScoreReport:
+        """Replay a history the ledger admitted under this client's
+        programme file's invariants, and report the transitions each would
+        have refused: from ``pack``, an evidence pack read offline, or else
+        from this client's database. ``train_until`` (a transition id or an
+        RFC 3339 timestamp) splits the replay in two. Gates are not scored.
+        A programme that cannot be scored, one using ``pre(...)`` for one,
+        raises ``MorphologError``: not evaluated, which is not the same as
+        refused."""
+        args = ["evaluate", self.file]
+        if pack is None:
+            args.extend(["--database-url", self.database_url])
+        else:
+            args.extend(["--pack", str(pack)])
+        args.extend(self._opt("--train-until", train_until))
+        return envelopes.ScoreReport.from_json(self._json(*args))
 
     # ------------------------------------------------------------
     # The commit path.
@@ -1003,6 +1076,7 @@ class Morpholog:
         *,
         writer_roles: list[str] | None = None,
         witnesses: list[str] | None = None,
+        covering: str | None = None,
     ) -> envelopes.CheckpointCreated | envelopes.CheckpointNoNewRows:
         """Record a checkpoint over the current stable prefix, or return
         the unchanged head - either way a usable external anchor. Pass
@@ -1011,8 +1085,14 @@ class Morpholog:
         ``audit`` - the checkpoint's stable prefix rests on the same
         resume horizon. ``witnesses`` (each ``"rfc3161:<url>"``) has those
         timestamp authorities countersign the new head after the commit;
-        the checkpoint is recorded either way, and a failed submission is
-        an operational error naming ``audit_witness`` to retry."""
+        the checkpoint is recorded either way, and a failed submission
+        raises ``MorphologWitnessFailed`` carrying the head as stored, to
+        retry with ``audit_witness``. With
+        ``covering`` (a transition id) the result's head contains that
+        transition, or the call raises: ``MorphologNotCovered`` while it
+        is outside the stable prefix (nothing recorded; retry after the
+        prefix advances), ``MorphologError`` for an id the log does not
+        hold."""
         if (signing_key is None) != (key_id is None):
             raise ValueError("signing_key and key_id must be given together")
         args = ["audit", "checkpoint", "--database-url", self.database_url]
@@ -1020,7 +1100,15 @@ class Morpholog:
             args.extend(["--signing-key", str(signing_key), "--key-id", str(key_id)])
         args += self._repeat("--writer-role", writer_roles)
         args += self._repeat("--witness", witnesses)
-        return envelopes.parse_checkpoint_outcome(self._json(*args))
+        args += self._opt("--covering", covering)
+        proc = self._run(args, timeout=self.timeout)
+        payload = json.loads(self._decided(proc, args))
+        if isinstance(payload, dict) and payload.get("status") == "error":
+            raise MorphologNotCovered(envelopes.CheckpointRefusal.from_json(payload))
+        outcome = envelopes.parse_checkpoint_outcome(payload)
+        if witnesses and proc.returncode != 0:
+            raise MorphologWitnessFailed(outcome.checkpoint, self._redact_stderr(proc.stderr))
+        return outcome
 
     def audit_witness(self, tree_size: int, witnesses: list[str]) -> envelopes.Checkpoint:
         """Have timestamp authorities (each ``"rfc3161:<url>"``) witness
@@ -1028,14 +1116,18 @@ class Morpholog:
         response on it as it arrives. Returns the checkpoint as now
         stored. Every authority is attempted; a response that is not over
         this head is refused and stores nothing, and if any authority
-        failed the call is an operational error naming the retry, with
-        the others' witnesses already stored."""
+        failed the call raises ``MorphologWitnessFailed`` carrying the
+        checkpoint with the others' witnesses already stored."""
         if not witnesses:
             raise ValueError("name at least one witness")
         args = ["audit", "witness", "--database-url", self.database_url]
         args.extend(["--tree-size", str(tree_size)])
         args += self._repeat("--witness", witnesses)
-        return envelopes.Checkpoint.from_json(self._json(*args))
+        proc = self._run(args, timeout=self.timeout)
+        checkpoint = envelopes.Checkpoint.from_json(json.loads(self._decided(proc, args)))
+        if proc.returncode != 0:
+            raise MorphologWitnessFailed(checkpoint, self._redact_stderr(proc.stderr))
+        return checkpoint
 
     def audit_export(
         self, path: str, tree_size: int | None = None, timeout: float | None = None

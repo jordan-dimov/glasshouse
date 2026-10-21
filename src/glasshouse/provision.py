@@ -137,6 +137,31 @@ def reconcile_indexes(client: GlasshouseClient) -> envelopes.ProvisionReport:
     return report
 
 
+def fit_check(client: GlasshouseClient) -> envelopes.CheckReport:
+    """`check --strict --database-url` through the generated method: the
+    programme must fit the claims the ledger holds now (a stored claim
+    with another arity, kind or unit is an error on the declaration, a
+    stored predicate nothing declares is a hint), beside the static
+    checks `--strict` already fails on a hint. Upstream's deploy sequence
+    runs it between `migrate` and the index plan (v0.0.16, morpholog#575),
+    and this is the deploy, so a programme that would answer wrongly
+    against this ledger refuses here rather than at the first proposal.
+    The binary prints the report whatever its exit code, so the decision
+    is on the diagnostics: under `--strict` any one of them is a refusal."""
+    report = client.check(strict=True, with_database=True)
+    if report.diagnostics:
+        findings = [
+            f"{finding.severity}: {finding.message}"
+            + (f" (line {finding.line})" if finding.line is not None else "")
+            for finding in report.diagnostics
+        ]
+        raise ProvisionError(
+            "the programme does not fit this ledger, or fails check --strict: "
+            + "; ".join(findings)
+        )
+    return report
+
+
 def alembic_config(database_url: str, *, ini: Path = ALEMBIC_INI) -> Config:
     """The Alembic configuration, refused loudly when the bundle is
     absent: provisioning runs from the source checkout or the Docker
@@ -189,8 +214,10 @@ def run_provision(
 ) -> ProvisionReport:
     """The whole operation, in dependency order: app schema first (the
     migration owns the TimescaleDB extension), then the governed schema,
-    then the inspection views over it, then one audit tail read to prove
-    the ledger is readable with this deployment's configuration."""
+    then the programme checked against the claims it holds, then the
+    managed indexes, then the inspection views over it, then one audit
+    tail read to prove the ledger is readable with this deployment's
+    configuration."""
     command.upgrade(alembic_config(database_url), "head")
     client = GlasshouseClient(str(MODEL_FILE), database_url, writer_roles=writer_roles)
     init_report = client.init(skip_if_exists=True, least_privilege=least_privilege)
@@ -202,6 +229,9 @@ def run_provision(
     # database is already current (init wrote this binary's own schema) and
     # a current one is left alone, which keeps provision idempotent.
     migration = client.migrate()
+    # The schema is current; now the programme must fit what the ledger
+    # holds, before any index is planned for it or any write resumes.
+    fit_check(client)
     # `init` lays down the schema but not the managed indexes, and a
     # migration can rekey every one of them (v0.0.12's 017 did), so the
     # plan runs after both, every deploy. Without it every keyed load

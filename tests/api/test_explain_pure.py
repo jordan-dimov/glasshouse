@@ -120,13 +120,14 @@ def test_a_refusal_carries_its_rule_and_the_values_it_compared(
 ) -> None:
     compared = {
         "op": ">",
-        "left": {"type": "decimal", "value": "0"},
-        "right": {"type": "decimal", "value": "0"},
+        "left": {"type": "quantity", "value": {"amount": "0", "unit": "MW"}},
+        "right": {"type": "quantity", "value": {"amount": "0", "unit": "MW"}},
     }
     verdict = json.loads(INVARIANT_REJECTED)
     verdict["verdict"]["rejected"].update(name="quantity_is_positive", compared=compared)
     response = _post(tmp_path, monkeypatch, json.dumps(verdict))
-    assert response.json()["rejection"]["compared"] == {"op": ">", "left": "0", "right": "0"}
+    # A quantity is rendered with the unit the codec now keeps (v0.0.16).
+    assert response.json()["rejection"]["compared"] == {"op": ">", "left": "0 MW", "right": "0 MW"}
 
 
 def test_error_rejection_is_flattened(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

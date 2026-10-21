@@ -394,9 +394,11 @@ def _binary_version(client: GlasshouseClient) -> str:
     ).stdout.strip()
 
 
-# One capture grant (one claim) and ten captures (TradeCaptured plus
+# One grant of grant authority to the organisation's delegate (admitted
+# by establish_organisation since the 12/10/2026 model change, contract
+# section 30), one capture grant, and ten captures (TradeCaptured plus
 # TradeTerms each) per filler organisation.
-CLAIMS_PER_FILLER = 1 + 10 * 2
+CLAIMS_PER_FILLER = 1 + 1 + 10 * 2
 
 
 def _warm(_: int) -> None:

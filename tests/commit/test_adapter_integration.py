@@ -189,10 +189,11 @@ def test_the_needle_lifecycle(morpholog: GlasshouseClient) -> None:
     captured = morpholog.submit(capture, actor="alice")
     assert isinstance(captured, Committed)
     assert {c.predicate for c in captured.asserted_claims} == {"TradeCaptured", "TradeTerms"}
-    # Tagged quantities decode to the bare exact amount: the declaration
-    # fixes the unit, the wire never re-states it.
+    # A tagged quantity on a claim instance keeps its unit (v0.0.16,
+    # morpholog#564); the typed read below still gives the bare amount,
+    # since the declaration fixes the unit on the named surface.
     terms = next(c for c in captured.asserted_claims if c.predicate == "TradeTerms")
-    assert terms.args[3] == Decimal("10")
+    assert terms.args[3] == values.Quantity(Decimal("10"), "MW")
 
     # A duplicate capture is refused, carrying its own same-snapshot
     # explanation.
@@ -448,6 +449,12 @@ def test_the_needle_lifecycle(morpholog: GlasshouseClient) -> None:
         violated = refused_capture.explanation.rejection
         assert isinstance(violated, InvariantRejection)
         assert violated.name == invariant
+        if invariant == "quantity_is_positive":
+            # From v0.0.16 a compared quantity keeps its unit: the rule
+            # compares `qty > 0 MW`, and both sides arrive as megawatts.
+            assert violated.compared is not None
+            zero_mw = values.Quantity(Decimal("0"), "MW")
+            assert (violated.compared.left, violated.compared.right) == (zero_mw, zero_mw)
 
     # Typed reads: the generated models parse wire-true strings into
     # Decimal, date and aware datetime.
