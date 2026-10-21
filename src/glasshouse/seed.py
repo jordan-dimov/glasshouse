@@ -137,12 +137,20 @@ class SeedReport:
     curves: int
     amendments: int
     valuations: int
+    # The tree size of the checkpoint recorded over the close. None only
+    # in a report built without seeding (the tests' stable-render fixture).
+    checkpoint_rows: int | None = None
 
     def render(self) -> str:
+        anchored = (
+            ""
+            if self.checkpoint_rows is None
+            else f"; checkpoint over {self.checkpoint_rows} audit row(s)"
+        )
         return (
             f"seeded {self.org}: {self.books} book(s), {self.trades} trade(s), "
             f"{self.curves} curve version(s), {self.amendments} amendment(s), "
-            f"{self.valuations} valuation(s); verify: consistent"
+            f"{self.valuations} valuation(s){anchored}; verify: consistent"
         )
 
 
@@ -302,9 +310,19 @@ def seed_demo(
             effective_from=AMENDMENT_EFFECTIVE,
         )
     )
-    _committed(value_trade(client, store, actor="risk-engine", org=ORG, book=book, trade=trade))
+    close = _committed(
+        value_trade(client, store, actor="risk-engine", org=ORG, book=book, trade=trade)
+    )
 
     project_everything(client, engine, patience=patience)
+    # The close of the story is checkpointed covering its last transition
+    # (v0.0.16 `--covering`): the head recorded here is proven to contain
+    # the re-mark, so `verify`'s tree leg has something to prove and an
+    # evidence pack exported from this ledger has an anchor. The tail
+    # above was complete, so the transition is inside the stable prefix;
+    # were it not, the binary refuses (`MorphologNotCovered`, nothing
+    # recorded) rather than anchoring a head short of the close.
+    anchored = client.audit_checkpoint(covering=close.transition_id)
     return SeedReport(
         org=ORG,
         books=len(BOOKS),
@@ -312,6 +330,7 @@ def seed_demo(
         curves=2,
         amendments=1,
         valuations=2 * len(_TRADES) + 1,
+        checkpoint_rows=anchored.checkpoint.tree_size,
     )
 
 
@@ -393,9 +412,10 @@ def _tail_holders(engine: sa.Engine) -> str:
     )
 
 
-def _committed(outcome: object) -> None:
+def _committed(outcome: object) -> Committed:
     if not isinstance(outcome, Committed):
         raise SeedError(f"a seed write was not committed: {outcome!r}")
+    return outcome
 
 
 def run_seed(

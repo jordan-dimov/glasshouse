@@ -18,6 +18,7 @@ from glasshouse.provision import (
     ProvisionError,
     ProvisionReport,
     alembic_config,
+    fit_check,
     reconcile_indexes,
 )
 from tests.support import fake_binary
@@ -38,6 +39,8 @@ def _entry(
     }
     if not statistics:
         entry["predicate"] = "TradeTerms"
+        # v0.0.16: each index names the rules behind it (morpholog#578).
+        entry["needed_by"] = []
     if detail is not None:
         entry["detail"] = detail
     return entry
@@ -204,6 +207,54 @@ def test_an_index_conflict_refuses_rather_than_reporting_done(tmp_path: Path) ->
     assert argv[:3] == ["provision", "indexes", "model.morph"]
     assert "--json" in argv
     assert "--prune" in argv
+
+
+def test_a_programme_that_does_not_fit_the_ledger_fails_the_deploy(tmp_path: Path) -> None:
+    # Upstream's deploy sequence (v0.0.16): `check --strict --database-url`
+    # between `migrate` and the index plan, because a programme that does
+    # not fit the stored claims answers wrongly, not slowly. The report
+    # comes back whatever the exit code; the diagnostic is the binary's
+    # own, captured from a probe that redeclared TradeValued.mtm in GBP
+    # against a ledger holding EUR, so the deploy refuses by name.
+    misfit = fake_binary(
+        tmp_path,
+        json.dumps(
+            {
+                "file": "model.morph",
+                "diagnostics": [
+                    {
+                        "severity": "error",
+                        "message": (
+                            "field `mtm` of predicate `TradeValued` is declared Decimal[GBP], "
+                            "but 4 stored claims hold Decimal[EUR] there"
+                        ),
+                        "start": 6821,
+                        "end": 7022,
+                        "line": 117,
+                        "column": 1,
+                    }
+                ],
+            }
+        ),
+        exit_code=1,
+    )
+    client = GlasshouseClient("model.morph", "postgres:///x", binary=str(misfit))
+    with pytest.raises(ProvisionError, match="does not fit this ledger") as refused:
+        fit_check(client)
+    assert "4 stored claims hold Decimal[EUR]" in str(refused.value)
+    assert "(line 117)" in str(refused.value)
+    # The argv is the deploy sequence's own line: strict, and against
+    # this client's database, through the generated method.
+    argv = (tmp_path / "argv.txt").read_text().splitlines()
+    assert argv == ["check", "--json", "model.morph", "--strict", "--database-url", "postgres:///x"]
+
+
+def test_a_programme_that_fits_passes_the_fit_check(tmp_path: Path) -> None:
+    fits = fake_binary(
+        tmp_path, json.dumps({"file": "model.morph", "diagnostics": [], "invariants": []})
+    )
+    client = GlasshouseClient("model.morph", "postgres:///x", binary=str(fits))
+    assert fit_check(client).diagnostics == []
 
 
 def test_a_clean_plan_is_returned_for_the_report(tmp_path: Path) -> None:

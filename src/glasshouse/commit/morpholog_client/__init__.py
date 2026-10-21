@@ -16,11 +16,18 @@ if sys.version_info < (3, 12):
 
 PROGRAM = "glasshouse"
 MODEL_HASH = "sha256:09f8072bb999da0ba14c7176fa7067e24f48856e772549312f6dbd00935feef0"
-MORPHOLOG_VERSION = "0.0.15"
+MORPHOLOG_VERSION = "0.0.16"
 PYTHON_FLOOR = (3, 12)
 
 from . import envelopes, models, values  # noqa: E402
-from .adapter import Morpholog, MorphologBatchIncomplete, MorphologError, Request  # noqa: E402
+from .adapter import (  # noqa: E402
+    Morpholog,
+    MorphologBatchIncomplete,
+    MorphologError,
+    MorphologNotCovered,
+    MorphologWitnessFailed,
+    Request,
+)
 from .session import (  # noqa: E402
     MorphologOutcomeUnknown,
     MorphologRequestError,
@@ -81,6 +88,8 @@ __all__ = [
     "Morpholog",
     "MorphologBatchIncomplete",
     "MorphologError",
+    "MorphologNotCovered",
+    "MorphologWitnessFailed",
     "MorphologOutcomeUnknown",
     "MorphologRequestError",
     "Request",

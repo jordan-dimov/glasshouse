@@ -317,12 +317,14 @@ transformation correct_curve(org, market, as_of, prior_version, new_version, pay
 -- uncommittable, not merely discouraged. The three claim patterns
 -- share one `require` because bindings flow only within a
 -- conjunction: the curve's `as_of` binds in the pointer and feeds the
--- selector, whose payload holes are wildcarded positionally
--- (definitions take parameters, not fields, so they cannot be named).
+-- selector, called by the names of its parameters (the keys, `as_of`,
+-- then every payload field; morpholog#594, from v0.0.16) so the four
+-- payload holes it does not read are `..` rather than counted
+-- underscores. The IR stays positional: the hash did not move.
 transformation admit_valuation(org, book, trade, curve_version, terms_version, mtm):
     require may_value_trade: MayValueTrade(actor, org, book)
     require valued_against_official_curve_and_terms_in_force: TradeCaptured(org: org, book: book, trade: trade, market: market, ..)
     and OfficialCurve(org: org, market: market, as_of: as_of, version: curve_version)
-    and trade_terms_in_force_on(trade, as_of, org, terms_version, _, _, _, _)
+    and trade_terms_in_force_on(trade: trade, as_of: as_of, org: org, version: terms_version, ..)
     require valuation_is_new: not TradeValued(trade: trade, curve_version: curve_version, terms_version: terms_version, ..)
     admit TradeValued(org, book, trade, curve_version, terms_version, mtm)

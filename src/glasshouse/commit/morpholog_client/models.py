@@ -378,7 +378,10 @@ class ActorAssertionAuthorityClaim:
         values.named_fields("ActorAssertionAuthority", args, ("actor", "login_role"))
         return cls(
             actor=values.named_text("ActorAssertionAuthority.actor", args["actor"]),
-            login_role=values.named_text("ActorAssertionAuthority.login_role", args["login_role"]),
+            login_role=values.named_text(
+                "ActorAssertionAuthority.login_role",
+                args["login_role"],
+            ),
         )
 
 
@@ -397,12 +400,19 @@ class TradeCapturedClaim:
 
     @classmethod
     def from_named(cls, args: dict[str, object]) -> TradeCapturedClaim:
-        values.named_fields("TradeCaptured", args, ("org", "book", "trade", "counterparty", "market", "direction"))
+        values.named_fields(
+            "TradeCaptured",
+            args,
+            ("org", "book", "trade", "counterparty", "market", "direction"),
+        )
         return cls(
             org=values.named_text("TradeCaptured.org", args["org"]),
             book=values.named_text("TradeCaptured.book", args["book"]),
             trade=values.named_text("TradeCaptured.trade", args["trade"]),
-            counterparty=values.named_text("TradeCaptured.counterparty", args["counterparty"]),
+            counterparty=values.named_text(
+                "TradeCaptured.counterparty",
+                args["counterparty"],
+            ),
             market=values.named_text("TradeCaptured.market", args["market"]),
             direction=values.named_text("TradeCaptured.direction", args["direction"]),
         )
@@ -426,16 +436,38 @@ class TradeTermsClaim:
 
     @classmethod
     def from_named(cls, args: dict[str, object]) -> TradeTermsClaim:
-        values.named_fields("TradeTerms", args, ("org", "trade", "version", "quantity", "price", "delivery_start", "delivery_end", "effective_from"))
+        values.named_fields(
+            "TradeTerms",
+            args,
+            (
+                "org",
+                "trade",
+                "version",
+                "quantity",
+                "price",
+                "delivery_start",
+                "delivery_end",
+                "effective_from",
+            ),
+        )
         return cls(
             org=values.named_text("TradeTerms.org", args["org"]),
             trade=values.named_text("TradeTerms.trade", args["trade"]),
             version=values.named_text("TradeTerms.version", args["version"]),
             quantity=values.named_decimal("TradeTerms.quantity", args["quantity"]),
             price=values.named_decimal("TradeTerms.price", args["price"]),
-            delivery_start=values.named_timestamp("TradeTerms.delivery_start", args["delivery_start"]),
-            delivery_end=values.named_timestamp("TradeTerms.delivery_end", args["delivery_end"]),
-            effective_from=values.named_date("TradeTerms.effective_from", args["effective_from"]),
+            delivery_start=values.named_timestamp(
+                "TradeTerms.delivery_start",
+                args["delivery_start"],
+            ),
+            delivery_end=values.named_timestamp(
+                "TradeTerms.delivery_end",
+                args["delivery_end"],
+            ),
+            effective_from=values.named_date(
+                "TradeTerms.effective_from",
+                args["effective_from"],
+            ),
         )
 
 
@@ -450,10 +482,20 @@ class TradeTermsSupersedesClaim:
 
     @classmethod
     def from_named(cls, args: dict[str, object]) -> TradeTermsSupersedesClaim:
-        values.named_fields("TradeTermsSupersedes", args, ("new_version", "prior_version"))
+        values.named_fields(
+            "TradeTermsSupersedes",
+            args,
+            ("new_version", "prior_version"),
+        )
         return cls(
-            new_version=values.named_text("TradeTermsSupersedes.new_version", args["new_version"]),
-            prior_version=values.named_text("TradeTermsSupersedes.prior_version", args["prior_version"]),
+            new_version=values.named_text(
+                "TradeTermsSupersedes.new_version",
+                args["new_version"],
+            ),
+            prior_version=values.named_text(
+                "TradeTermsSupersedes.prior_version",
+                args["prior_version"],
+            ),
         )
 
 
@@ -471,13 +513,20 @@ class CurveRegisteredClaim:
 
     @classmethod
     def from_named(cls, args: dict[str, object]) -> CurveRegisteredClaim:
-        values.named_fields("CurveRegistered", args, ("org", "market", "as_of", "version", "payload_hash"))
+        values.named_fields(
+            "CurveRegistered",
+            args,
+            ("org", "market", "as_of", "version", "payload_hash"),
+        )
         return cls(
             org=values.named_text("CurveRegistered.org", args["org"]),
             market=values.named_text("CurveRegistered.market", args["market"]),
             as_of=values.named_date("CurveRegistered.as_of", args["as_of"]),
             version=values.named_text("CurveRegistered.version", args["version"]),
-            payload_hash=values.named_text("CurveRegistered.payload_hash", args["payload_hash"]),
+            payload_hash=values.named_text(
+                "CurveRegistered.payload_hash",
+                args["payload_hash"],
+            ),
         )
 
 
@@ -494,7 +543,11 @@ class OfficialCurveClaim:
 
     @classmethod
     def from_named(cls, args: dict[str, object]) -> OfficialCurveClaim:
-        values.named_fields("OfficialCurve", args, ("org", "market", "as_of", "version"))
+        values.named_fields(
+            "OfficialCurve",
+            args,
+            ("org", "market", "as_of", "version"),
+        )
         return cls(
             org=values.named_text("OfficialCurve.org", args["org"]),
             market=values.named_text("OfficialCurve.market", args["market"]),
@@ -516,8 +569,14 @@ class CurveSupersedesClaim:
     def from_named(cls, args: dict[str, object]) -> CurveSupersedesClaim:
         values.named_fields("CurveSupersedes", args, ("new_version", "prior_version"))
         return cls(
-            new_version=values.named_text("CurveSupersedes.new_version", args["new_version"]),
-            prior_version=values.named_text("CurveSupersedes.prior_version", args["prior_version"]),
+            new_version=values.named_text(
+                "CurveSupersedes.new_version",
+                args["new_version"],
+            ),
+            prior_version=values.named_text(
+                "CurveSupersedes.prior_version",
+                args["prior_version"],
+            ),
         )
 
 
@@ -537,13 +596,23 @@ class TradeValuedClaim:
 
     @classmethod
     def from_named(cls, args: dict[str, object]) -> TradeValuedClaim:
-        values.named_fields("TradeValued", args, ("org", "book", "trade", "curve_version", "terms_version", "mtm"))
+        values.named_fields(
+            "TradeValued",
+            args,
+            ("org", "book", "trade", "curve_version", "terms_version", "mtm"),
+        )
         return cls(
             org=values.named_text("TradeValued.org", args["org"]),
             book=values.named_text("TradeValued.book", args["book"]),
             trade=values.named_text("TradeValued.trade", args["trade"]),
-            curve_version=values.named_text("TradeValued.curve_version", args["curve_version"]),
-            terms_version=values.named_text("TradeValued.terms_version", args["terms_version"]),
+            curve_version=values.named_text(
+                "TradeValued.curve_version",
+                args["curve_version"],
+            ),
+            terms_version=values.named_text(
+                "TradeValued.terms_version",
+                args["terms_version"],
+            ),
             mtm=values.named_decimal("TradeValued.mtm", args["mtm"]),
         )
 

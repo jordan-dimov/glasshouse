@@ -18,6 +18,7 @@ import datetime as dt
 from dataclasses import dataclass
 
 from glasshouse.commit import envelopes
+from glasshouse.commit.morpholog_client import values
 
 COMMITTED = "committed"
 REJECTED = "rejected"
@@ -44,9 +45,14 @@ _STATUSES = (
 
 def wire_text(value: object) -> str:
     """One compared value as a desk reads it: decimals as written,
-    instants and dates in ISO 8601, subjects bare."""
+    instants and dates in ISO 8601, subjects bare, a quantity as its
+    amount and the unit it carried (`0 MW`: from v0.0.16 the codec keeps
+    the unit rather than dropping it, and a desk reads the unit as part
+    of the number)."""
     if isinstance(value, dt.datetime | dt.date):
         return value.isoformat()
+    if isinstance(value, values.Quantity):
+        return f"{value.amount} {value.unit}"
     return str(value)
 
 

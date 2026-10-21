@@ -236,7 +236,8 @@ class MissingClaim(BaseModel):
 
 class Compared(BaseModel):
     """The two values a refused comparison compared, as the ledger
-    compared them (wire text: decimals as written, instants ISO 8601)."""
+    compared them (wire text: decimals as written, instants ISO 8601, a
+    quantity as amount then unit, `0 MW`)."""
 
     op: str
     left: str

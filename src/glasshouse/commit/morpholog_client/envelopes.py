@@ -7,16 +7,19 @@ grows an envelope field this client does not know, the parse fails
 loudly instead of silently dropping data.
 
 Tagged values inside envelopes are decoded to bare Python values
-(``decimal.Decimal``, ``datetime.date``, aware ``datetime``); named
+(``decimal.Decimal``, ``datetime.date``, aware ``datetime``,
+``values.Quantity``); ``to_json`` prints any of them back. Named
 claims keep their wire-true bare values, and the generated read models
 in ``models.py`` parse those by declared kind.
 """
 
 from __future__ import annotations
 
+import json
 import re
-from dataclasses import dataclass, field
-from datetime import datetime
+from dataclasses import asdict, dataclass, field, is_dataclass
+from datetime import date, datetime
+from decimal import Decimal
 from collections.abc import Set as AbstractSet
 from typing import Callable, Generic, TypeVar
 
@@ -946,7 +949,9 @@ class Explanation:
 
     @classmethod
     def from_json(cls, payload: object) -> Explanation:
-        data = _strict("explanation", payload, {"transition", "verdict"})
+        data = _strict("explanation", payload, {"transition", "verdict"}, optional={"row"})
+        # Through the session, the request row rides beside the verdict.
+        data.optional_integer("row", minimum=1)
         verdict = data.raw("verdict")
         rejection: GateRejection | InvariantRejection | ErrorRejection | None
         if verdict == "admissible":
@@ -1779,6 +1784,176 @@ class HashReport:
         )
 
 
+@dataclass(frozen=True)
+class Guarantee:
+    """One invariant and the state it rules out. ``forbids`` is set for a
+    ``not(...)`` rule, ``from_clause`` for a rule generated from a
+    declaration clause; each is ``None`` otherwise."""
+
+    invariant: str
+    rule: str
+    forbids: str | None = None
+    from_clause: str | None = None
+
+    @classmethod
+    def from_json(cls, payload: object) -> Guarantee:
+        data = _strict("guarantee", payload, {"invariant", "rule"}, {"forbids", "from"})
+        return cls(
+            invariant=data.text("invariant"),
+            rule=data.text("rule"),
+            forbids=data.optional_text("forbids"),
+            # `from` is a Python keyword; the wire name maps to
+            # `from_clause` on this side only.
+            from_clause=data.optional_text("from"),
+        )
+
+
+@dataclass(frozen=True)
+class InvariantScore:
+    """One invariant replayed over the whole history: whether it held of
+    the state before the first transition, and the admitted transitions
+    it would have refused."""
+
+    invariant: str
+    version: int
+    initially_holds: bool
+    would_refuse: int
+    refused_transitions: list[str]
+
+    @classmethod
+    def from_json(cls, payload: object) -> InvariantScore:
+        data = _strict(
+            "invariant score",
+            payload,
+            {"invariant", "version", "initially_holds", "would_refuse", "refused_transitions"},
+        )
+        return cls(
+            invariant=data.text("invariant"),
+            version=data.integer("version", minimum=1),
+            initially_holds=data.flag("initially_holds"),
+            would_refuse=data.integer("would_refuse", minimum=0),
+            refused_transitions=data.texts("refused_transitions"),
+        )
+
+
+@dataclass(frozen=True)
+class SliceInvariantScore:
+    """One invariant within one slice of a split replay."""
+
+    invariant: str
+    version: int
+    would_refuse: int
+    refused_transitions: list[str]
+
+    @classmethod
+    def from_json(cls, payload: object) -> SliceInvariantScore:
+        data = _strict(
+            "slice invariant score",
+            payload,
+            {"invariant", "version", "would_refuse", "refused_transitions"},
+        )
+        return cls(
+            invariant=data.text("invariant"),
+            version=data.integer("version", minimum=1),
+            would_refuse=data.integer("would_refuse", minimum=0),
+            refused_transitions=data.texts("refused_transitions"),
+        )
+
+
+@dataclass(frozen=True)
+class SliceScore:
+    transitions_replayed: int
+    invariants: list[SliceInvariantScore]
+
+    @classmethod
+    def from_json(cls, payload: object) -> SliceScore:
+        data = _strict("slice score", payload, {"transitions_replayed", "invariants"})
+        return cls(
+            transitions_replayed=data.integer("transitions_replayed", minimum=0),
+            invariants=data.array("invariants", SliceInvariantScore.from_json),
+        )
+
+
+@dataclass(frozen=True)
+class SplitBoundary:
+    """The ``train_until`` asked for, and the last transition at or before
+    it, which ends the training slice."""
+
+    requested: str
+    resolved_transition_id: str
+    resolved_committed_at: datetime
+
+    @classmethod
+    def from_json(cls, payload: object) -> SplitBoundary:
+        data = _strict(
+            "split boundary",
+            payload,
+            {"requested", "resolved_transition_id", "resolved_committed_at"},
+        )
+        return cls(
+            requested=data.text("requested"),
+            resolved_transition_id=data.text("resolved_transition_id"),
+            resolved_committed_at=data.timestamp("resolved_committed_at"),
+        )
+
+
+@dataclass(frozen=True)
+class ScoreSplit:
+    boundary: SplitBoundary
+    train: SliceScore
+    test: SliceScore
+
+    @classmethod
+    def from_json(cls, payload: object) -> ScoreSplit:
+        data = _strict("score split", payload, {"boundary", "train", "test"})
+        return cls(
+            boundary=data.nested("boundary", SplitBoundary.from_json),
+            train=data.nested("train", SliceScore.from_json),
+            test=data.nested("test", SliceScore.from_json),
+        )
+
+
+@dataclass(frozen=True)
+class ScoreReport:
+    """What the programme's invariants would have refused in a history the
+    ledger already admitted. Evidence for a deployment decision, not the
+    decision: gates are not scored. ``split`` is ``None`` unless the
+    replay was split with ``train_until``."""
+
+    score_format_version: int
+    semantics: str
+    program: str
+    program_hash: str
+    transitions_replayed: int
+    invariants: list[InvariantScore]
+    split: ScoreSplit | None = None
+
+    @classmethod
+    def from_json(cls, payload: object) -> ScoreReport:
+        data = _strict(
+            "score report",
+            payload,
+            {
+                "score_format_version",
+                "semantics",
+                "program",
+                "program_hash",
+                "transitions_replayed",
+                "invariants",
+            },
+            {"split"},
+        )
+        return cls(
+            score_format_version=data.integer("score_format_version", minimum=1),
+            semantics=data.text("semantics"),
+            program=data.text("program"),
+            program_hash=_hash(data, "program_hash"),
+            transitions_replayed=data.integer("transitions_replayed", minimum=0),
+            invariants=data.array("invariants", InvariantScore.from_json),
+            split=data.optional_nested("split", ScoreSplit.from_json),
+        )
+
+
 def version_skew(payload: object, expected: str) -> str | None:
     """The version the binary states in its envelope against the one this
     client was generated for, or ``None`` when they agree or the envelope
@@ -1837,6 +2012,28 @@ class MigrationRef:
 
 
 @dataclass(frozen=True)
+class BelowBaseline:
+    """A database an older release made. A binary of release `upgrade_with`
+    must migrate it before this one can."""
+
+    baseline: int
+    upgrade_with: str
+    # The newest migration the database records; None when it records none.
+    recorded: int | None = None
+
+    @classmethod
+    def from_json(cls, payload: object) -> BelowBaseline:
+        data = _strict(
+            "below baseline", payload, {"baseline", "upgrade_with"}, {"recorded"}
+        )
+        return cls(
+            baseline=data.integer("baseline"),
+            upgrade_with=data.text("upgrade_with"),
+            recorded=data.optional_integer("recorded"),
+        )
+
+
+@dataclass(frozen=True)
 class MigrationReport:
     """What `migrate` found, and what it did about it."""
 
@@ -1848,13 +2045,17 @@ class MigrationReport:
     # Recorded by the database and unknown to this binary: the database is
     # AHEAD, which is what a rollback to an older binary looks like.
     unknown: list[MigrationRef] = field(default_factory=list)
+    # Set only when the database is older than the baseline. Nothing is
+    # pending then, since this binary can apply nothing to it.
+    below_baseline: BelowBaseline | None = None
 
     @property
     def is_current(self) -> bool:
-        """Nothing outstanding and nothing unrecognised. What a deploy gate
-        asks - and it is false for a database AHEAD of this binary too,
-        which is when a green light would be most dangerous."""
-        return not self.pending and not self.unknown
+        """Nothing outstanding, nothing unrecognised, and not below the
+        baseline. What a deploy gate asks - and it is false for a database
+        AHEAD of this binary too, which is when a green light would be most
+        dangerous."""
+        return not self.pending and not self.unknown and self.below_baseline is None
 
     @classmethod
     def from_json(cls, payload: object) -> MigrationReport:
@@ -1863,7 +2064,7 @@ class MigrationReport:
             payload,
             {"recorded_version_before", "recorded_version_after", "binary_version",
              "applied", "pending"},
-            {"unknown"},
+            {"unknown", "below_baseline"},
         )
         return cls(
             recorded_version_before=data.integer("recorded_version_before"),
@@ -1872,6 +2073,7 @@ class MigrationReport:
             applied=data.array("applied", MigrationRef.from_json),
             pending=data.array("pending", MigrationRef.from_json),
             unknown=data.optional_array("unknown", MigrationRef.from_json),
+            below_baseline=data.optional_nested("below_baseline", BelowBaseline.from_json),
         )
 
 
@@ -1893,15 +2095,38 @@ _STATISTICS_ACTIONS = frozenset({"keep", "create", "conflict", "stale"})
 
 
 @dataclass(frozen=True)
+class IndexNeed:
+    """One part of a programme named in the call that needs an index: an
+    invariant, or a transformation."""
+
+    program: str
+    kind: str
+    name: str
+
+    @classmethod
+    def from_json(cls, payload: object) -> IndexNeed:
+        data = _strict("index need", payload, {"program", "kind", "name"})
+        return cls(
+            program=data.text("program"),
+            kind=data.member("kind", {"invariant", "transformation"}),
+            name=data.text("name"),
+        )
+
+
+@dataclass(frozen=True)
 class ProvisionedIndex:
     """One index the call reconciled against the catalogue. ``detail`` is
-    for an operator to read, not to decide on."""
+    for an operator to read, not to decide on. ``needed_by`` covers the
+    programmes named in the call only; one outside it is in
+    ``required_by`` alone, so an empty ``needed_by`` does not mean the
+    index is unneeded."""
 
     action: str
     name: str
     predicate: str
     position: int
     required_by: list[str]
+    needed_by: list[IndexNeed]
     detail: str = ""
 
     @classmethod
@@ -1909,7 +2134,7 @@ class ProvisionedIndex:
         data = _strict(
             "provisioned index",
             payload,
-            {"action", "name", "predicate", "position", "required_by"},
+            {"action", "name", "predicate", "position", "required_by", "needed_by"},
             {"detail"},
         )
         return cls(
@@ -1918,6 +2143,7 @@ class ProvisionedIndex:
             predicate=data.text("predicate"),
             position=data.integer("position"),
             required_by=data.texts("required_by"),
+            needed_by=data.array("needed_by", IndexNeed.from_json),
             detail=data.optional_text("detail") or "",
         )
 
@@ -2738,6 +2964,34 @@ def parse_checkpoint_outcome(payload: object) -> CheckpointCreated | CheckpointN
 
 
 @dataclass(frozen=True)
+class CheckpointRefusal:
+    """The refusal of ``audit checkpoint`` with ``covering``: the
+    transition is committed but outside the stable prefix that run could
+    checkpoint. Nothing was recorded."""
+
+    code: str
+    error: str
+    transition_id: str
+    tree_size: int
+
+    @classmethod
+    def from_json(cls, payload: object) -> CheckpointRefusal:
+        data = _strict(
+            "checkpoint refusal",
+            payload,
+            {"code", "error", "status", "transition_id", "tree_size"},
+        )
+        data.constant("status", "error")
+        data.constant("code", "transition_not_covered")
+        return cls(
+            code="transition_not_covered",
+            error=data.text("error"),
+            transition_id=data.text("transition_id"),
+            tree_size=data.integer("tree_size", minimum=0),
+        )
+
+
+@dataclass(frozen=True)
 class PrefixPackManifest:
     """Line 1 of a complete-prefix evidence pack. The next
     ``checkpoint_count`` lines are checkpoints, then exactly ``tree_size``
@@ -3535,3 +3789,22 @@ class ReceiptVerificationReport:
             program=_by_status(data.raw("program"), "a programme finding", program),
             evaluation=_by_status(data.raw("evaluation"), "an evaluation finding", evaluation),
         )
+
+
+def to_json(envelope: object) -> str:
+    """A decoded envelope as JSON text for a person to read, a decimal as
+    exact text. This is not the wire shape: no decoder or verifier reads
+    it back."""
+    return json.dumps(envelope, default=_plain)
+
+
+def _plain(value: object) -> object:
+    if is_dataclass(value) and not isinstance(value, type):
+        return asdict(value)
+    if isinstance(value, Decimal):
+        return values.encode_decimal(value)
+    if isinstance(value, datetime):
+        return values.encode_timestamp(value)
+    if isinstance(value, date):
+        return value.isoformat()
+    raise TypeError(f"{type(value).__name__} is not an envelope value: {value!r}")

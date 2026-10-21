@@ -78,6 +78,18 @@ def test_the_report_renders_stably() -> None:
         "seeded acme-energy: 2 book(s), 6 trade(s), 2 curve version(s), 1 amendment(s), "
         "13 valuation(s); verify: consistent"
     )
+    anchored = SeedReport(
+        org="acme-energy",
+        books=2,
+        trades=6,
+        curves=2,
+        amendments=1,
+        valuations=13,
+        checkpoint_rows=34,
+    )
+    assert (
+        "13 valuation(s); checkpoint over 34 audit row(s); verify: consistent" in anchored.render()
+    )
 
 
 def _consistent(tmp_path: Path, transitions: int) -> GlasshouseClient:

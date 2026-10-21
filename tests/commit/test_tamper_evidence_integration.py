@@ -14,7 +14,8 @@ from pathlib import Path
 import pytest
 
 from glasshouse import cli
-from glasshouse.commit import MODEL_FILE, Committed, GlasshouseClient, models
+from glasshouse.commit import MODEL_FILE, Committed, GlasshouseClient, MorphologError, models
+from glasshouse.commit.morpholog_client.adapter import MorphologNotCovered
 from glasshouse.commit.morpholog_client.envelopes import (
     CheckpointCreated,
     RoleRebindingsEvaluated,
@@ -78,6 +79,26 @@ def _tamper_first_checkpoint(pack: Path) -> None:
     checkpoint["root_hash"] = root[:-1] + ("0" if root[-1] != "0" else "1")
     lines[1] = json.dumps(checkpoint)
     pack.write_text("\n".join(lines) + "\n")
+
+
+def test_a_covering_checkpoint_contains_the_transition_it_names(
+    anchored: GlasshouseClient, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # The witnessed-close pattern's first half (v0.0.16, morpholog#589):
+    # a checkpoint covering a transition succeeds only with a head that
+    # contains it. The fixture's last transition is inside the stable
+    # prefix, so the head returned covers it (created, or the unchanged
+    # head when nothing new was written); an id the log does not hold
+    # is a plain operational error, never a refusal to retry.
+    last = anchored.audit()[-1].transition_id
+    outcome = anchored.audit_checkpoint(covering=last)
+    assert outcome.checkpoint.tree_size >= 3
+    with pytest.raises(MorphologError) as unknown:
+        anchored.audit_checkpoint(covering="00000000-0000-0000-0000-000000000000")
+    assert not isinstance(unknown.value, MorphologNotCovered)
+    # And through the CLI, which names what it covered.
+    assert cli.main(["checkpoint", "--covering", last, "--database-url", DB]) == 0
+    assert f"covering {last}" in capsys.readouterr().out
 
 
 def test_a_tampered_pack_is_caught(anchored: GlasshouseClient, tmp_path: Path) -> None:

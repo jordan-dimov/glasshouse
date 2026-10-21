@@ -137,11 +137,13 @@ def test_why_leads_with_the_named_rule_and_the_values_it_compared() -> None:
                     "rule": "...",
                     "compared": {
                         "op": ">",
-                        "left": {"type": "decimal", "value": "0"},
-                        "right": {"type": "decimal", "value": "0"},
+                        "left": {"type": "quantity", "value": {"amount": "0", "unit": "MW"}},
+                        "right": {"type": "quantity", "value": {"amount": "0", "unit": "MW"}},
                     },
                 }
             },
         }
     )
-    assert why(zero) == "would break invariant quantity_is_positive: 0 > 0 does not hold"
+    # From v0.0.16 the codec keeps a quantity's unit, and the line a desk
+    # reads carries it: the rule compares megawatts, so the refusal says so.
+    assert why(zero) == "would break invariant quantity_is_positive: 0 MW > 0 MW does not hold"
