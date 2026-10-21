@@ -152,6 +152,16 @@ def test_the_configured_writer_roles_reach_both_checkpoint_paths(tmp_path: Path)
     assert argv[argv.index("--writer-role") + 1] == "app_user"
     assert json.loads(anchor.read_text())["tree_size"] == 3
 
+    # Both paths carry `--covering` (v0.0.16): the anchor writer builds
+    # its own argv, so the flag is pinned here beside the role.
+    client.audit_checkpoint(covering="t-close")
+    argv = (tmp_path / "argv.txt").read_text().splitlines()
+    assert argv[argv.index("--covering") + 1] == "t-close"
+    client.write_checkpoint(anchor, covering="t-close")
+    argv = (tmp_path / "argv.txt").read_text().splitlines()
+    assert argv[argv.index("--covering") + 1] == "t-close"
+    assert argv[argv.index("--writer-role") + 1] == "app_user"
+
 
 def test_the_first_call_checks_the_binary_against_the_package_stamps(tmp_path: Path) -> None:
     # The generated client runs unchecked when constructed directly and

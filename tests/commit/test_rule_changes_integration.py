@@ -20,12 +20,10 @@ the pinned binary (`glasshouse seed --reset`, `checkpoint`,
 `evidence-export`) under the rulebook then on main, and rename it.
 """
 
-import json
-import subprocess
 from pathlib import Path
 
-from glasshouse.commit import MODEL_FILE, MODEL_HASH
-from tests.support import BINARY, needs_live_stack
+from glasshouse.commit import MODEL_FILE, MODEL_HASH, GlasshouseClient
+from tests.support import BINARY, DB, needs_live_stack
 
 pytestmark = needs_live_stack
 
@@ -33,24 +31,18 @@ HISTORY = Path(__file__).parents[1] / "fixtures" / "demo-history-972e70fd.ndjson
 
 
 def test_no_invariant_would_refuse_the_history_the_previous_rules_admitted() -> None:
-    # Called on the binary directly, as the drift gate calls `generate`:
-    # the generated client has no `evaluate` method yet, and this is a
-    # test, not a production path.
-    proc = subprocess.run(
-        [str(BINARY), "evaluate", str(MODEL_FILE), "--pack", str(HISTORY)],
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    assert proc.returncode == 0, proc.stderr
-    report = json.loads(proc.stdout)
-    assert report["program_hash"] == MODEL_HASH
-    assert report["transitions_replayed"] == 32
+    # Through the generated `evaluate(pack=)` (v0.0.16): a typed
+    # `ScoreReport`, read offline from the pack; the database URL on the
+    # client is never opened in pack mode.
+    client = GlasshouseClient(str(MODEL_FILE), DB, binary=str(BINARY))
+    report = client.evaluate(pack=str(HISTORY))
+    assert report.program_hash == MODEL_HASH
+    assert report.transitions_replayed == 32
     refusing = {
-        i["invariant"]: i["refused_transitions"]
-        for i in report["invariants"]
-        if i["would_refuse"] or not i["initially_holds"]
+        score.invariant: score.refused_transitions
+        for score in report.invariants
+        if score.would_refuse or not score.initially_holds
     }
     assert refusing == {}
     # Every invariant of the programme was scored, the new ones included.
-    assert len(report["invariants"]) == 17
+    assert len(report.invariants) == 17

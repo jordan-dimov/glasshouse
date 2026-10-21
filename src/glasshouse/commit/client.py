@@ -39,7 +39,7 @@ from pathlib import Path
 from typing import ClassVar, Protocol, Self, override
 
 from glasshouse.commit.morpholog_client import MODEL_HASH, MORPHOLOG_VERSION, envelopes
-from glasshouse.commit.morpholog_client.adapter import Morpholog
+from glasshouse.commit.morpholog_client.adapter import Morpholog, MorphologNotCovered
 
 
 class NamedClaimModel(Protocol):
@@ -147,22 +147,29 @@ class GlasshouseClient(Morpholog):
         )
 
     def write_checkpoint(
-        self, path: str | Path
+        self, path: str | Path, *, covering: str | None = None
     ) -> envelopes.CheckpointCreated | envelopes.CheckpointNoNewRows:
         """Record a checkpoint and write its JSON to `path` as an external
         anchor: the binary prints the checkpoint as JSON, and a later
         `audit_verify_pack(pack, anchor_file=path)` against it catches a
         rewrite that also rewrote the checkpoint table. Writes the exact
         bytes (after parsing once to validate) and returns the typed
-        outcome."""
+        outcome. With `covering` (a transition id) the head must contain
+        that transition, as on the generated `audit_checkpoint`; the
+        refusal arrives on stdout as the `checkpoint_refusal` envelope and
+        is raised as `MorphologNotCovered`, nothing written."""
         raw = self._invoke(
             "audit",
             "checkpoint",
             "--database-url",
             self.database_url,
             *self._repeat("--writer-role", self.writer_roles),
+            *self._opt("--covering", covering),
         )
-        outcome = envelopes.parse_checkpoint_outcome(json.loads(raw))
+        payload = json.loads(raw)
+        if isinstance(payload, dict) and payload.get("status") == "error":
+            raise MorphologNotCovered(envelopes.CheckpointRefusal.from_json(payload))
+        outcome = envelopes.parse_checkpoint_outcome(payload)
         Path(path).write_bytes(raw.encode("utf-8"))
         return outcome
 

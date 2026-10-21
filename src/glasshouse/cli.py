@@ -258,13 +258,28 @@ def checkpoint_command(
             "`evidence-verify --anchor` checks a pack against"
         ),
     ] = None,
+    covering: Annotated[
+        str | None,
+        typer.Option(
+            help="a transition id the recorded head must contain (a close's last transition): "
+            "refused, with nothing recorded, while it is outside the stable prefix"
+        ),
+    ] = None,
     database_url: DatabaseUrl = "",
 ) -> None:
     client = _client(_db(database_url))
-    outcome = client.write_checkpoint(out) if out else client.audit_checkpoint()
+    outcome = (
+        client.write_checkpoint(out, covering=covering)
+        if out
+        else client.audit_checkpoint(covering=covering)
+    )
     kind = "created" if isinstance(outcome, CheckpointCreated) else "no new rows"
     checkpoint = outcome.checkpoint
-    print(f"checkpoint {kind}: tree_size {checkpoint.tree_size}, hash {checkpoint.checkpoint_hash}")
+    covered = f", covering {covering}" if covering else ""
+    print(
+        f"checkpoint {kind}: tree_size {checkpoint.tree_size}, "
+        f"hash {checkpoint.checkpoint_hash}{covered}"
+    )
     if out:
         print(f"anchor written to {out}")
 
