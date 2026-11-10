@@ -91,6 +91,14 @@ IGNORED = frozenset(
         # a projection (yet).
         "MaySetLimit",
         "PositionLimit",
+        # Instructions (open orders) and who may place them: read from
+        # governed state like the limits they hold room under, not a
+        # projection (yet). `InstructionOpen` is retracted when an
+        # instruction ends, which is lawful: it is not a projected fact.
+        "MayInstruct",
+        "Instruction",
+        "InstructionOpen",
+        "InstructionEnded",
     }
 )
 

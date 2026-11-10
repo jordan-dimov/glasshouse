@@ -39,13 +39,14 @@ from mcp.server import MCPServer
 from mcp.server.mcpserver.exceptions import ToolError
 from pydantic import BaseModel, Field
 
-from glasshouse.api import asof, queries, refusals
+from glasshouse.api import asof, instructions, queries, refusals
 from glasshouse.api import audit as audit_queries
 from glasshouse.api.routers.explain import flatten_rejection
 from glasshouse.api.schemas import (
     AuditEntry,
     BlotterTrade,
     ExactDecimal,
+    InstructionRow,
     PositionHour,
     RefusalLog,
     Rejection,
@@ -61,7 +62,9 @@ INSTRUCTIONS = (
     "the rules accept or refuse. You act as one named actor in one organisation. Read the "
     "book with list_trades, list_positions, list_markets and position_limits. Ask whether "
     "a trade would be accepted with explain_trade (nothing is recorded). Propose one with "
-    "propose_trade. "
+    "propose_trade. An instruction is an intention that has not happened yet, such as an "
+    "order sent to market: place_instruction records it and holds room for it under the "
+    "book's position limit until it ends; cancel_instruction frees that room. "
     "A refusal is a normal answer, not an error: it names the rule and the figures that "
     "broke it. Quantities are MW. A price is per MWh in the currency of its market, and "
     "every price and valuation you are given names its currency: read it, never assume "
@@ -279,7 +282,10 @@ def build_server(desk: Callable[[], Desk]) -> MCPServer:
         trade_date: str,
     ) -> ProposalOutcome:
         """Propose one fixed-price power trade. The rules accept it or
-        refuse it; a refusal is a normal answer and names the rule.
+        refuse it; a refusal is a normal answer and names the rule. A
+        refusal by `hour_within_limit` means the booked trades leave no
+        room. One by `room_not_held_by_instructions` means there would
+        be room, but open instructions are holding it.
 
         trade: your identifier for it, unique in the organisation.
         quantity: MW as decimal text ("2.5"). price: per MWh, as decimal
@@ -320,6 +326,88 @@ def build_server(desk: Callable[[], Desk]) -> MCPServer:
         # its own trade whichever process runs the projector.
         catch_up(at.client, at.engine)
         return ProposalOutcome(accepted=True, actor=at.actor, transition_id=outcome.transition_id)
+
+    def _outcome(at: Desk, outcome: envelopes.Committed | envelopes.Rejected) -> ProposalOutcome:
+        if isinstance(outcome, envelopes.Rejected):
+            explained = outcome.explanation
+            return ProposalOutcome(
+                accepted=False,
+                actor=at.actor,
+                summary=why(explained) or outcome.reason,
+                refusal=flatten_rejection(explained.rejection if explained else None),
+            )
+        return ProposalOutcome(accepted=True, actor=at.actor, transition_id=outcome.transition_id)
+
+    @server.tool()
+    def place_instruction(
+        book: str,
+        instruction: str,
+        market: str,
+        direction: Literal["buy", "sell"],
+        quantity: str,
+        limit_price: str,
+        delivery_start: str,
+        delivery_end: str,
+        valid_until: str,
+    ) -> ProposalOutcome:
+        """Record an intention to buy or sell that has not happened yet,
+        such as an order you are about to send to market. From now until
+        it ends it holds room under the book's position limit, so no
+        trade or other instruction can use that room. It is refused if
+        it would not fit.
+
+        instruction: your identifier for it, unique in the organisation.
+        quantity: MW as decimal text. limit_price: per MWh as decimal
+        text, in the currency of the market. delivery_start,
+        delivery_end: UTC instants on the hour with an offset; the end is
+        exclusive. valid_until: a UTC instant with an offset; after it
+        the instruction is overdue. An overdue instruction still holds
+        its room until it is cancelled or its lapse is recorded.
+
+        An instruction is not approved by anyone and is not connected to
+        fills yet. Booking the trade that results is still
+        propose_trade; cancel the instruction first, or its room stays
+        held."""
+        at = desk()
+        try:
+            request = instructions.place_request(
+                {
+                    "book": book,
+                    "instruction": instruction,
+                    "market": market,
+                    "direction": direction,
+                    "quantity": quantity,
+                    "limit_price": limit_price,
+                    "delivery_start": delivery_start,
+                    "delivery_end": delivery_end,
+                    "valid_until": valid_until,
+                },
+                org=at.org,
+                placed_on=dt.datetime.now(dt.UTC).date(),
+            )
+        except ValueError as malformed:
+            raise ToolError(f"the instruction could not be read: {malformed}") from malformed
+        return _outcome(at, at.client.submit(request, actor=at.actor, explain_on_reject=True))
+
+    @server.tool()
+    def cancel_instruction(instruction: str) -> ProposalOutcome:
+        """Cancel an instruction that has not ended (open or overdue).
+        The room it held under the book's position limit is free again
+        at once. Refused if it has already ended or you may not instruct
+        in its book."""
+        at = desk()
+        request = models.CancelInstructionRequest(org=at.org, instruction=instruction)
+        return _outcome(at, at.client.submit(request, actor=at.actor, explain_on_reject=True))
+
+    @server.tool()
+    def list_instructions(book: str | None = None, open_only: bool = False) -> list[InstructionRow]:
+        """Instructions in this organisation: what was intended, how much
+        each still holds under its book's limit (holding_mw), and its
+        status: open, overdue (past valid_until but still holding room
+        until cancelled), cancelled or lapsed. open_only keeps those
+        holding room now."""
+        at = desk()
+        return instructions.list_instructions(at.client, org=at.org, book=book, open_only=open_only)
 
     @server.tool()
     def audit_history(limit: int = 20, actor: str | None = None) -> list[AuditEntry]:

@@ -30,7 +30,7 @@ Glasshouse could have put its rules in application code. It does not, for three 
 
 ## Where it stands
 
-Early. It handles one product, fixed-price power, from end to end: CSV imports, hourly positions, valuations, corrections, amendments and position limits. Each market is priced in its own currency, and currencies are never added together. There is a web interface, an HTTP API, and a way in for AI agents (MCP).
+Early. It handles one product, fixed-price power, from end to end: CSV imports, hourly positions, valuations, corrections, amendments and position limits. An open order can be recorded as an instruction, which holds its room under the limit until it ends. Each market is priced in its own currency, and currencies are never added together. There is a web interface, an HTTP API, and a way in for AI agents (MCP).
 
 One limit to know about. The history holds every change that was accepted. Refusals are kept in a separate, shorter list that is not guaranteed complete.
 

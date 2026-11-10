@@ -25,8 +25,9 @@
       <thead>
         <tr>
           <th scope="col">Book</th>
-          <th scope="col" class="numeric">Largest position (MW)</th>
-          <th scope="col">In the hour (UTC)</th>
+          <th scope="col">Tightest hour (UTC)</th>
+          <th scope="col" class="numeric">Position there (MW)</th>
+          <th scope="col" class="numeric">Held by open instructions (MW)</th>
           <th scope="col" class="numeric">Limit (MW)</th>
           <th scope="col" class="numeric">Room left (MW)</th>
         </tr>
@@ -35,8 +36,9 @@
         {% for line in limits %}
         <tr>
           <td>{{ line.book }}</td>
-          {{ num_cell(line.peak_mw) }}
           <td>{% if line.peak_hour %}{{ line.peak_hour | utc }}{% endif %}</td>
+          {{ num_cell(line.peak_mw) }}
+          <td class="numeric">{{ line.held_mw }}</td>
           {% if line.cap_mw is not none %}
           <td class="numeric">{{ line.cap_mw }}</td>
           {{ num_cell(line.room_mw) }}
@@ -49,7 +51,50 @@
       </tbody>
     </table>
   </div>
-  <p class="tile__note">A limit caps a book's position in any single hour, bought or sold. A trade that would take any hour past it is refused.{% if as_of %} The limits shown are today's.{% endif %}</p>
+  <p class="tile__note">A limit caps a book's position in any single hour, bought or sold. A trade that would take any hour past it is refused. An open instruction (an order not yet filled) holds room as if it will fill in full, so the room left already allows for it.{% if as_of %} The limits and instructions shown are today's.{% endif %}</p>
+</section>
+{% endif %}
+
+{% if instructions %}
+<section>
+  <h2>Open instructions</h2>
+  <div class="table-scroll">
+    <table class="data-table" aria-label="Open instructions of {{ org }}">
+      <thead>
+        <tr>
+          <th scope="col">Instruction</th>
+          <th scope="col">Book</th>
+          <th scope="col">Market</th>
+          <th scope="col">Buy or sell</th>
+          <th scope="col" class="numeric">Holding (MW)</th>
+          <th scope="col" class="numeric">Limit price (per MWh)</th>
+          <th scope="col">Currency</th>
+          <th scope="col">Delivery from (UTC)</th>
+          <th scope="col">Delivery to (UTC)</th>
+          <th scope="col">Valid until (UTC)</th>
+          <th scope="col">Placed by</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for row in instructions %}
+        <tr>
+          <td class="mono">{{ row.instruction }}</td>
+          <td>{{ row.book }}</td>
+          <td>{{ row.market }}</td>
+          <td>{{ row.direction }}</td>
+          {{ num_cell(row.holding_mw) }}
+          {{ num_cell(row.limit_price) }}
+          <td>{{ row.currency }}</td>
+          <td>{{ row.delivery_start | utc }}</td>
+          <td>{{ row.delivery_end | utc }}</td>
+          <td>{{ row.valid_until | utc }}</td>
+          <td>{{ row.proposer }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  <p class="tile__note">An instruction is an intention that has not happened yet, such as an order sent to market. It holds room under its book's limit until it is cancelled, or until its time has run out and that is recorded. It is not approved by anyone and not connected to fills yet.</p>
 </section>
 {% endif %}
 

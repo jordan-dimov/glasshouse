@@ -628,3 +628,32 @@ Section 32's baseline (0.33 to 0.35 on v0.0.16) was taken before the limit gate 
 **Counts.** Pure 293 passed, live 417 passed, coverage gate held.
 
 **Adopted since (10/11/2026, glasshouse#52 closed).** `rejections()` now has one read on our side, `api/refusals.py`, behind three surfaces: `/refusals`, the Audit screen's "Refused lately" and the MCP tool. Each answer carries upstream's own caveat (an operational floor, at most once, after rollback) and its bound (`limit`, 20 by default, 200 at most), and a row with no `witness` is rendered as "not captured", never as an empty one. `rule`, `compared` and `witness` were already on every import receipt through `why()` (sections 30 and 33).
+
+## 36. Instructions hold room under the limit: 10/11/2026, model change, no re-pin
+
+**Why.** A desk's open orders were invisible to the book. An order out at market and a trade booked meanwhile each passed the hour's limit alone and broke it together. An instruction is the intention as a governed fact, and it holds its room from the moment it is placed. This is the first of three slices; approval (with a token per actor) and outside fills with their breaches follow.
+
+**The model.** MODEL_HASH `sha256:61c2662b…` → `sha256:89917eea…` (21 predicates, 4 definitions, 29 invariants, 18 transformations; `check -v`: `invariant checks: compiled`, `invariant cases: all bound`, `body reads: 1 whole`, the same one as before). Additive: no existing predicate changes shape, so a ledger from before fits and migrates nothing.
+
+- `MayInstruct(actor, org, book)` and `grant_instruct_authority`.
+- `Instruction(...)` (what was intended; `unique by (instruction)`, `append only`), `InstructionOpen(..., remaining, ...)` (what it still holds; retracted when it ends), `InstructionEnded(org, instruction, outcome)`.
+- `place_instruction`, `cancel_instruction`, `mark_instruction_lapsed`.
+- `hour_has_room_for_instructions`: per hour, `placed + sum(open buys) <= cap - net` and `placed + sum(open sells) <= cap + net`, where `net` is the booked position. Open instructions are never netted: an open sale may never fill, so it makes no room to buy.
+- `capture_trade` and `amend_trade` gain a second gate after `hour_within_limit`: `room_not_held_by_instructions`. The first refuses when the booked trades leave no room, the second when they would but instructions hold it, so the gate's name tells a caller which, and `compared` carries the quantity instructed against the room the trades leave (`4 MW <= 3 MW`).
+
+**A design point dropped because of the substrate, and the friction it records.** The plan had a lapsed instruction stop holding room by the rule itself, with `decided_at` (v0.0.18) in the limit definition. Two things were learned. `decided_at` resolves only in a transformation body, so a definition takes it as an argument (`let now = decided_at`); that works. But `explain` gives a body no decision time: any transformation that reads `decided_at` answers a dry run with the error `decided_at referenced with no decision time in scope`, where `propose --explain-on-reject` decides it normally. `capture_trade` is dry-run on every import preview, by `/explain` and by the MCP `explain_trade`, so the limit gates cannot read the clock. An instruction therefore holds its room until an act ends it: `cancel_instruction`, or `mark_instruction_lapsed`, which reads `decided_at` itself (nobody previews it) and is refused while the instruction is still valid. The read side names the state in between `overdue`. **For upstream (recorded, not filed; ask first):** `explain` could decide against the server's clock as `propose` does, or take an instant, so that a rule reading `decided_at` stays explainable. When it does, the time test goes back into the definition and lapsing needs no act.
+
+**Our side.** `api/instructions.py` reads the three facts and the market's currency in one named read (`/instructions`, the MCP `list_instructions`, the Positions screen); instructions are governed state read through the client, not a projection yet, like the limits. The MCP server gains `place_instruction`, `cancel_instruction` and `list_instructions`. The Positions screen's limits summary works room out as the rule does. The seed grants `MayInstruct` to the agent in its one book and to the desk and the demo login in all three (59 transitions).
+
+**What it costs, measured (10/11/2026, `scripts/classroom_load.py burst`, 20 organisations, 10 trades each, 540 commits, a fresh restore of one 500-organisation fixture per run, v0.0.18, main's rules against this branch's, interleaved).**
+
+| | run 1 | run 2 | run 3 | mean |
+|---|---|---|---|---|
+| retries per commit, main (`61c2662b`) | 0.396 | 0.385 | 0.372 | 0.384 |
+| retries per commit, with instructions (`89917eea`) | 0.406 | 0.383 | 0.441 | 0.410 |
+| commits per second, main | 22.4 | 21.8 | 22.2 | 22.1 |
+| commits per second, with instructions | 19.5 | 20.3 | 17.3 | 19.0 |
+
+No give-ups on either side. The retry rate is within the run-to-run spread of either side (about 7 percent higher on the means). The workload is about 14 percent slower: every capture now evaluates a second gate per hour. What this does NOT measure: the classroom's organisations have no caps and no instructions, so it is the price of the gate on the ordinary path, not contention between instructions and trades in one capped book. Those now queue behind each other by design (both read `InstructionOpen` and the trades of that book), and the harness has no workload for it yet.
+
+**Counts.** Pure 314 passed, live 451 passed, coverage gate held.

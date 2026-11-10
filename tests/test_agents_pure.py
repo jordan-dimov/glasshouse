@@ -34,6 +34,9 @@ TOOLS = {
     "position_limits",
     "explain_trade",
     "propose_trade",
+    "place_instruction",
+    "cancel_instruction",
+    "list_instructions",
     "audit_history",
     "recent_refusals",
 }
@@ -74,7 +77,7 @@ def said(result: CallToolResult) -> str:
     return block.text
 
 
-def test_the_tools_are_the_eight_and_none_takes_an_actor_or_an_organisation() -> None:
+def test_the_tools_are_the_eleven_and_none_takes_an_actor_or_an_organisation() -> None:
     async def listed() -> dict[str, dict[str, Any]]:
         async with Client(build_server(desk)) as client:
             return {tool.name: tool.input_schema for tool in (await client.list_tools()).tools}

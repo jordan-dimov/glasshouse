@@ -15,6 +15,7 @@ binary itself.
 import datetime as dt
 import filecmp
 import subprocess
+import time
 from decimal import Decimal
 from pathlib import Path
 
@@ -519,11 +520,52 @@ def test_the_needle_lifecycle(morpholog: GlasshouseClient) -> None:
     with pytest.raises(MorphologError, match="not declared"):
         morpholog.claims_named("NoSuchPredicate")
 
+    # Instructions: an intention holds room from the moment it is placed
+    # and ends by being cancelled or by its lapse being recorded.
+    granted = morpholog.submit(
+        models.GrantInstructAuthorityRequest(principal="alice", org=ORG, book=BOOK),
+        actor="bootstrap",
+    )
+    assert isinstance(granted, Committed)
+
+    def instruct(name: str, valid_for: float) -> models.PlaceInstructionRequest:
+        return models.PlaceInstructionRequest(
+            org=ORG,
+            book=BOOK,
+            instruction=name,
+            market=MARKET,
+            direction="buy",
+            quantity=Decimal("1"),
+            limit_price=Decimal("80"),
+            delivery_start=dt.datetime(2026, 7, 2, tzinfo=dt.UTC),
+            delivery_end=dt.datetime(2026, 7, 2, 1, tzinfo=dt.UTC),
+            placed_on=AS_OF,
+            valid_until=dt.datetime.now(dt.UTC) + dt.timedelta(seconds=valid_for),
+        )
+
+    for name, valid_for in (("I-keep", 3600), ("I-brief", 1.5)):
+        assert isinstance(morpholog.submit(instruct(name, valid_for), actor="alice"), Committed)
+    cancelled = morpholog.submit(
+        models.CancelInstructionRequest(org=ORG, instruction="I-keep"), actor="alice"
+    )
+    assert isinstance(cancelled, Committed)
+    lapse = models.MarkInstructionLapsedRequest(org=ORG, instruction="I-brief")
+    too_soon = morpholog.submit(lapse, actor="alice")
+    assert isinstance(too_soon, Rejected)
+    assert too_soon.rule == "instruction_has_lapsed"
+    time.sleep(2)
+    assert isinstance(morpholog.submit(lapse, actor="alice"), Committed)
+    assert morpholog.read(models.InstructionOpenClaim) == []
+    assert {e.instruction: e.outcome for e in morpholog.read(models.InstructionEndedClaim)} == {
+        "I-keep": "cancelled",
+        "I-brief": "lapsed",
+    }
+
     # The coverage surface (upstream #137): by the end of the needle
     # lifecycle every transformation in the programme has done work, and
     # no invariant's condition has gone unexercised by committed history.
     report = morpholog.coverage()
     in_programme = [t for t in report.transformations if not t.not_in_programme]
-    assert len(in_programme) == 14
+    assert len(in_programme) == 18
     assert all(t.transitions > 0 for t in in_programme)
     assert not [i.invariant for i in report.invariants if i.verdict == "never_fired"]

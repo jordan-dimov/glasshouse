@@ -31,6 +31,7 @@ predicate MayCaptureTrade(actor: Subject, org: Subject, book: Subject)
 predicate MayRegisterCurve(actor: Subject, org: Subject, market: Subject)
 predicate MayValueTrade(actor: Subject, org: Subject, book: Subject)
 predicate MaySetLimit(actor: Subject, org: Subject)
+predicate MayInstruct(actor: Subject, org: Subject, book: Subject)
 -- Who may hand out the permissions above, in one organisation.
 predicate MayGrantAuthority(actor: Subject, org: Subject)
 -- Who may create organisations. One holder: the ledger's root.
@@ -102,6 +103,26 @@ predicate TradeValued(org: Subject, book: Subject, trade: Subject, curve_version
 predicate PositionLimit(org: Subject, book: Subject, cap: Decimal[MW])
     unique by (org, book)
 
+-- An instruction: someone intends to buy or sell, and has not done so
+-- yet. An order sent to market and not yet filled is one. This claim is
+-- what was intended. It never changes.
+-- The limit price is per MWh in the currency of the market.
+predicate Instruction(org: Subject, book: Subject, instruction: Subject, proposer: Subject, market: Subject, direction: Subject, quantity: Decimal[MW], limit_price: Decimal, delivery_start: Timestamp, delivery_end: Timestamp, placed_on: Date, valid_until: Timestamp)
+    unique by (instruction)
+    append only
+
+-- What an instruction still holds. While this claim stands, the
+-- quantity counts against the book's position limit, so nobody else can
+-- use that room. It is removed when the instruction ends. Not append
+-- only for that reason.
+predicate InstructionOpen(org: Subject, book: Subject, instruction: Subject, direction: Subject, remaining: Decimal[MW], delivery_start: Timestamp, delivery_end: Timestamp, valid_until: Timestamp)
+    unique by (instruction)
+
+-- How an instruction ended. Recorded once.
+predicate InstructionEnded(org: Subject, instruction: Subject, outcome: Subject)
+    unique by (instruction)
+    append only
+
 -- Rules that hold for every claim, whichever act wrote it.
 -- (Uniqueness, the single official pointer and the version chains are
 -- generated from the clauses on the predicates above.)
@@ -125,6 +146,24 @@ invariant direction_is_buy_or_sell:
 
 invariant position_limit_is_positive:
     PositionLimit(org: org, book: book, cap: cap) implies cap > 0 MW
+
+invariant instruction_is_buy_or_sell:
+    Instruction(instruction: instruction, direction: direction, ..)
+    implies (direction = #buy or direction = #sell)
+
+invariant instructed_quantity_is_positive:
+    Instruction(instruction: instruction, quantity: qty, ..) implies qty > 0 MW
+
+invariant open_quantity_is_positive:
+    InstructionOpen(instruction: instruction, remaining: left, ..) implies left > 0 MW
+
+invariant open_instruction_was_placed:
+    InstructionOpen(org: org, instruction: instruction, ..)
+    implies Instruction(org: org, instruction: instruction, ..)
+
+invariant instruction_ends_one_of_four_ways:
+    InstructionEnded(instruction: instruction, outcome: outcome, ..)
+    implies (outcome = #filled or outcome = #rejected or outcome = #cancelled or outcome = #lapsed)
 
 invariant terms_belong_to_captured_trade:
     TradeTerms(org: org, trade: trade, ..) implies TradeCaptured(org: org, trade: trade, ..)
@@ -194,6 +233,33 @@ define hour_is_within_cap(org, book, as_of, amended, signed_quantity, h, cap):
                 and t != amended and s at_or_before h and h strictly_before e)
         + signed_quantity) <= cap
 
+-- Is there still room in hour `h` once open instructions are counted?
+-- An open instruction may fill or may not, so it is never set against
+-- the other side. Open buys count as if they will all fill, towards
+-- the bought side. Open sells count the same way towards the sold side.
+-- The two figures a refusal reports are: the quantity instructed for
+-- that side (open instructions plus the one being placed), and the room
+-- the booked trades leave on that side. So "7 MW <= 5 MW does not hold"
+-- reads: 7 MW is instructed and only 5 MW of room is left.
+-- An instruction holds its room until it ends: cancelled, or recorded
+-- as lapsed once its `valid_until` has passed. Time is not read here on
+-- purpose. A rule that reads the clock cannot be previewed ("would this
+-- be accepted?"), and every trade import is previewed.
+-- `excluded` and `signed_quantity` are as in hour_is_within_cap.
+-- `more_bought` and `more_sold` are the instruction being placed.
+define hour_has_room_for_instructions(org, book, as_of, excluded, signed_quantity, more_bought, more_sold, h, cap):
+    let net = (sum(q | org_terms_in_force_on(org, as_of, t, q, s, e)
+                and TradeCaptured(org: org, book: book, trade: t, direction: #buy, ..)
+                and t != excluded and s at_or_before h and h strictly_before e)
+        - sum(q | org_terms_in_force_on(org, as_of, t, q, s, e)
+                and TradeCaptured(org: org, book: book, trade: t, direction: #sell, ..)
+                and t != excluded and s at_or_before h and h strictly_before e)
+        + signed_quantity)
+    more_bought + sum(left | InstructionOpen(org: org, book: book, instruction: i, direction: #buy, remaining: left, delivery_start: s, delivery_end: e, ..)
+                and s at_or_before h and h strictly_before e) <= cap - net
+    and more_sold + sum(left | InstructionOpen(org: org, book: book, instruction: i, direction: #sell, remaining: left, delivery_start: s, delivery_end: e, ..)
+                and s at_or_before h and h strictly_before e) <= cap + net
+
 -- The acts. Every gate has a name, and a refusal reports that name.
 
 -- Runs once, when the database is provisioned. The caller becomes the
@@ -232,6 +298,10 @@ transformation grant_valuation_authority(principal, org, book):
     require may_grant_authority: MayGrantAuthority(actor, org)
     admit MayValueTrade(principal, org, book)
 
+transformation grant_instruct_authority(principal, org, book):
+    require may_grant_authority: MayGrantAuthority(actor, org)
+    admit MayInstruct(principal, org, book)
+
 transformation grant_limit_authority(principal, org):
     require may_grant_authority: MayGrantAuthority(actor, org)
     admit MaySetLimit(principal, org)
@@ -259,8 +329,10 @@ transformation set_position_limit(org, book, cap):
 -- hours, a leap year) and be whole hours. `hours` is the start of every
 -- hour the window touches. A whole-hour window touches exactly as many
 -- hours as it is long, so a trade starting at half past is refused.
--- Then the cap is checked in each of those hours. With no cap set, that
--- check passes.
+-- Then the cap is checked in each of those hours, twice. First against
+-- the booked trades alone (hour_within_limit). Then counting the room
+-- open instructions hold (room_not_held_by_instructions). The name of
+-- the gate that refuses says which it was. With no cap set, both pass.
 transformation capture_trade(org, book, trade, counterparty, market, direction, version, quantity, price, delivery_start, delivery_end, trade_date):
     require may_capture_trade: MayCaptureTrade(actor, org, book)
     require market_has_a_currency: MarketCurrency(org: org, market: market, ..)
@@ -273,6 +345,8 @@ transformation capture_trade(org, book, trade, counterparty, market, direction, 
     let signed = if(direction = #buy, quantity, 0 MW - quantity)
     require hour_within_limit: (forall cap in PositionLimit(org, book, cap): forall h in hours:
         hour_is_within_cap(org, book, trade_date, trade, signed, h, cap))
+    require room_not_held_by_instructions: (forall cap in PositionLimit(org, book, cap): forall h in hours:
+        hour_has_room_for_instructions(org, book, trade_date, trade, signed, 0 MW, 0 MW, h, cap))
     admit TradeCaptured(org, book, trade, counterparty, market, direction)
     admit TradeTerms(org, trade, version, quantity, price, delivery_start, delivery_end, trade_date)
 
@@ -294,8 +368,52 @@ transformation amend_trade(org, trade, prior_version, new_version, quantity, pri
     let signed = if(direction = #buy, quantity, 0 MW - quantity)
     require hour_within_limit: (forall cap in PositionLimit(org, book, cap): forall h in hours:
         hour_is_within_cap(org, book, effective_from, trade, signed, h, cap))
+    require room_not_held_by_instructions: (forall cap in PositionLimit(org, book, cap): forall h in hours:
+        hour_has_room_for_instructions(org, book, effective_from, trade, signed, 0 MW, 0 MW, h, cap))
     admit TradeTerms(org, trade, new_version, quantity, price, delivery_start, delivery_end, effective_from)
     admit TradeTermsSupersedes(new_version, prior_version)
+
+-- Place an instruction: an intention to buy or sell that has not
+-- happened yet. From this moment it holds room under the book's limit,
+-- so a trade or another instruction cannot take that room. The window
+-- is checked as for a trade. It is not yet approved by anyone and not
+-- yet connected to fills: those rules come later.
+transformation place_instruction(org, book, instruction, market, direction, quantity, limit_price, delivery_start, delivery_end, placed_on, valid_until):
+    require may_instruct: MayInstruct(actor, org, book)
+    require market_has_a_currency: MarketCurrency(org: org, market: market, ..)
+    require instruction_is_new: not Instruction(instruction: instruction, ..)
+    let now = decided_at
+    require instruction_is_still_valid: now at_or_before valid_until
+    require delivery_is_forward: delivery_start strictly_before delivery_end
+    require delivery_is_at_most_a_year: delivery_end - delivery_start no_longer_than duration(PT8784H)
+    let hours = periods(delivery_start, delivery_end, duration(PT1H))
+    require delivery_is_whole_hours: (delivery_end - delivery_start) / duration(PT1H) = sum(1 | h in hours)
+    let bought = if(direction = #buy, quantity, 0 MW)
+    let sold = if(direction = #sell, quantity, 0 MW)
+    require instruction_fits_under_limit: (forall cap in PositionLimit(org, book, cap): forall h in hours:
+        hour_has_room_for_instructions(org, book, placed_on, instruction, 0 MW, bought, sold, h, cap))
+    admit Instruction(org, book, instruction, actor, market, direction, quantity, limit_price, delivery_start, delivery_end, placed_on, valid_until)
+    admit InstructionOpen(org, book, instruction, direction, quantity, delivery_start, delivery_end, valid_until)
+
+-- Cancel an open instruction. The room it held is free again at once.
+-- Whoever may instruct in the book may cancel in it.
+transformation cancel_instruction(org, instruction):
+    bind instruction_is_open: InstructionOpen(org: org, book: book, instruction: instruction, ..)
+    require may_instruct: MayInstruct(actor, org, book)
+    retract InstructionOpen(org: org, instruction: instruction, ..)
+    admit InstructionEnded(org, instruction, #cancelled)
+
+-- Record that an instruction ran out of time, and free the room it
+-- held. Refused while the instruction is still valid. Until this is
+-- recorded (or the instruction is cancelled) a lapsed instruction goes
+-- on holding its room: the safe side to err on.
+transformation mark_instruction_lapsed(org, instruction):
+    bind instruction_is_open: InstructionOpen(org: org, book: book, instruction: instruction, valid_until: until, ..)
+    require may_instruct: MayInstruct(actor, org, book)
+    let now = decided_at
+    require instruction_has_lapsed: until strictly_before now
+    retract InstructionOpen(org: org, instruction: instruction, ..)
+    admit InstructionEnded(org, instruction, #lapsed)
 
 -- Register the first curve for a market and date, and make it official.
 -- If one is already official, this is refused: use correct_curve.

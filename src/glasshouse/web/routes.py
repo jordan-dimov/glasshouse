@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import base64
 import binascii
+import datetime as dt
 import tempfile
 from decimal import Decimal
 from pathlib import Path
@@ -27,7 +28,7 @@ import sqlalchemy as sa
 from fastapi import APIRouter, File, Form, Query, Request, Response, UploadFile
 from fastapi.responses import RedirectResponse
 
-from glasshouse.api import asof, health, queries, refusals
+from glasshouse.api import asof, health, instructions, queries, refusals
 from glasshouse.api import audit as audit_queries
 from glasshouse.api import curves as curve_queries
 from glasshouse.api.auth import authenticated_actor
@@ -42,7 +43,7 @@ from glasshouse.api.deps import (
     ProjectorDep,
     StoreDep,
 )
-from glasshouse.api.schemas import CurveVersion, PositionHour
+from glasshouse.api.schemas import CurveVersion, InstructionRow, PositionHour
 from glasshouse.commit import (
     GlasshouseClient,
     MorphologError,
@@ -223,38 +224,80 @@ def _filter_options(engine: sa.Engine, org: str) -> dict[str, Any]:
     return {"book_options": books, "market_options": markets}
 
 
-def limit_summary(positions: list[PositionHour], caps: dict[str, Decimal]) -> list[dict[str, Any]]:
-    """Each book's position against its cap, in one line a reader can
-    take in: the hour where the book is furthest from flat, how far that
-    is, the cap, and the room left. A book with no cap has no room to
-    report. Pure, from rows already read."""
+def limit_summary(
+    positions: list[PositionHour],
+    caps: dict[str, Decimal],
+    held: list[InstructionRow] | None = None,
+) -> list[dict[str, Any]]:
+    """Each book against its cap, in one line a reader can take in: the
+    hour with the least room, the position there, what open instructions
+    hold there, the cap, and the room left.
+
+    Room is worked out as the ledger works it out. Open instructions are
+    never set against each other or against the other side: open buys
+    count as if they will all fill, towards the bought side, and open
+    sells the same towards the sold side. So the room used in an hour is
+    the larger of (position + open buys) and (open sells - position).
+    With no instructions that is simply how far the position is from
+    flat. A book with no cap has no room to report. Pure, from rows
+    already read."""
+    net: dict[tuple[str, dt.datetime], Decimal] = {
+        (position.book, position.period_start): position.net_mw for position in positions
+    }
+    bought: dict[tuple[str, dt.datetime], Decimal] = {}
+    sold: dict[tuple[str, dt.datetime], Decimal] = {}
+    for instruction in held or []:
+        side = bought if instruction.direction == "buy" else sold
+        hour = instruction.delivery_start
+        while hour < instruction.delivery_end:
+            key = (instruction.book, hour)
+            side[key] = side.get(key, Decimal(0)) + instruction.holding_mw
+            hour += dt.timedelta(hours=1)
+
     summary = []
-    for book in sorted({position.book for position in positions} | set(caps)):
-        hours = [position for position in positions if position.book == book]
-        peak = max(hours, key=lambda position: abs(position.net_mw), default=None)
-        used = abs(peak.net_mw) if peak else Decimal(0)
+    books = {book for book, _ in (*net, *bought, *sold)} | set(caps)
+    for book in sorted(books):
+        tightest: tuple[Decimal, dt.datetime, Decimal, Decimal] | None = None
+        for hour in sorted({hour for name, hour in (*net, *bought, *sold) if name == book}):
+            position = net.get((book, hour), Decimal(0))
+            long_side = position + bought.get((book, hour), Decimal(0))
+            short_side = sold.get((book, hour), Decimal(0)) - position
+            used = max(long_side, short_side)
+            holding = (
+                bought.get((book, hour), Decimal(0))
+                if long_side >= short_side
+                else sold.get((book, hour), Decimal(0))
+            )
+            if tightest is None or used > tightest[0]:
+                tightest = (used, hour, position, holding)
         cap = caps.get(book)
+        used_mw = tightest[0] if tightest else Decimal(0)
         summary.append(
             {
                 "book": book,
-                "peak_hour": peak.period_start if peak else None,
-                "peak_mw": peak.net_mw if peak else Decimal(0),
+                "peak_hour": tightest[1] if tightest else None,
+                "peak_mw": tightest[2] if tightest else Decimal(0),
+                "held_mw": tightest[3] if tightest else Decimal(0),
                 "cap_mw": cap,
-                "room_mw": None if cap is None else cap - used,
+                "room_mw": None if cap is None else cap - used_mw,
             }
         )
     return summary
 
 
-def _caps(client: GlasshouseClient, org: str) -> dict[str, Decimal] | None:
-    """The standing cap of each capped book, from the ledger. None when
-    the ledger cannot answer: the positions are still worth showing."""
+def _limits_and_instructions(
+    client: GlasshouseClient, org: str
+) -> tuple[dict[str, Decimal], list[InstructionRow]] | None:
+    """The standing cap of each capped book and the instructions holding
+    room now, from the ledger. None when the ledger cannot answer: the
+    positions are still worth showing."""
     try:
-        return {
+        caps = {
             limit.book: limit.cap
             for limit in client.read(models.PositionLimitClaim)
             if limit.org == org
         }
+        return caps, instructions.list_instructions(client, org=org, open_only=True)
     except MorphologError:
         return None
 
@@ -848,7 +891,10 @@ def positions(
     positions_now = queries.list_positions(
         engine, org=org, book=book, market=market, start=start_at, end=end_at, past=past
     )
-    caps = _caps(client, org)
+    governed = _limits_and_instructions(client, org)
+    caps, open_instructions = governed or ({}, [])
+    if book is not None:
+        open_instructions = [row for row in open_instructions if row.book == book]
     context = (
         _chrome(engine, org, "positions")
         | _filter_options(engine, org)
@@ -859,11 +905,13 @@ def positions(
             "end": end or "",
             "as_of": asof.canonical(past.at) if past else "",
             "positions": positions_now,
-            # The cap is the one standing now, also when the positions shown
-            # are a past moment's; the screen says so.
-            "limits": None if caps is None else limit_summary(positions_now, caps),
-            # The one filter bar governs both sections: the marks narrow by
-            # the same book and market as the positions above them.
+            # The caps and the open instructions are the ones standing
+            # now, also when the positions shown are a past moment's;
+            # the screen says so.
+            "limits": limit_summary(positions_now, caps, open_instructions) if governed else None,
+            "instructions": open_instructions,
+            # The one filter bar governs both sections: the marks narrow
+            # by the same book and market as the positions above them.
             "valuations": queries.list_valuations(
                 engine, org=org, book=book, market=market, latest=True, past=past
             ),
