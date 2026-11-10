@@ -17,8 +17,9 @@ from typing import Annotated, Literal
 from fastapi import APIRouter, Query
 
 from glasshouse.api import audit as audit_queries
+from glasshouse.api import refusals
 from glasshouse.api.deps import ClientDep
-from glasshouse.api.schemas import AuditEntry
+from glasshouse.api.schemas import AuditEntry, RefusalLog
 
 router = APIRouter(tags=["audit"])
 
@@ -36,3 +37,16 @@ def audit_log(
         entries = [e for e in entries if audit_queries.mentions_org(e, org)]
     end = offset + limit if limit is not None else None
     return entries[offset:end]
+
+
+@router.get("/refusals")
+def refusal_log(
+    org: str,
+    client: ClientDep,
+    limit: Annotated[int, Query(ge=1, le=refusals.MAX_LIMIT)] = refusals.DEFAULT_LIMIT,
+    actor: str | None = None,
+) -> RefusalLog:
+    """The most recent proposals the rules refused that name this
+    organisation. Not part of the audit history, and not complete: the
+    answer carries its own caveat and its own bound."""
+    return refusals.list_refusals(client, org=org, limit=limit, actor=actor)

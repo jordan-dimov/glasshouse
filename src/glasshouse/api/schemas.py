@@ -301,3 +301,27 @@ class ExplainResponse(BaseModel):
 
     admissible: bool
     rejection: Rejection | None = None
+
+
+class RecordedRefusal(BaseModel):
+    """One refused proposal, as the substrate's refusal log recorded it."""
+
+    rejected_at: datetime
+    actor: str
+    transformation: str
+    kind: str
+    rule: str
+    reason: str
+    summary: str  # the rule's name, then the figures or the reason
+    compared: Compared | None = None
+    # None means the values were not captured, never that there were none.
+    witness: list[WitnessBinding] | None = None
+
+
+class RefusalLog(BaseModel):
+    """Recent refusals with what the log is (`caveat`) and how far back
+    this answer reaches (`limit`): the most recent that many, not all."""
+
+    caveat: str
+    limit: int
+    refusals: list[RecordedRefusal]

@@ -99,7 +99,7 @@ An agent that calls `position_limits` and `list_positions` first can work out th
 
 An accepted trade is in the audit history under the agent's name, like any other change. `audit_history` with `actor` set to `agent` shows everything it did.
 
-A refusal is not in the audit history. The audit history holds only what was accepted. Refusals are kept in a separate log that is best-effort: each one is written once, after the proposal is undone, and that write can occasionally fail. `recent_refusals` reads that log and says so in every answer. Treat it as a good lead, not as proof.
+A refusal is not in the audit history. The audit history holds only what was accepted. Refusals are kept in a separate log that is best-effort: each one is written once, after the proposal is undone, and that write can occasionally fail. `recent_refusals` reads that log and says so in every answer. Treat it as a good lead, not as proof. The same list is on the Audit screen under "Refused lately", and on the API at `/refusals`.
 
 ## What an agent cannot do
 

@@ -23,9 +23,12 @@ from glasshouse.api.schemas import (
     OverviewSummary,
     PositionHour,
     ProjectionCursor,
+    RecordedRefusal,
+    RefusalLog,
     TradeValuation,
     ValuationSummary,
     VersionMark,
+    WitnessBinding,
 )
 from glasshouse.commit import MODEL_FILE
 from glasshouse.imports import ImportReport, RowOutcome
@@ -673,3 +676,78 @@ def test_a_stylesheets_address_changes_with_its_content() -> None:
     assert isinstance(version, str)
     assert len(version) == 10
     assert f'href="/static/css/table.css?v={version}"' in html
+
+
+def test_refusals_sit_beside_the_record_and_say_what_they_are() -> None:
+    log = RefusalLog(
+        caveat="x",
+        limit=20,
+        refusals=[
+            RecordedRefusal(
+                rejected_at=T0,
+                actor="agent",
+                transformation="capture_trade",
+                kind="require",
+                rule="hour_within_limit",
+                reason="r",
+                summary="hour_within_limit: 26 MW <= 25 MW does not hold",
+                compared=None,
+                witness=[WitnessBinding(var="h", value="2026-07-01T12:00:00+00:00")],
+            ),
+            RecordedRefusal(
+                rejected_at=T0,
+                actor="alice",
+                transformation="capture_trade",
+                kind="require",
+                rule="some_rule",
+                reason="r",
+                summary="some_rule: r",
+                witness=None,
+            ),
+        ],
+    )
+    html = _render(
+        "audit.html",
+        org="acme-energy",
+        org_options=["acme-energy"],
+        active="audit",
+        rows=[],
+        scope="org",
+        total=0,
+        ledger_total=0,
+        offset=0,
+        prev_offset=0,
+        next_offset=50,
+        has_more=False,
+        report=None,
+        refused=log,
+    )
+    assert "Refused lately" in html
+    assert "This would take the book past its position limit in that hour." in html
+    assert "26 MW &lt;= 25 MW does not hold" in html
+    assert "h = 2026-07-01T12:00:00+00:00" in html
+    # Absent values are said to be absent, not shown as nothing.
+    assert "The values the rule was reading were not captured." in html
+    # What the list is, and how far it reaches.
+    assert "not part of the record below" in html
+    assert "at most the latest 20 refusals" in html
+    assert "not as proof" in html
+    # An empty list is not a claim that nothing was ever refused.
+    empty = _render(
+        "audit.html",
+        org="acme-energy",
+        org_options=["acme-energy"],
+        active="audit",
+        rows=[],
+        scope="org",
+        total=0,
+        ledger_total=0,
+        offset=0,
+        prev_offset=0,
+        next_offset=50,
+        has_more=False,
+        report=None,
+        refused=RefusalLog(caveat="x", limit=20, refusals=[]),
+    )
+    assert "Nothing refused lately." in empty
+    assert "at most the latest 20 refusals" in empty

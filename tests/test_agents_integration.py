@@ -168,6 +168,11 @@ def test_a_refusal_is_in_the_best_effort_log_under_the_agents_actor(desk: Desk) 
     assert newest["actor"] == AGENT
     assert newest["rule"] == "hour_within_limit"
     assert newest["transformation"] == "capture_trade"
+    assert log["limit"] == 20
+    # The figures the rule compared, and the hour, are in the recorded row.
+    assert newest["compared"]["right"] == "25 MW"
+    assert newest["summary"].startswith("hour_within_limit: ")
+    assert {b["var"]: b["value"] for b in newest["witness"]}["h"] == HOUR.isoformat()
     # And it is not in the audit history: that holds what was admitted.
     history = call(desk, "audit_history", {"actor": AGENT, "limit": 500})
     assert not any(
@@ -223,3 +228,28 @@ def test_over_http_the_token_is_the_agent(desk: Desk, monkeypatch: pytest.Monkey
     assert outcome["actor"] == AGENT
     row = next(r for r in desk.client.audit_named() if r.transition_id == outcome["transition_id"])
     assert row.actor == AGENT
+
+
+def test_the_same_refusals_are_on_the_api_and_the_audit_screen(
+    desk: Desk, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    refused = call(desk, "propose_trade", trade("SCREEN-1", quantity="300"))
+    assert refused["accepted"] is False
+    monkeypatch.setenv("GLASSHOUSE_DATABASE_URL", DB)
+    monkeypatch.setenv("GLASSHOUSE_MORPHOLOG_BIN", str(BINARY))
+    monkeypatch.delenv("GLASSHOUSE_MCP_TOKEN", raising=False)
+    monkeypatch.delenv("GLASSHOUSE_DEMO_PASSWORD", raising=False)
+    with TestClient(create_app()) as client:
+        api = client.get("/refusals", params={"org": ORG, "actor": AGENT}).json()
+        page = client.get("/ui/audit", params={"org": ORG}).text
+        older = client.get("/ui/audit", params={"org": ORG, "offset": 50}).text
+    assert api["refusals"][0]["rule"] == "hour_within_limit"
+    assert api["refusals"][0]["actor"] == AGENT
+    assert "not the audit history" in api["caveat"]
+    assert "Refused lately" in page
+    assert "This would take the book past its position limit in that hour." in page
+    assert "at most the latest 20 refusals" in page
+    # The refused trade is nowhere in the record of changes below it.
+    assert "SCREEN-1" not in page[page.index("<h2>Changes") :]
+    # A short recent list on the first page, not repeated on every page.
+    assert "Refused lately" not in older

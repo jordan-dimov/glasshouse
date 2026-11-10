@@ -41,6 +41,10 @@ The answer is computed by replaying the ledger's history up to that instant thro
 
 Each as-of request replays the whole history, and the work grows with the number of delivery hours as well as the number of transitions. That is fine for the demo book and has not been measured on a large one.
 
+## Refusals
+
+`/refusals?org=...` returns the most recent proposals the rules refused for an organisation, with the rule and the figures. The Audit screen shows the same list. It is not the audit history and it is not complete: the engine writes a refusal at most once, after the proposal is rolled back, so one can be missing. Each answer says so and says how many it reaches back (`limit`, 20 unless asked, 200 at most).
+
 ## Checks
 
 ```bash
