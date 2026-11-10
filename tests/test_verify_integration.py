@@ -247,7 +247,7 @@ def test_a_view_redefined_in_place_fails_the_views_leg(
     # Hash and inventory both pass; only the seal sees it.
     catch_up(morpholog, engine)
     with engine.begin() as connection:
-        stored = connection.execute(
+        stored: str = connection.execute(
             sa.text(f"SELECT pg_get_viewdef('\"{VIEWS_SCHEMA}\".trade_terms'::regclass, true)")
         ).scalar_one()
         connection.execute(

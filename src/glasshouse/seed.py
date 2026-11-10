@@ -359,7 +359,7 @@ def establish_ledger_root(
     other credential can assert it. Already established is not an error
     here; anything else is."""
     with engine.connect() as connection:
-        login = connection.execute(sa.text("SELECT session_user")).scalar_one()
+        login: str = connection.execute(sa.text("SELECT session_user")).scalar_one()
     outcome = client.submit(models.EstablishLedgerRequest(login_role=login), actor=actor)
     if isinstance(outcome, Rejected) and outcome.rule == "ledger_is_new":
         return

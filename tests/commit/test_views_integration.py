@@ -117,7 +117,9 @@ def test_applying_does_not_leak_autocommit(applied: sa.Engine) -> None:
             connection.execute(sa.text("CREATE TEMP TABLE _leak_probe (x int)"))
             connection.execute(sa.text("INSERT INTO _leak_probe VALUES (1)"))
             connection.rollback()
-            survived = connection.execute(sa.text("SELECT to_regclass('_leak_probe')")).scalar_one()
+            survived: str | None = connection.execute(
+                sa.text("SELECT to_regclass('_leak_probe')")
+            ).scalar_one()
         assert survived is None
     finally:
         engine.dispose()
