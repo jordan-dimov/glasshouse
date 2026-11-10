@@ -4,7 +4,7 @@ Glasshouse is an open-source system of record for power trading. It keeps a firm
 
 **See it running: [glasshouse.a115.co.uk](https://glasshouse.a115.co.uk).** A small demo trading book: its trades, hourly positions, valuations, a corrected price curve, and the history behind them. The login is shared. Ask [Jordan on LinkedIn](https://www.linkedin.com/in/jdimov) for the password, or run it yourself in a few minutes (below).
 
-![The Positions screen: the demo book's net position for each delivery hour](docs/images/positions.png)
+![The Positions screen: each book against its position limit, and what each trade is worth](docs/images/positions.png)
 
 ## Why it exists
 

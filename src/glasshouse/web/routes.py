@@ -18,8 +18,10 @@ from __future__ import annotations
 import base64
 import binascii
 import tempfile
+from decimal import Decimal
 from pathlib import Path
 from typing import Annotated, Any
+from urllib.parse import quote
 
 import sqlalchemy as sa
 from fastapi import APIRouter, File, Form, Query, Request, Response, UploadFile
@@ -40,8 +42,14 @@ from glasshouse.api.deps import (
     ProjectorDep,
     StoreDep,
 )
-from glasshouse.api.schemas import CurveVersion
-from glasshouse.commit import GlasshouseClient, MorphologError, MorphologRequestError
+from glasshouse.api.schemas import CurveVersion, PositionHour
+from glasshouse.commit import (
+    GlasshouseClient,
+    MorphologError,
+    MorphologRequestError,
+    models,
+)
+from glasshouse.compute.store import StoreError
 from glasshouse.config import get_settings
 from glasshouse.imports import (
     ImportFormatError,
@@ -99,7 +107,9 @@ def _past(
     that is not an instant or not yet history, or the 409 page for an
     instant whose history can still change. Database-free on the 422
     path, like the filter check on the positions screen."""
-    context: dict[str, Any] = {"org": org, "active": active}
+    # `as_of_refused`: the page this renders is not showing the past, so
+    # the top bar must not announce that it is.
+    context: dict[str, Any] = {"org": org, "active": active, "as_of_refused": True}
     try:
         at = asof.parse_instant(raw)
         return None if at is None else asof.snapshot(client, at)
@@ -146,8 +156,12 @@ def home(
     org: str | None = None,
 ) -> Response:
     if not org:
-        # The organisation picker is this same route without an org.
-        return templates.TemplateResponse(request, "orgs.html", {"orgs": queries.list_orgs(engine)})
+        # The organisation picker is this same route without an org. With
+        # exactly one organisation there is nothing to pick.
+        orgs = queries.list_orgs(engine)
+        if len(orgs) == 1:
+            return RedirectResponse(f"/ui?org={quote(orgs[0])}", status_code=303)
+        return templates.TemplateResponse(request, "orgs.html", {"orgs": orgs})
     context = _chrome(engine, org, "overview") | {
         "summary": queries.overview(engine, org=org),
         # The projector's own progress, where it runs in this process: a
@@ -199,9 +213,50 @@ def blotter(
     return templates.TemplateResponse(
         request,
         "blotter.html",
-        _chrome(engine, org, "blotter") | context,
+        _chrome(engine, org, "blotter") | _filter_options(engine, org) | context,
         headers=VARIES_BY_REQUEST_TYPE,
     )
+
+
+def _filter_options(engine: sa.Engine, org: str) -> dict[str, Any]:
+    books, markets = queries.list_books_and_markets(engine, org=org)
+    return {"book_options": books, "market_options": markets}
+
+
+def limit_summary(positions: list[PositionHour], caps: dict[str, Decimal]) -> list[dict[str, Any]]:
+    """Each book's position against its cap, in one line a reader can
+    take in: the hour where the book is furthest from flat, how far that
+    is, the cap, and the room left. A book with no cap has no room to
+    report. Pure, from rows already read."""
+    summary = []
+    for book in sorted({position.book for position in positions} | set(caps)):
+        hours = [position for position in positions if position.book == book]
+        peak = max(hours, key=lambda position: abs(position.net_mw), default=None)
+        used = abs(peak.net_mw) if peak else Decimal(0)
+        cap = caps.get(book)
+        summary.append(
+            {
+                "book": book,
+                "peak_hour": peak.period_start if peak else None,
+                "peak_mw": peak.net_mw if peak else Decimal(0),
+                "cap_mw": cap,
+                "room_mw": None if cap is None else cap - used,
+            }
+        )
+    return summary
+
+
+def _caps(client: GlasshouseClient, org: str) -> dict[str, Decimal] | None:
+    """The standing cap of each capped book, from the ledger. None when
+    the ledger cannot answer: the positions are still worth showing."""
+    try:
+        return {
+            limit.book: limit.cap
+            for limit in client.read(models.PositionLimitClaim)
+            if limit.org == org
+        }
+    except MorphologError:
+        return None
 
 
 def _chains(versions: list[CurveVersion]) -> list[list[str]]:
@@ -259,9 +314,20 @@ def curves(
         except CurveIntegrityError as broken:
             context |= {"title": "Integrity break", "message": str(broken)}
             return templates.TemplateResponse(request, "error.html", context, status_code=409)
+    # With nothing being compared, show the prices themselves: the
+    # official version's, hour by hour.
+    shown = next((v for v in versions if v.status == "official"), None)
+    prices = None
+    if shown and diff is None:
+        try:
+            prices = store.load(org=org, version=shown.version).periods
+        except StoreError:
+            prices = None
     context |= {
         "markets": markets,
         "market": market,
+        "shown": shown,
+        "prices": prices,
         "versions": versions,
         "chains": _chains(versions),
         "base": base,
@@ -426,6 +492,72 @@ def imports_preview(
         text = _read_upload(file)
     except _UploadRefusedError as refused:
         return _import_refusal(request, org, refused.status_code, refused.title, refused.message)
+    return _preview_page(request, engine, client, org, kind, actor, text, file.filename or "")
+
+
+# A file a visitor can try without writing one: four trades for the demo
+# book. One fits, one would take an hour past its book's position limit,
+# one is in the British market (so in pounds), and one has a quantity
+# that is not a number. Previewing it shows an acceptance, a refusal by
+# a rule and a row set aside, which is the whole idea of the screen.
+SAMPLE_TRADES = (
+    "book,trade,trade_date,counterparty,market,direction,quantity,price,"
+    "delivery_start,delivery_end\n"
+    "spec-de,S-001,2026-06-30,nordkraft,de-power,buy,2,80,"
+    "2026-07-01T12:00:00+00:00,2026-07-01T13:00:00+00:00\n"
+    "spec-de,S-002,2026-06-30,nordkraft,de-power,buy,10,80,"
+    "2026-07-01T12:00:00+00:00,2026-07-01T13:00:00+00:00\n"
+    "spec-gb,S-003,2026-06-30,albion-power,gb-power,sell,3,79,"
+    "2026-07-01T16:00:00+00:00,2026-07-01T18:00:00+00:00\n"
+    "spec-de,S-004,2026-06-30,nordkraft,de-power,buy,ten,80,"
+    "2026-07-01T12:00:00+00:00,2026-07-01T13:00:00+00:00\n"
+)
+SAMPLE_FILENAME = "sample-trades.csv"
+
+
+@router.get("/ui/imports/sample-trades.csv")
+def imports_sample_file() -> Response:
+    return Response(
+        SAMPLE_TRADES,
+        media_type="text/csv",
+        headers={"Content-Disposition": f'attachment; filename="{SAMPLE_FILENAME}"'},
+    )
+
+
+@router.post("/ui/imports/sample")
+def imports_sample_preview(
+    request: Request,
+    org: Annotated[str, Form()],
+    engine: EngineDep,
+    client: ClientDep,
+    actor: Annotated[str, Form()] = "",
+) -> Response:
+    """Preview the built-in sample exactly as an uploaded file would be:
+    the same fence, the same identity rule, the same preview."""
+    fence = _write_fence(request, org)
+    if fence:
+        return fence
+    if authenticated_actor(request):
+        actor = authenticated_actor(request) or actor
+        org = get_settings().demo_org
+    problem = _checked_import_form("trades", actor)
+    if problem:
+        return _import_refusal(request, org, 422, "Check the form", problem)
+    return _preview_page(
+        request, engine, client, org, "trades", actor, SAMPLE_TRADES, SAMPLE_FILENAME
+    )
+
+
+def _preview_page(
+    request: Request,
+    engine: sa.Engine,
+    client: GlasshouseClient,
+    org: str,
+    kind: str,
+    actor: str,
+    text: str,
+    filename: str,
+) -> Response:
     oversized = _row_count_refusal(request, org, text)
     if oversized:
         return oversized
@@ -437,7 +569,7 @@ def imports_preview(
     context = _chrome(engine, org, "imports") | {
         "kind": kind,
         "actor": actor,
-        "filename": file.filename,
+        "filename": filename,
         "report": report,
         # The commit step re-processes byte-for-byte what was previewed:
         # base64 survives the form round trip exactly (raw hidden fields
@@ -710,19 +842,28 @@ def positions(
             "and are read as UTC instants.",
         }
         return templates.TemplateResponse(request, "error.html", context, status_code=422)
-    context = _chrome(engine, org, "positions") | {
-        "book": book,
-        "market": market,
-        "start": start or "",
-        "end": end or "",
-        "as_of": asof.canonical(past.at) if past else "",
-        "positions": queries.list_positions(
-            engine, org=org, book=book, market=market, start=start_at, end=end_at, past=past
-        ),
-        # The one filter bar governs both sections: the marks narrow by
-        # the same book and market as the positions above them.
-        "valuations": queries.list_valuations(
-            engine, org=org, book=book, market=market, latest=True, past=past
-        ),
-    }
+    positions_now = queries.list_positions(
+        engine, org=org, book=book, market=market, start=start_at, end=end_at, past=past
+    )
+    caps = _caps(client, org)
+    context = (
+        _chrome(engine, org, "positions")
+        | _filter_options(engine, org)
+        | {
+            "book": book,
+            "market": market,
+            "start": start or "",
+            "end": end or "",
+            "as_of": asof.canonical(past.at) if past else "",
+            "positions": positions_now,
+            # The cap is the one standing now, also when the positions shown
+            # are a past moment's; the screen says so.
+            "limits": None if caps is None else limit_summary(positions_now, caps),
+            # The one filter bar governs both sections: the marks narrow by
+            # the same book and market as the positions above them.
+            "valuations": queries.list_valuations(
+                engine, org=org, book=book, market=market, latest=True, past=past
+            ),
+        }
+    )
     return templates.TemplateResponse(request, "positions.html", context)

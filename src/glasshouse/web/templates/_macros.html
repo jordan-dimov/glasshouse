@@ -19,6 +19,21 @@
 <span class="badge badge--{{ status }}">{{ label or status }}</span>
 {%- endmacro %}
 
+{# A filter as a list of what exists, so nobody has to know a name to
+   type it. A value that is not in the list (a hand-written link) is
+   kept as its own option rather than silently dropped. #}
+{% macro choice(label, name, selected, options, all_label) -%}
+<label>{{ label }}
+  <select name="{{ name }}">
+    <option value="">{{ all_label }}</option>
+    {% for option in options %}
+    <option value="{{ option }}" {% if option == selected %}selected{% endif %}>{{ option }}</option>
+    {% endfor %}
+    {% if selected and selected not in options %}<option value="{{ selected }}" selected>{{ selected }}</option>{% endif %}
+  </select>
+</label>
+{%- endmacro %}
+
 {% macro empty_state(text) -%}
 <p class="empty-state">{{ text }}</p>
 {%- endmacro %}
@@ -29,7 +44,7 @@
     <thead>
       <tr>
         <th scope="col">Row</th>
-        <th scope="col">Outcome</th>
+        <th scope="col">Result</th>
         <th scope="col">Why</th>
       </tr>
     </thead>
@@ -37,11 +52,17 @@
       {% for outcome in outcomes %}
       <tr>
         <td class="mono">{{ outcome.ref }}</td>
-        <td>{{ badge(outcome.status) }}</td>
-        <td>{{ outcome.detail }}</td>
+        <td>{{ badge(outcome.status, outcome_words.get(outcome.status, outcome.status)) }}</td>
+        <td>{% if outcome.detail | plain_rule %}{{ outcome.detail | plain_rule }}<br><span class="rule-line">{{ outcome.detail }}</span>{% elif outcome.detail != "would commit" %}{{ outcome.detail }}{% endif %}</td>
       </tr>
       {% endfor %}
     </tbody>
   </table>
 </div>
+{%- endmacro %}
+
+
+{# What the three results of an import row mean, in one line each. #}
+{% macro outcome_key() -%}
+<p class="tile__note"><strong>Refused</strong> means a rule said no. The line in small type is the rule's own name and the figures it compared. <strong>Could not be read</strong> means the row has a mistake in it (a missing value, a number that is not a number), so no rule was asked.</p>
 {%- endmacro %}

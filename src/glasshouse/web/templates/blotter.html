@@ -1,18 +1,20 @@
 {% extends "base.html" %}
-{% block title %}Blotter - {{ org }} - Glasshouse{% endblock %}
+{% from "_macros.html" import choice %}
+{% block title %}Trades - {{ org }} - Glasshouse{% endblock %}
 {% block content %}
 <div class="page-header">
-  <h1>Blotter</h1>
-  <p class="page-header__note">Every captured trade under its {{ "terms at that moment" if as_of else "current terms" }} (the latest effective version), exactly as admitted. No editable cells: an amendment is a governed proposal that supersedes the terms, never an edit.</p>
+  <h1>Trades</h1>
+  <p class="page-header__note">Every trade, {{ "as it stood at that moment" if as_of else "as it stands now" }}. Nothing here can be edited. A change to a trade is recorded as a new version, and the old one is kept.</p>
 </div>
 
 <form class="filter-bar" method="get" action="/ui/blotter"
-      hx-get="/ui/blotter" hx-target="#blotter-results" hx-swap="innerHTML" hx-push-url="true">
+      hx-get="/ui/blotter" hx-target="#blotter-results" hx-swap="innerHTML" hx-push-url="true"
+      hx-trigger="change, submit">
   <input type="hidden" name="org" value="{{ org }}">
   {% if as_of %}<input type="hidden" name="as_of" value="{{ as_of }}">{% endif %}
-  <label>Book <input type="text" name="book" value="{{ book or "" }}" placeholder="exact match"></label>
-  <label>Market <input type="text" name="market" value="{{ market or "" }}" placeholder="exact match"></label>
-  <button type="submit">Apply</button>
+  {{ choice("Book", "book", book, book_options, "All books") }}
+  {{ choice("Market", "market", market, market_options, "All markets") }}
+  <noscript><button type="submit">Apply</button></noscript>
 </form>
 
 <div id="blotter-results">

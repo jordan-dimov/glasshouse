@@ -1,10 +1,11 @@
 """The templates rendered directly with fabricated typed rows: exact
 decimal strings pass through untouched, negatives get the loud class,
-the chrome states its honesty (Viewing: Current, readiness L0), and the
+the chrome states its honesty (Viewing: now, not for production), and the
 fragment is a fragment.
 """
 
 import datetime as dt
+import re
 from decimal import Decimal
 from types import SimpleNamespace
 
@@ -26,12 +27,14 @@ from glasshouse.api.schemas import (
     ValuationSummary,
     VersionMark,
 )
+from glasshouse.commit import MODEL_FILE
 from glasshouse.imports import ImportReport, RowOutcome
 from glasshouse.imports.curves import COLUMNS as CURVE_COLUMNS
 from glasshouse.imports.trades import COLUMNS as TRADE_COLUMNS
 from glasshouse.projections.runner import ProjectorProgress
 from glasshouse.verify import Leg, VerifyReport
-from glasshouse.web.templating import _ago, templates
+from glasshouse.web.routes import limit_summary
+from glasshouse.web.templating import RULES_IN_PLAIN_WORDS, _ago, templates
 
 T0 = dt.datetime(2026, 7, 1, tzinfo=dt.UTC)
 
@@ -91,10 +94,10 @@ def test_blotter_renders_exact_decimals_and_the_chrome() -> None:
     assert "86.25" in html  # exact, straight through, no float anywhere
     assert "7.5" in html
     assert "sell" in html
-    assert "Viewing: Current" in html
-    assert "readiness L0" in html
+    assert "Viewing: now" in html
+    assert "not for production use" in html
     assert 'class="numeric' in html
-    assert 'title="txn-0123456789abcdef"' in html  # the full id one hover away
+    assert 'title="record txn-0123456789abcdef"' in html  # the record id one hover away
     assert 'aria-current="page"' in html
     # htmx's injected indicator stylesheet is off: forms.css owns it.
     assert """<meta name="htmx-config" content='{"includeIndicatorCSS": false}'>""" in html
@@ -187,7 +190,7 @@ def test_overview_renders_the_tiles_and_health() -> None:
     # The projector's own progress, beside the cursor: a cursor moves
     # only when the ledger does, so its age alone cannot tell an idle
     # projector from a stuck one.
-    assert "Last poll" in html
+    assert "Last checked for changes" in html
     assert "s ago" in html
 
 
@@ -241,8 +244,7 @@ def test_overview_does_not_invent_a_verdict_for_another_services_projector() -> 
         health={"morpholog": "ok", "database": "ok", "commit": "ok"},
         projector=None,
     )
-    assert "Last poll" not in html
-    assert "outside this process" in html
+    assert "Last checked for changes" not in html
 
 
 def test_curves_render_status_lineage_and_the_diff() -> None:
@@ -312,11 +314,11 @@ def test_curves_render_status_lineage_and_the_diff() -> None:
     )
     assert "badge--official" in html
     assert "badge--superseded" in html
-    assert ">mismatch<" in html  # the verdict is text, never colour alone
-    assert "crv-a-v2</span> supersedes <span" in html  # the lineage line
+    assert ">ALTERED<" in html  # the verdict is text, never colour alone
+    assert '<td><span class="mono">crv-a-v1</span></td>' in html  # what v2 replaces
     assert 'class="numeric neg">-2.5' in html  # a price drop is loud
     assert 'class="numeric neg">-220' in html  # the mark struck on the base version
-    assert "Marks struck on" in html
+    assert "Trades valued with" in html
 
 
 def test_the_imports_page_derives_identity_from_the_login() -> None:
@@ -328,8 +330,8 @@ def test_the_imports_page_derives_identity_from_the_login() -> None:
         authenticated_actor="demo",
     )
     assert 'name="actor"' not in html  # identity never comes from a form when logged in
-    assert "Importing as <strong>demo</strong>" in html
-    assert "gateway that asserted it" in html
+    assert "You are importing as <strong>demo</strong>" in html
+    assert "the name the demo login acts under" in html
 
 
 def test_the_imports_page_states_the_contracts_truthfully() -> None:
@@ -346,8 +348,8 @@ def test_the_imports_page_states_the_contracts_truthfully() -> None:
     assert curves_line in html
     assert set(trades_line.split(",")) == TRADE_COLUMNS
     assert set(curves_line.split(",")) == CURVE_COLUMNS
-    assert "morpholog#204" in html  # the honest rejections-panel omission
-    assert "asserted, not authenticated" in html
+    assert "morpholog#" not in html  # no note for insiders on a visitor's screen
+    assert "Nobody checks that you are who you say" in html  # identity, said honestly
 
 
 def test_the_preview_page_commits_nothing_and_says_so() -> None:
@@ -369,7 +371,7 @@ def test_the_preview_page_commits_nothing_and_says_so() -> None:
         report=report,
         text_b64="Ym9vaw==",
     )
-    assert "Nothing has been committed" in html
+    assert "Nothing has been recorded" in html
     assert "badge--admissible" in html
     assert "badge--refused" in html
     assert "badge--quarantined" in html
@@ -395,8 +397,8 @@ def test_the_receipts_page_accounts_for_every_row() -> None:
         report=report,
         applied=2,
     )
-    assert "1 committed, 1 rejected, 1 errored, 0 quarantined" in html
-    assert "projected: 2 transition(s) applied" in html
+    assert "1 recorded, 1 refused by the rules, 1 failed, 0 could not be read" in html
+    assert "The screens are up to date" in html
     # A failed catch-up never costs the operator their receipts: the
     # committed writes are stated, the lag is stated, nothing is lost.
     lagged = _render(
@@ -409,13 +411,13 @@ def test_the_receipts_page_accounts_for_every_row() -> None:
         report=report,
         applied=None,
     )
-    assert "projection catch-up failed" in lagged
-    assert "receipts above are complete" in lagged
-    assert "1 committed" in lagged
+    assert "the screens have not caught up yet" in lagged
+    assert "Nothing is lost" in lagged
+    assert "1 recorded" in lagged
     assert "badge--committed" in html
     assert "badge--rejected" in html
     assert "badge--error" in html
-    assert "safe by construction" in html  # the double-submit story, stated
+    assert "Importing the same file twice is safe" in html  # the double-submit story, stated
 
 
 def _audit_entry(attested: bool) -> AuditEntry:
@@ -452,13 +454,13 @@ def test_the_audit_page_is_scoped_by_default_and_says_so() -> None:
         has_more=False,
         report=None,
     )
-    assert "a scoped view of the wider ledger (2 of 5)" in html
-    assert "auditor view" in html  # the whole ledger is an explicit step
-    assert "gateway via" in html  # attestation beside the actor
+    assert "(2 of 5 in the whole record)" in html
+    assert "Show every organisation" in html  # the whole record is an explicit step
+    assert "Signed in through: gateway (" in html  # attestation, in the row's details
     assert "not recorded" in html  # pre-attestation rows render gracefully
     assert "TradeCaptured(org=acme-energy" in html
     assert "glasshouse evidence-verify" in html  # the offline pointer
-    assert "whole ledger prefix, every tenant included" in html  # the pack is honest
+    assert "holds the record of every organisation" in html  # the pack is honest
     # The verify request: button held while it runs, a pending note in
     # a live region, and no client-side cut-off for the one long call.
     assert 'hx-disable="find button"' in html
@@ -482,8 +484,8 @@ def test_the_audit_pages_ledger_scope_labels_itself() -> None:
         has_more=False,
         report=None,
     )
-    assert "every tenant" in html
-    assert "auditor view" in html
+    assert "for every organisation" in html
+    assert "Show only" in html
 
 
 def test_the_verify_report_fragment_is_a_fragment_with_loud_failures() -> None:
@@ -495,7 +497,7 @@ def test_the_verify_report_fragment_is_a_fragment_with_loud_failures() -> None:
     )
     html = templates.env.get_template("partials/verify_report.html").render(report=report)
     assert "<html" not in html
-    assert "DIVERGENT" in html
+    assert "SOMETHING DOES NOT AGREE" in html
     assert ">FAIL<" in html
     assert ">ok<" in html
     assert "1 missing" in html
@@ -504,7 +506,7 @@ def test_the_verify_report_fragment_is_a_fragment_with_loud_failures() -> None:
 def test_the_error_page_needs_no_context() -> None:
     html = templates.env.get_template("error.html").render()
     assert "database is unavailable" in html
-    assert "Viewing: Current" in html  # the chrome still stands
+    assert "Viewing: now" in html  # the chrome still stands
 
 
 def test_the_ago_filter_speaks_in_the_coarsest_honest_unit() -> None:
@@ -524,7 +526,7 @@ def test_the_verify_fragment_shows_readiness_beside_the_verdict() -> None:
     legs = (Leg("projections", True, "0 row(s) match a replay up to the cursor"),)
     fragment = templates.env.get_template("partials/verify_report.html")
     behind = fragment.render(report=VerifyReport(legs, projection_lag=32))
-    assert "Verification: consistent" in behind
+    assert "Check result: everything agrees" in behind
     assert "badge--quarantined" in behind
     assert "NOT caught up (32 transition(s) not yet projected)" in behind
     assert "badge--ok" in fragment.render(report=VerifyReport(legs, projection_lag=0))
@@ -553,13 +555,13 @@ def test_a_past_moment_is_announced_and_rides_every_link() -> None:
     # banner says which moment, every screen link keeps it, and one link
     # leaves it.
     html = _blotter_at("org=acme-energy&as_of=2026-07-01T10:00")
-    assert "Viewing: as of 2026-07-01 10:00:00 UTC" in html
-    assert "Viewing: Current" not in html
+    assert "Viewing the past: 2026-07-01 10:00:00 UTC" in html
+    assert "Viewing: now" not in html
     assert "You are viewing the book as it stood at 2026-07-01 10:00:00 UTC" in html
     assert 'href="/ui/positions?org=acme-energy&amp;as_of=2026-07-01T10%3A00%3A00"' in html
     assert "&amp;as_of=2026-07-01T10%3A00%3A00&offset=50" in html  # paging stays in the past
     assert '<input type="hidden" name="as_of" value="2026-07-01T10:00:00">' in html
-    assert 'href="/ui/blotter?org=acme-energy">Back to current' in html
+    assert 'href="/ui/blotter?org=acme-energy">Back to now' in html
 
 
 def test_the_moment_is_shown_in_utc_however_it_was_written() -> None:
@@ -568,7 +570,7 @@ def test_the_moment_is_shown_in_utc_however_it_was_written() -> None:
     # with "UTC" appended. A fraction of a second survives in the links
     # and the banner; the picker holds whole seconds.
     html = _blotter_at("org=acme-energy&as_of=2026-07-01T12:00:00.250000%2B02:00")
-    assert "Viewing: as of 2026-07-01 10:00:00.250000 UTC" in html
+    assert "Viewing the past: 2026-07-01 10:00:00 UTC" in html
     assert "12:00" not in html
     assert "as_of=2026-07-01T10%3A00%3A00.250000" in html
     assert 'name="as_of" step="1" value="2026-07-01T10:00:00"' in html
@@ -585,12 +587,12 @@ def test_changing_the_moment_keeps_the_filters_and_drops_the_page() -> None:
     assert '<input type="hidden" name="book" value="spec-de">' in form
     assert '<input type="hidden" name="market" value="de-power">' in form
     assert "offset" not in form
-    assert 'href="/ui/blotter?org=acme-energy&book=spec-de&market=de-power">Back to current' in html
+    assert 'href="/ui/blotter?org=acme-energy&book=spec-de&market=de-power">Back to now' in html
 
 
 def test_a_moment_nothing_can_read_leaves_the_top_bar_in_the_present() -> None:
     html = _blotter_at("org=acme-energy&as_of=last-tuesday")
-    assert "Viewing: Current" in html
+    assert "Viewing: now" in html
     assert "You are viewing the book as it stood" not in html
 
 
@@ -599,5 +601,75 @@ def test_a_screen_that_cannot_answer_for_the_past_says_so() -> None:
         url=SimpleNamespace(path="/ui/audit"), query_params=QueryParams("as_of=2026-07-01T10:00")
     )
     html = templates.env.get_template("error.html").render(request=past, org="acme", active="audit")
-    assert "This screen shows current data." in html
+    assert "This screen always shows the present." in html
     assert "You are viewing the book as it stood" not in html
+
+
+def test_each_book_is_summed_up_against_its_limit() -> None:
+    def hour(book: str, at: int, net: str) -> PositionHour:
+        return PositionHour(
+            org="acme",
+            book=book,
+            market="de-power",
+            period_start=T0 + dt.timedelta(hours=at),
+            net_mw=Decimal(net),
+            transition_id="txn",
+        )
+
+    rows = [
+        hour("spec", 0, "5"),
+        hour("spec", 1, "20"),
+        hour("hedge", 0, "-15"),
+        hour("free", 0, "3"),
+    ]
+    summary = {
+        line["book"]: line
+        for line in limit_summary(
+            rows, {"spec": Decimal("25"), "hedge": Decimal("20"), "idle": Decimal("10")}
+        )
+    }
+    # The hour furthest from flat, whichever side, against the cap.
+    assert (summary["spec"]["peak_mw"], summary["spec"]["room_mw"]) == (Decimal("20"), Decimal("5"))
+    assert summary["spec"]["peak_hour"] == T0 + dt.timedelta(hours=1)
+    assert (summary["hedge"]["peak_mw"], summary["hedge"]["room_mw"]) == (
+        Decimal("-15"),
+        Decimal("5"),
+    )
+    # No cap: nothing invented. A capped book with no trades: all its room.
+    assert (summary["free"]["cap_mw"], summary["free"]["room_mw"]) == (None, None)
+    assert (summary["idle"]["peak_mw"], summary["idle"]["room_mw"]) == (Decimal("0"), Decimal("10"))
+
+
+def test_a_refusal_is_glossed_in_plain_words_and_keeps_the_rules_own_line() -> None:
+    refusal = "hour_within_limit: 30 MW <= 25 MW does not hold (h = 2026-07-01T12:00:00+00:00)"
+    html = templates.env.from_string(
+        '{% from "_macros.html" import outcome_table %}{{ outcome_table(rows, "x") }}'
+    ).render(
+        rows=[
+            SimpleNamespace(ref="line 2", status="refused", detail=refusal),
+            SimpleNamespace(ref="line 3", status="admissible", detail="would commit"),
+            SimpleNamespace(ref="line 4", status="refused", detail="some_new_rule: x"),
+        ]
+    )
+    assert "This would take the book past its position limit in that hour." in html
+    assert refusal.replace("<", "&lt;") in html  # the figures, never dropped
+    assert ">would be accepted<" in html
+    assert "would commit" not in html
+    # A rule with no gloss shows its own line, and nothing is made up.
+    assert "some_new_rule: x" in html
+    assert set(RULES_IN_PLAIN_WORDS) <= _rule_names()
+
+
+def _rule_names() -> set[str]:
+    """Every named gate in the rule file: a gloss for a rule that does
+    not exist would be a sentence nobody can ever be shown."""
+    text = MODEL_FILE.read_text()
+    return set(re.findall(r"require (\w+):", text))
+
+
+def test_a_stylesheets_address_changes_with_its_content() -> None:
+    html = _render("orgs.html", orgs=[])
+    version = templates.env.globals["static_version"]
+    assert isinstance(version, str)
+    assert len(version) == 10
+    assert f'href="/static/css/table.css?v={version}"' in html

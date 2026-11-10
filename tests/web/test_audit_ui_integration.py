@@ -44,8 +44,8 @@ def test_the_log_is_newest_first_scoped_by_default_with_attestation(ui: TestClie
     assert page.status_code == 200
     # The default view is scoped to the org and says so; the whole
     # ledger is an explicit auditor-view step.
-    assert "a scoped view of the wider ledger" in page.text
-    assert "auditor view" in page.text
+    assert "in the whole record)" in page.text
+    assert "Show every organisation" in page.text
     assert len(scoped) <= len(ledger)
     assert all(
         any(c["args"].get("org") == ORG for c in (*e["asserted"], *e["retracted"])) for e in scoped
@@ -57,7 +57,7 @@ def test_the_log_is_newest_first_scoped_by_default_with_attestation(ui: TestClie
     committed = [e["committed_at"] for e in ledger]
     assert committed == sorted(committed, reverse=True)
     # Every row written by the current binary carries its attestation.
-    assert "gateway via" in page.text
+    assert "Signed in through: gateway (" in page.text
     assert all(e["attestation"]["mode"] == "gateway" for e in ledger)
     assert "audit-row--org" in page.text
 
@@ -66,8 +66,8 @@ def test_the_ledger_scope_shows_every_tenant_and_labels_itself(ui: TestClient) -
     with ui as client:
         page = client.get("/ui/audit", params={"org": ORG, "scope": "ledger"})
     assert page.status_code == 200
-    assert "every tenant" in page.text
-    assert "auditor view" in page.text
+    assert "for every organisation" in page.text
+    assert "Show only" in page.text
 
 
 def test_the_verify_panel_renders_six_green_legs(ui: TestClient) -> None:
@@ -79,7 +79,7 @@ def test_the_verify_panel_renders_six_green_legs(ui: TestClient) -> None:
             headers={"HX-Request": "true", "HX-Request-Type": "partial"},
         )
     assert full_page.status_code == 200
-    assert "Verification: consistent" in full_page.text
+    assert "Check result: everything agrees" in full_page.text
     for leg in ("model", "ledger", "tree", "projections", "payloads", "views"):
         assert leg in full_page.text
     assert "FAIL" not in full_page.text

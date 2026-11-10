@@ -1,15 +1,15 @@
 {% from "_macros.html" import badge %}
-<h2>Verification: {{ "consistent" if report.ok else "DIVERGENT" }}</h2>
-<p>Readiness: {{ badge("ok" if report.caught_up else ("quarantined" if report.caught_up is false else "draft"), report.readiness()) }}</p>
+<h2>Check result: {{ "everything agrees" if report.ok else "SOMETHING DOES NOT AGREE" }}</h2>
+<p>Screens: {{ badge("ok" if report.caught_up else ("quarantined" if report.caught_up is false else "draft"), report.readiness()) }}</p>
 <div class="table-scroll">
-  <table class="data-table" aria-label="glasshouse verify legs">
+  <table class="data-table" aria-label="The six checks">
     <thead>
-      <tr><th scope="col">Leg</th><th scope="col">Verdict</th><th scope="col">Evidence</th></tr>
+      <tr><th scope="col">What was checked</th><th scope="col">Result</th><th scope="col">Detail</th></tr>
     </thead>
     <tbody>
       {% for leg in report.legs %}
       <tr>
-        <td>{{ leg.name }}</td>
+        <td title="{{ leg.name }}">{{ {"model": "The rules in use are the published ones", "ledger": "Replaying every change gives today's record", "tree": "No past change has been altered or removed", "projections": "These screens match the record", "payloads": "Stored prices are unchanged", "views": "The database's inspection views are untouched"}.get(leg.name, leg.name) }}</td>
         <td>{{ badge("ok" if leg.ok else "break", "ok" if leg.ok else "FAIL") }}</td>
         <td>{{ leg.detail }}</td>
       </tr>

@@ -31,7 +31,7 @@ If you already run a PostgreSQL on port 5432, the compose database cannot bind i
 
 ## Viewing the past
 
-`/trades`, `/positions` and `/valuations` take `as_of`, an ISO 8601 instant (no offset means UTC), and answer as the book stood then. The Blotter and Positions screens have the same control in the top bar, and changing the time keeps the filters you had. The other screens show current data and say so.
+`/trades`, `/positions` and `/valuations` take `as_of`, an ISO 8601 instant (no offset means UTC), and answer as the book stood then. The Trades and Positions screens have the same control in the top bar, and changing the time keeps the filters you had. The other screens show current data and say so.
 
 The answer is computed by replaying the ledger's history up to that instant through the same code that maintains the live tables. Three things follow:
 

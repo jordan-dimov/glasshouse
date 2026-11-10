@@ -4,7 +4,7 @@
 {% block content %}
 <div class="page-header">
   <h1>Overview</h1>
-  <p class="page-header__note">Can {{ org }} start its day?</p>
+  <p class="page-header__note">{{ org }} at a glance: what is in the books, what it is worth, and whether the system is healthy.</p>
 </div>
 
 <div class="tiles">
@@ -14,43 +14,48 @@
     <table class="tile-table">
       <tbody>
         {% for entry in summary.books %}
-        <tr><th scope="row">{{ entry.book }}</th><td class="numeric">{{ entry.trade_count }} trade{{ "s" if entry.trade_count != 1 }}</td></tr>
+        <tr><th scope="row"><a href="/ui/blotter?org={{ org | urlencode }}&book={{ entry.book | urlencode }}">{{ entry.book }}</a></th><td class="numeric">{{ entry.trade_count }} trade{{ "s" if entry.trade_count != 1 }}</td></tr>
         {% endfor %}
       </tbody>
     </table>
     {% else %}
-    {{ empty_state("No trades captured yet.") }}
+    {{ empty_state("No trades yet.") }}
     {% endif %}
   </section>
 
   <section class="tile">
-    <h2>Latest marks</h2>
+    <h2>Value of the trades</h2>
     {% if summary.valuations %}
     {# One total per currency. Amounts in different currencies are never added together. #}
-    {% for marks in summary.valuations %}
-    <dl class="tile-facts">
-      <div><dt>Trades with a mark in {{ marks.currency }}</dt><dd class="numeric">{{ marks.trade_count }}</dd></div>
-      <div><dt>Newest mark</dt><dd>{{ marks.valued_at | utc }}</dd></div>
-      <div><dt>Total of latest marks ({{ marks.currency }})</dt><dd>{{ num(marks.total_mtm) }}</dd></div>
-    </dl>
-    {% endfor %}
-    <p class="tile__note">Each trade's newest admitted mark; a total may span valuation times and curve versions (a corrected curve leaves the old mark newest until revaluation), so it is not a valuation-run P&amp;L. History is never summed, and neither are currencies: there is one total per currency.</p>
+    <table class="tile-table">
+      <tbody>
+        {% for marks in summary.valuations %}
+        <tr><th scope="row">{{ marks.trade_count }} trade{{ "s" if marks.trade_count != 1 }} valued in {{ marks.currency }}</th><td class="numeric">{{ num(marks.total_mtm) }} {{ marks.currency }}</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    <p class="tile__note">The latest valuation of each trade, added up. One total per currency: currencies are never added together. <a href="/ui/positions?org={{ org | urlencode }}">See each trade's value</a>.</p>
     {% else %}
-    {{ empty_state("No valuations admitted yet.") }}
+    {{ empty_state("No trade has been valued yet.") }}
     {% endif %}
   </section>
 
   <section class="tile">
-    <h2>Projection freshness</h2>
-    {% if summary.projection.transition_id %}
+    <h2>System</h2>
+    {# What a visitor needs is one answer: is what I see up to date and
+       is anything broken. The parts are named in plain words; the
+       internal name of each check is one hover away. #}
     <dl class="tile-facts">
-      <div><dt>Cursor at</dt><dd>{{ summary.projection.committed_at | utc }}</dd></div>
-      <div><dt>Transition</dt><dd>{{ evidence(summary.projection.transition_id) }}</dd></div>
+      {% for check, verdict in health.items() %}
+      <div><dt title="{{ check }}">{{ {"morpholog": "Rules engine", "database": "Database", "commit": "Recording changes", "projector": "Screens updating"}.get(check, check) }}</dt><dd>{{ badge("ok" if verdict == "ok" else "break", verdict) }}</dd></div>
+      {% endfor %}
+      {% if summary.projection.transition_id %}
+      <div><dt>Screens show changes up to</dt><dd title="record {{ summary.projection.transition_id }}">{{ summary.projection.committed_at | utc }}</dd></div>
       {% if projector %}
-      {# The cursor moves only when the ledger does, so its age cannot
-         tell an idle projector from a stuck one. The last successful
-         poll can, and it is the number this deployment was missing. #}
-      <div><dt>Last poll</dt><dd>{{ projector.polled_at | ago }}</dd></div>
+      {# The time above moves only when something changes, so its age
+         cannot tell an idle system from a stuck one. The last successful
+         check can. #}
+      <div><dt>Last checked for changes</dt><dd>{{ projector.polled_at | ago }}</dd></div>
       {% if projector.consecutive_failures %}
       <div>
         <dt>Failing</dt>
@@ -58,24 +63,10 @@
       </div>
       {% endif %}
       {% endif %}
-    </dl>
-    {% if not projector %}
-    <p class="note">The projector runs outside this process here, so its progress is another service's verdict; the cursor above is what this one can see.</p>
-    {% endif %}
-    {% else %}
-    {{ empty_state("Never projected: the read model has no cursor yet.") }}
-    {% endif %}
-  </section>
-
-  <section class="tile">
-    <h2>System health</h2>
-    <dl class="tile-facts">
-      {% for check, verdict in health.items() %}
-      <div><dt>{{ check }}</dt><dd>{{ badge("ok" if verdict == "ok" else "break", verdict) }}</dd></div>
-      {% endfor %}
+      {% else %}
+      <div><dt>Screens</dt><dd>nothing recorded yet</dd></div>
+      {% endif %}
     </dl>
   </section>
 </div>
-
-<p class="omissions">Business date and cross-session refusal counts wait on their backing surfaces; curves, imports and the audit log have their own screens in the navigation above.</p>
 {% endblock %}

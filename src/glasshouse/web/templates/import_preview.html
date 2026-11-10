@@ -1,18 +1,19 @@
 {% extends "base.html" %}
-{% from "_macros.html" import outcome_table, empty_state %}
+{% from "_macros.html" import outcome_table, outcome_key, empty_state %}
 {% block title %}Import preview - {{ org }} - Glasshouse{% endblock %}
 {% block content %}
 <div class="page-header">
-  <h1>Import preview: {{ filename }}</h1>
-  <p class="page-header__note">The ledger's admissibility verdict for every surviving row, against the current state. <strong>Nothing has been committed.</strong></p>
+  <h1>What would happen: {{ filename }}</h1>
+  <p class="page-header__note">Each row checked against the rules and the book as it is now. <strong>Nothing has been recorded.</strong></p>
 </div>
 
-<p>{{ report.count("admissible") }} admissible, {{ report.count("refused") }} refused, {{ report.quarantined }} quarantined.</p>
+<p>{{ report.count("admissible") }} would be accepted, {{ report.count("refused") }} would be refused, {{ report.quarantined }} could not be read.</p>
 
 {% if report.outcomes %}
-{{ outcome_table(report.outcomes, "Preview outcomes for " ~ filename) }}
+{{ outcome_table(report.outcomes, "Preview results for " ~ filename) }}
+{{ outcome_key() }}
 {% else %}
-{{ empty_state("The file contains no data rows.") }}
+{{ empty_state("The file has no rows.") }}
 {% endif %}
 
 <form method="post" action="/ui/imports/commit" class="commit-form">
@@ -20,7 +21,7 @@
   <input type="hidden" name="kind" value="{{ kind }}">
   <input type="hidden" name="actor" value="{{ actor }}">
   <input type="hidden" name="text_b64" value="{{ text_b64 }}">
-  <button type="submit">Commit the admissible rows</button>
+  <button type="submit">Record the rows that would be accepted</button>
 </form>
-<p class="tile__note">The commit processes exactly the bytes previewed above. Refused and quarantined rows are reported again, never silently dropped.</p>
+<p class="tile__note">Exactly the file shown above is recorded. The other rows are listed again afterwards, so nothing is dropped without you seeing it.</p>
 {% endblock %}

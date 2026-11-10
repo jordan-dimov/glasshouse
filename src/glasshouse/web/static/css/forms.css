@@ -20,6 +20,7 @@
 }
 
 .filter-bar input,
+.filter-bar select,
 .as-of-form input,
 .org-form select {
   font: inherit;

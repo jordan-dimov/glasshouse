@@ -35,11 +35,60 @@ def ui(seeded: sa.Engine, monkeypatch: pytest.MonkeyPatch) -> TestClient:
     return TestClient(create_app())
 
 
-def test_the_picker_lists_the_seeded_org(ui: TestClient) -> None:
+def test_with_one_organisation_there_is_nothing_to_pick(ui: TestClient) -> None:
+    # A page whose only content is one link is a wasted click: the one
+    # organisation's overview is where a visitor lands.
     with ui as client:
-        response = client.get("/ui")
-    assert response.status_code == 200
-    assert ORG in response.text
+        response = client.get("/ui", follow_redirects=False)
+    assert response.status_code == 303
+    assert response.headers["location"] == f"/ui?org={ORG}"
+
+
+def test_positions_open_with_each_book_against_its_limit(ui: TestClient) -> None:
+    with ui as client:
+        page = client.get("/ui/positions", params={"org": ORG}).text
+    assert "Against the limits" in page
+    # spec-de peaks at 20 MW in the 12:00 hour, the cap is 25, so 5 left.
+    limits = page[page.index("Against the limits") : page.index("What each trade is worth")]
+    row = limits[limits.index("<td>spec-de</td>") :]
+    row = row[: row.index("</tr>")]
+    assert 'class="numeric">20<' in row
+    assert "2026-07-01 12:00Z" in row
+    assert 'class="numeric">25<' in row
+    assert 'class="numeric">5<' in row
+    # The British book has no cap, and the screen says so.
+    assert "no limit" in limits
+    # The summary and the valuations come before the long hourly table.
+    assert page.index("What each trade is worth") < page.index("Position hour by hour")
+    # No internal record id takes up a column.
+    assert '<th scope="col">Transition</th>' not in page
+
+
+def test_filters_offer_what_exists(ui: TestClient) -> None:
+    with ui as client:
+        trades = client.get("/ui/blotter", params={"org": ORG, "book": "spec-gb"}).text
+    for option in ("hedge-de", "spec-de", "de-power", "gb-power"):
+        assert f'<option value="{option}"' in trades
+    assert '<option value="spec-gb" selected>' in trades
+    assert "exact match" not in trades
+    assert "G-001" in trades
+    assert "T-001" not in trades
+
+
+def test_the_curves_screen_shows_the_prices_in_use(ui: TestClient) -> None:
+    with ui as client:
+        page = client.get("/ui/curves", params={"org": ORG, "market": "gb-power"}).text
+        german = client.get("/ui/curves", params={"org": ORG, "market": "de-power"}).text
+    assert "Prices in use: crv-gb-2026-07-01-v1" in page
+    assert "Price (GBP per MWh)" in page
+    assert 'class="numeric">60<' in page  # midnight
+    assert 'class="numeric">83<' in page  # 23:00
+    # One version: nothing to compare, so no compare controls.
+    assert "Compare the two versions" not in page
+    # Two versions: the one in use against the one it replaced is chosen.
+    assert "Compare the two versions" in german
+    assert 'name="compare" value="crv-2026-07-01-v2" checked' in german
+    assert 'name="base" value="crv-2026-07-01-v1" checked' in german
 
 
 def test_overview_renders_the_seeded_day(ui: TestClient) -> None:
@@ -49,7 +98,7 @@ def test_overview_renders_the_seeded_day(ui: TestClient) -> None:
     assert "spec-de" in response.text
     assert "hedge-de" in response.text
     assert "3 trades" in response.text  # spec-de carries T-001, T-002, T-005
-    assert "System health" in response.text
+    assert "<h2>System</h2>" in response.text
 
 
 def test_blotter_renders_exact_terms_and_filters_narrow(ui: TestClient) -> None:
@@ -124,7 +173,7 @@ def test_the_positions_filter_bar_narrows_the_marks_too(ui: TestClient) -> None:
     assert "T-001" not in by_book.text  # every spec-de mark is gone
     assert by_book.text.count("crv-2026-07-01-v2") == 3  # hedge-de's three current marks only
     assert by_market.text.count("crv-2026-07-01-v2") == 0
-    assert "No marks in this view" in by_market.text
+    assert "No trade here has been valued" in by_market.text
 
 
 def test_a_second_org_is_empty_but_visible(ui: TestClient) -> None:
@@ -146,7 +195,7 @@ def test_the_blotter_and_marks_show_the_amendment(ui: TestClient) -> None:
         blotter = client.get("/ui/blotter", params={"org": ORG, "book": "hedge-de"})
         positions = client.get("/ui/positions", params={"org": ORG, "book": "hedge-de"})
     assert "T-003/v2" in blotter.text
-    assert "1 amendment" in blotter.text
+    assert "changed 1 time" in blotter.text
     assert 'class="numeric">8<' in blotter.text
     assert "T-003/v2" in positions.text
     assert 'class="numeric">120<' in positions.text  # 8 MW * 15 EUR over hours 00-06
