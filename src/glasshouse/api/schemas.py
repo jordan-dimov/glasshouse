@@ -20,7 +20,7 @@ from typing import Annotated, Literal
 
 from pydantic import BaseModel, Field, PlainSerializer
 
-# Serialise Decimal as its canonical string, so an exact MW or EUR amount
+# Serialise Decimal as its canonical string, so an exact quantity, price or amount
 # stays exact across the wire (and reads as a tabular numeral on a screen).
 ExactDecimal = Annotated[Decimal, PlainSerializer(str, return_type=str)]
 
@@ -35,7 +35,8 @@ class BlotterTrade(BaseModel):
     market: str
     direction: str
     quantity: ExactDecimal  # MW
-    price: ExactDecimal  # EUR/MWh
+    price: ExactDecimal  # per MWh, in `currency`
+    currency: str  # the market's, from its declaration in the ledger
     delivery_start: datetime
     delivery_end: datetime
     captured_at: datetime
@@ -63,7 +64,8 @@ class TradeTermsVersion(BaseModel):
     version: str
     prior_version: str | None
     quantity: ExactDecimal  # MW
-    price: ExactDecimal  # EUR/MWh
+    price: ExactDecimal  # per MWh, in `currency`
+    currency: str  # the market's, from its declaration in the ledger
     delivery_start: datetime
     delivery_end: datetime
     effective_from: date
@@ -93,7 +95,8 @@ class TradeValuation(BaseModel):
     trade: str
     curve_version: str
     book: str
-    mtm: ExactDecimal  # EUR
+    mtm: ExactDecimal  # in `currency`
+    currency: str  # as the mark states it; the ledger checked it is the market's
     valued_at: datetime
     transition_id: str
     actor: str  # who admitted it
@@ -108,16 +111,19 @@ class BookSummary(BaseModel):
 
 
 class ValuationSummary(BaseModel):
-    """The latest marks in one line: how many trades carry a mark, when
-    the newest was struck, and the total of each trade's *latest* mark -
-    never a sum over valuation history, which would double-count every
-    corrected curve. There is no valuation-run identity yet: the total
-    may span valuation times and curve versions (a corrected curve
-    leaves the old mark newest until revaluation)."""
+    """The latest marks in ONE currency in one line: how many trades
+    carry a mark, when the newest was struck, and the total of each
+    trade's *latest* mark - never a sum over valuation history, which
+    would double-count every corrected curve, and never a sum across
+    currencies, which would be no amount of anything. There is no
+    valuation-run identity yet: the total may span valuation times and
+    curve versions (a corrected curve leaves the old mark newest until
+    revaluation)."""
 
+    currency: str
     trade_count: int
     valued_at: datetime | None
-    total_mtm: ExactDecimal | None
+    total_mtm: ExactDecimal
 
 
 class ProjectionCursor(BaseModel):
@@ -133,7 +139,9 @@ class OverviewSummary(BaseModel):
 
     org: str
     books: list[BookSummary]
-    valuation: ValuationSummary
+    # One entry per currency that has a mark, ordered by currency. Empty
+    # when nothing is marked yet.
+    valuations: list[ValuationSummary]
     projection: ProjectionCursor
 
 
@@ -144,6 +152,7 @@ class CurveVersion(BaseModel):
 
     version: str
     as_of: date
+    currency: str  # the market's: the currency this version's prices are in
     status: Literal["official", "superseded", "registered"]
     payload_hash: str
     payload: Literal["ok", "mismatch", "missing"]  # the live re-hash verdict
@@ -172,6 +181,7 @@ class VersionMark(BaseModel):
     book: str
     terms_version: str
     mtm: ExactDecimal
+    currency: str
 
 
 class CurveDiff(BaseModel):
@@ -181,6 +191,7 @@ class CurveDiff(BaseModel):
     market: str
     base: str
     compare: str
+    currency: str  # the market's: every price and delta below is in it
     periods: list[CurveDiffPeriod]
     base_marks: list[VersionMark]
     compare_marks: list[VersionMark]

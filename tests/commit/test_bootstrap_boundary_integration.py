@@ -71,6 +71,7 @@ def test_only_the_provisioning_login_can_bring_authority_into_being(untrusted_ur
     # The provisioning login can, and a delegate is bound to its own login.
     for request in (
         models.EstablishOrganisationRequest(org=ORG),
+        models.DeclareMarketRequest(org=ORG, market="de-power", currency="EUR"),
         models.GrantGrantAuthorityRequest(principal="ops", org=ORG, login_role=login_role()),
     ):
         assert isinstance(trusted.submit(request, actor="bootstrap"), Committed)

@@ -22,6 +22,7 @@ import sqlalchemy as sa
 from glasshouse.commit import MODEL_FILE, Committed, GlasshouseClient, Rejected
 from glasshouse.commit.morpholog_client.models import (
     CaptureTradeRequest,
+    DeclareMarketRequest,
     EstablishLedgerRequest,
     EstablishOrganisationRequest,
     GrantCaptureAuthorityRequest,
@@ -82,6 +83,7 @@ def monday(morpholog: GlasshouseClient, store: CurveStore) -> None:
     for grant in (
         EstablishLedgerRequest(login_role=login_role()),
         EstablishOrganisationRequest(org=ORG),
+        DeclareMarketRequest(org=ORG, market="de-power", currency="EUR"),
         GrantCaptureAuthorityRequest(principal="alice", org=ORG, book=BOOK),
         GrantCurveAuthorityRequest(principal="carol", org=ORG, market=MARKET),
         GrantValuationAuthorityRequest(principal="risk-engine", org=ORG, book=BOOK),

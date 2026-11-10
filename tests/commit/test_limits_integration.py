@@ -66,6 +66,7 @@ def ledger() -> GlasshouseClient:
     for grant in (
         models.EstablishLedgerRequest(login_role=login_role()),
         models.EstablishOrganisationRequest(org=ORG),
+        models.DeclareMarketRequest(org=ORG, market="de-power", currency="EUR"),
         models.GrantCaptureAuthorityRequest(principal="alice", org=ORG, book=CAPPED),
         models.GrantCaptureAuthorityRequest(principal="alice", org=ORG, book=UNCAPPED),
         models.GrantLimitAuthorityRequest(principal="risk", org=ORG),

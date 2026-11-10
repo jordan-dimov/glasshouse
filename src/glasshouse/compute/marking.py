@@ -55,6 +55,7 @@ from glasshouse.commit.morpholog_client.models import (
     AdmitValuationRequest,
     CorrectCurveRequest,
     CurveRegisteredClaim,
+    MarketCurrencyClaim,
     OfficialCurveClaim,
     RegisterCurveRequest,
     TradeCapturedClaim,
@@ -206,6 +207,7 @@ def value_trade(
             curve_version=official.version,
             terms_version=terms.version,
             mtm=_mtm(captured, terms, curve),
+            currency=market_currency(morpholog, org=org, market=captured.market),
         ),
         actor=actor,
     )
@@ -260,6 +262,7 @@ def correct_and_remark(
             log.warning("marking.remark_skipped_not_in_force", org=org, trade=c.trade, as_of=as_of)
             continue
         in_force[c.trade] = terms
+    currency = market_currency(morpholog, org=org, market=market)
     acts = [
         _act(
             CorrectCurveRequest(
@@ -281,6 +284,7 @@ def correct_and_remark(
                     curve_version=new_version,
                     terms_version=in_force[c.trade].version,
                     mtm=_mtm(c, in_force[c.trade], curve),
+                    currency=currency,
                 ),
                 valuation_actor,
             )
@@ -354,6 +358,19 @@ def _in_force(versions: list[TradeTermsClaim], *, trade: str, as_of: dt.date) ->
             f"effective from {earliest}"
         )
     return terms
+
+
+def market_currency(morpholog: GlasshouseClient, *, org: str, market: str) -> str:
+    """The currency a market's prices and marks are in: the market's one
+    declaration in the ledger, the only place a currency comes from. A
+    mark is a price times a quantity, so it is in the currency of the
+    prices it was computed from; the ledger checks the claim made here
+    against the same declaration (`mark_is_in_market_currency`)."""
+    declared = _one(
+        [m for m in morpholog.read(MarketCurrencyClaim) if m.org == org and m.market == market],
+        f"declared currency for market {market!r} in {org}",
+    )
+    return declared.currency
 
 
 def _one[T](rows: list[T], description: str) -> T:

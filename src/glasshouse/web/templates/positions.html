@@ -60,7 +60,8 @@
           <th scope="col">Book</th>
           <th scope="col">Curve version</th>
           <th scope="col">Terms</th>
-          <th scope="col" class="numeric">MtM (EUR)</th>
+          <th scope="col" class="numeric">MtM</th>
+          <th scope="col">Currency</th>
           <th scope="col">Valued at</th>
           <th scope="col">Actor</th>
           <th scope="col">Transition</th>
@@ -74,6 +75,7 @@
           <td class="mono">{{ mark.curve_version }}</td>
           <td class="mono">{{ mark.terms_version }}</td>
           {{ num_cell(mark.mtm) }}
+          <td>{{ mark.currency }}</td>
           <td>{{ mark.valued_at | utc }}</td>
           <td>{{ mark.actor }}</td>
           <td>{{ evidence(mark.transition_id) }}</td>

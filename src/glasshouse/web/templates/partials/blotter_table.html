@@ -10,7 +10,8 @@
         <th scope="col">Market</th>
         <th scope="col">Direction</th>
         <th scope="col" class="numeric">Quantity (MW)</th>
-        <th scope="col" class="numeric">Price (EUR/MWh)</th>
+        <th scope="col" class="numeric">Price (per MWh)</th>
+        <th scope="col">Currency</th>
         <th scope="col">Delivery start (UTC)</th>
         <th scope="col">Delivery end (UTC)</th>
         <th scope="col">Trade date</th>
@@ -30,6 +31,7 @@
         <td>{{ trade.direction }}</td>
         {{ num_cell(trade.quantity) }}
         {{ num_cell(trade.price) }}
+        <td>{{ trade.currency }}</td>
         <td>{{ trade.delivery_start | utc }}</td>
         <td>{{ trade.delivery_end | utc }}</td>
         <td>{{ trade.trade_date }}</td>

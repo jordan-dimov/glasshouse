@@ -88,9 +88,19 @@ def test_before_the_correction_every_mark_is_against_the_first_curve(
     # The issue's own "done when": the figures before and after the
     # correction's instant differ as history says they should.
     with app as client:
-        then = _get(client, "/valuations", moments["before_correction"], latest="true")
-        now = _get(client, "/valuations", latest="true")
+        german = {t["trade"] for t in _get(client, "/trades", market="de-power")}
+        then = [
+            mark
+            for mark in _get(client, "/valuations", moments["before_correction"], latest="true")
+            if mark["trade"] in german
+        ]
+        now = [
+            mark for mark in _get(client, "/valuations", latest="true") if mark["trade"] in german
+        ]
     assert then
+    # The German curve is the one that was corrected; the British book
+    # has its own curve and is not part of this story.
+    assert {mark["currency"] for mark in then} == {"EUR"}
     assert len({mark["curve_version"] for mark in then}) == 1
     (first_curve,) = {mark["curve_version"] for mark in then}
     assert any(mark["curve_version"] != first_curve for mark in now)
@@ -121,7 +131,7 @@ def test_before_the_first_capture_the_book_is_empty(
     with app as client:
         assert _get(client, "/trades", moments["before_capture"]) == []
         assert _get(client, "/positions", moments["before_capture"]) == []
-        assert len(_get(client, "/trades")) == 6
+        assert len(_get(client, "/trades")) == 8
 
 
 def test_an_instant_that_is_not_history_is_the_callers_error(app: TestClient) -> None:
@@ -221,7 +231,7 @@ def test_an_instant_a_writer_may_still_precede_is_refused(
     assert refused.headers["Retry-After"] == "1"
     assert page.status_code == 409
     assert "That moment is not final yet" in page.text
-    assert len(settled) == len(after) == 6
+    assert len(settled) == len(after) == 8
 
 
 def test_the_screen_shows_utc_for_a_moment_written_with_an_offset(

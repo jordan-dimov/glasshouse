@@ -24,6 +24,7 @@ from glasshouse.projections.projector import (
 from glasshouse.projections.runner import follow, start_projector_thread
 from glasshouse.projections.tables import (
     blotter_trade,
+    market_currency,
     position_hour,
     projection_progress,
     trade_terms_version,
@@ -37,6 +38,7 @@ __all__ = [
     "catch_up",
     "fold_transition",
     "follow",
+    "market_currency",
     "position_hour",
     "projection_progress",
     "rebuild",

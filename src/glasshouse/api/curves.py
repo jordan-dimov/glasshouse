@@ -23,7 +23,13 @@ from glasshouse.commit import GlasshouseClient, models
 from glasshouse.compute.curves import HourlyCurve
 from glasshouse.compute.store import CurveStore, StoreError
 
-_PREDICATES = ("CurveRegistered", "OfficialCurve", "CurveSupersedes", "TradeValued")
+_PREDICATES = (
+    "CurveRegistered",
+    "OfficialCurve",
+    "CurveSupersedes",
+    "TradeValued",
+    "MarketCurrency",
+)
 
 
 class UnknownCurveVersionError(ValueError):
@@ -45,7 +51,7 @@ class CurveIntegrityError(RuntimeError):
 
 
 class _Snapshot:
-    """The four curve-relevant predicates decoded from ONE named read -
+    """The five curve-relevant predicates decoded from ONE named read -
     one ledger snapshot, whatever commits mid-render."""
 
     def __init__(self, client: GlasshouseClient) -> None:
@@ -65,6 +71,14 @@ class _Snapshot:
             for row in rows
             if row.predicate == "CurveSupersedes"
         ]
+        self.currencies = {
+            (claim.org, claim.market): claim.currency
+            for claim in (
+                models.MarketCurrencyClaim.from_named(row.args)
+                for row in rows
+                if row.predicate == "MarketCurrency"
+            )
+        }
         self.valued = [
             models.TradeValuedClaim.from_named(row.args)
             for row in rows
@@ -117,6 +131,7 @@ def list_curve_versions(
             CurveVersion(
                 version=claim.version,
                 as_of=claim.as_of,
+                currency=snapshot.currencies[org, market],
                 status=status,
                 payload_hash=claim.payload_hash,
                 payload=verdict,
@@ -197,10 +212,17 @@ def curve_diff(
         market=market,
         base=base,
         compare=compare,
+        currency=snapshot.currencies[org, market],
         periods=_diff_periods(base_curve, compare_curve),
         base_marks=sorted(
             (
-                VersionMark(trade=m.trade, book=m.book, terms_version=m.terms_version, mtm=m.mtm)
+                VersionMark(
+                    trade=m.trade,
+                    book=m.book,
+                    terms_version=m.terms_version,
+                    mtm=m.mtm,
+                    currency=m.currency,
+                )
                 for m in marks
                 if m.curve_version == base
             ),
@@ -208,7 +230,13 @@ def curve_diff(
         ),
         compare_marks=sorted(
             (
-                VersionMark(trade=m.trade, book=m.book, terms_version=m.terms_version, mtm=m.mtm)
+                VersionMark(
+                    trade=m.trade,
+                    book=m.book,
+                    terms_version=m.terms_version,
+                    mtm=m.mtm,
+                    currency=m.currency,
+                )
                 for m in marks
                 if m.curve_version == compare
             ),

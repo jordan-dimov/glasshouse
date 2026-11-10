@@ -132,6 +132,24 @@ class GrantLimitAuthorityRequest:
 
 
 @dataclass(frozen=True)
+class DeclareMarketRequest:
+    """Arguments for `declare_market`."""
+
+    TRANSFORMATION: ClassVar[str] = "declare_market"
+
+    org: str
+    market: str
+    currency: str
+
+    def to_args_named(self) -> dict[str, object]:
+        return {
+            "org": values.encode_named(self.org),
+            "market": values.encode_named(self.market),
+            "currency": values.encode_named(self.currency),
+        }
+
+
+@dataclass(frozen=True)
 class SetPositionLimitRequest:
     """Arguments for `set_position_limit`."""
 
@@ -276,7 +294,7 @@ class AdmitValuationRequest:
     curve_version: str
     terms_version: str
     mtm: Decimal
-    # amount in EUR (the declaration carries the unit)
+    currency: str
 
     def to_args_named(self) -> dict[str, object]:
         return {
@@ -286,6 +304,7 @@ class AdmitValuationRequest:
             "curve_version": values.encode_named(self.curve_version),
             "terms_version": values.encode_named(self.terms_version),
             "mtm": values.encode_named(self.mtm),
+            "currency": values.encode_named(self.currency),
         }
 
 
@@ -435,6 +454,26 @@ class ActorAssertionAuthorityClaim:
                 "ActorAssertionAuthority.login_role",
                 args["login_role"],
             ),
+        )
+
+
+@dataclass(frozen=True)
+class MarketCurrencyClaim:
+    """One admitted `MarketCurrency` claim, decoded by declared kind."""
+
+    PREDICATE: ClassVar[str] = "MarketCurrency"
+
+    org: str
+    market: str
+    currency: str
+
+    @classmethod
+    def from_named(cls, args: dict[str, object]) -> MarketCurrencyClaim:
+        values.named_fields("MarketCurrency", args, ("org", "market", "currency"))
+        return cls(
+            org=values.named_text("MarketCurrency.org", args["org"]),
+            market=values.named_text("MarketCurrency.market", args["market"]),
+            currency=values.named_text("MarketCurrency.currency", args["currency"]),
         )
 
 
@@ -645,14 +684,22 @@ class TradeValuedClaim:
     curve_version: str
     terms_version: str
     mtm: Decimal
-    # amount in EUR (the declaration carries the unit)
+    currency: str
 
     @classmethod
     def from_named(cls, args: dict[str, object]) -> TradeValuedClaim:
         values.named_fields(
             "TradeValued",
             args,
-            ("org", "book", "trade", "curve_version", "terms_version", "mtm"),
+            (
+                "org",
+                "book",
+                "trade",
+                "curve_version",
+                "terms_version",
+                "mtm",
+                "currency",
+            ),
         )
         return cls(
             org=values.named_text("TradeValued.org", args["org"]),
@@ -667,6 +714,7 @@ class TradeValuedClaim:
                 args["terms_version"],
             ),
             mtm=values.named_decimal("TradeValued.mtm", args["mtm"]),
+            currency=values.named_text("TradeValued.currency", args["currency"]),
         )
 
 

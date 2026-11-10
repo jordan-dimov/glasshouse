@@ -45,6 +45,7 @@ def applied() -> sa.Engine:
     for request in (
         models.EstablishLedgerRequest(login_role=login_role()),
         models.EstablishOrganisationRequest(org=ORG),
+        models.DeclareMarketRequest(org=ORG, market="de-power", currency="EUR"),
         models.GrantCaptureAuthorityRequest(principal="alice", org=ORG, book=BOOK),
     ):
         assert isinstance(client.submit(request, actor="bootstrap"), Committed)
@@ -95,7 +96,7 @@ def test_the_applied_surface_seals_itself(applied: sa.Engine) -> None:
     # inventory: fourteen predicate views plus the catalogue itself.
     client = GlasshouseClient(str(MODEL_FILE), DB, binary=str(BINARY))
     verdict = client.audit_verify(views_schema=VIEWS_SCHEMA).views
-    assert verdict == envelopes.ViewsIntact(views_checked=17)
+    assert verdict == envelopes.ViewsIntact(views_checked=18)
 
 
 def test_applying_does_not_leak_autocommit(applied: sa.Engine) -> None:

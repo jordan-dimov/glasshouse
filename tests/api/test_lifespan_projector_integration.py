@@ -39,6 +39,7 @@ def test_a_write_becomes_visible_without_manual_catch_up(
     for request in (
         models.EstablishLedgerRequest(login_role=login_role()),
         models.EstablishOrganisationRequest(org=ORG),
+        models.DeclareMarketRequest(org=ORG, market="de-power", currency="EUR"),
         models.GrantCaptureAuthorityRequest(principal="alice", org=ORG, book=BOOK),
     ):
         assert isinstance(client.submit(request, actor="bootstrap"), Committed)
@@ -107,10 +108,10 @@ def test_the_nightly_reset_never_kills_a_live_projector(
                     .select_from(blotter_trade)
                     .where(blotter_trade.c.org == SEED_ORG)
                 ).scalar_one()
-            if count == 6:
+            if count == 8:
                 break
             time.sleep(0.2)
-        assert count == 6
+        assert count == 8
         assert thread.is_alive()
         # Progress, not just liveness: the thread survived the reset AND
         # got through afterwards, which is the pair the readiness verdict

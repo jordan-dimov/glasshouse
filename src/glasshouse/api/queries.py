@@ -36,6 +36,7 @@ from glasshouse.api.schemas import (
 from glasshouse.projections.projector import CURSOR
 from glasshouse.projections.tables import (
     blotter_trade,
+    market_currency,
     position_hour,
     projection_progress,
     trade_terms_version,
@@ -69,6 +70,17 @@ def list_orgs(engine: sa.Engine) -> list[str]:
     return [row["org"] for row in _rows(engine, statement)]
 
 
+# A price is per MWh in its market's currency, and the market's one
+# declaration is where that currency is read from: every query that
+# returns a price joins it, so the currency travels with the number as
+# data. An inner join on purpose: the ledger refuses a trade in an
+# undeclared market, so a missing row is not a case to paper over.
+_TRADES_MARKET = sa.and_(
+    market_currency.c.org == blotter_trade.c.org,
+    market_currency.c.market == blotter_trade.c.market,
+)
+
+
 def list_trades(
     engine: sa.Engine,
     *,
@@ -84,7 +96,11 @@ def list_trades(
     if past is not None:
         rows = asof.trades(past, org=org, book=book, market=market, limit=limit, offset=offset)
         return [BlotterTrade.model_validate(row) for row in rows]
-    statement = sa.select(blotter_trade).where(blotter_trade.c.org == org)
+    statement = (
+        sa.select(blotter_trade, market_currency.c.currency)
+        .join_from(blotter_trade, market_currency, _TRADES_MARKET)
+        .where(blotter_trade.c.org == org)
+    )
     if book is not None:
         statement = statement.where(blotter_trade.c.book == book)
     if market is not None:
@@ -108,7 +124,16 @@ def list_trade_terms(engine: sa.Engine, *, org: str, trade: str) -> list[TradeTe
     ledger's own selector and the blotter projection apply, never by
     lineage order or wall clock."""
     statement = (
-        sa.select(trade_terms_version)
+        sa.select(trade_terms_version, market_currency.c.currency)
+        .join_from(
+            trade_terms_version,
+            blotter_trade,
+            sa.and_(
+                blotter_trade.c.org == trade_terms_version.c.org,
+                blotter_trade.c.trade == trade_terms_version.c.trade,
+            ),
+        )
+        .join(market_currency, _TRADES_MARKET)
         .where(trade_terms_version.c.org == org, trade_terms_version.c.trade == trade)
         .order_by(trade_terms_version.c.effective_from, trade_terms_version.c.version)
     )
@@ -241,10 +266,17 @@ def overview(engine: sa.Engine, *, org: str) -> OverviewSummary:
         .order_by(blotter_trade.c.book)
     )
     latest = _latest_valuations(org).subquery()
-    valuation_statement = sa.select(
-        sa.func.count().label("trade_count"),
-        sa.func.max(latest.c.valued_at).label("valued_at"),
-        sa.func.sum(latest.c.mtm).label("total_mtm"),
+    # One total per currency: amounts in different currencies are never
+    # added together, here or anywhere.
+    valuation_statement = (
+        sa.select(
+            latest.c.currency,
+            sa.func.count().label("trade_count"),
+            sa.func.max(latest.c.valued_at).label("valued_at"),
+            sa.func.sum(latest.c.mtm).label("total_mtm"),
+        )
+        .group_by(latest.c.currency)
+        .order_by(latest.c.currency)
     )
     cursor_statement = sa.select(
         projection_progress.c.committed_at, projection_progress.c.transition_id
@@ -256,7 +288,7 @@ def overview(engine: sa.Engine, *, org: str) -> OverviewSummary:
             connection.begin(),
         ):
             books = connection.execute(books_statement).all()
-            marks = connection.execute(valuation_statement).one()
+            marks = connection.execute(valuation_statement).all()
             cursor = connection.execute(cursor_statement).one_or_none()
     except sa.exc.SQLAlchemyError as exc:
         raise ReadUnavailableError from exc
@@ -264,11 +296,15 @@ def overview(engine: sa.Engine, *, org: str) -> OverviewSummary:
     return OverviewSummary(
         org=org,
         books=[BookSummary(book=book, trade_count=count) for book, count in books],
-        valuation=ValuationSummary(
-            trade_count=marks.trade_count,
-            valued_at=marks.valued_at,
-            total_mtm=None if marks.total_mtm is None else Decimal(marks.total_mtm),
-        ),
+        valuations=[
+            ValuationSummary(
+                currency=mark.currency,
+                trade_count=mark.trade_count,
+                valued_at=mark.valued_at,
+                total_mtm=Decimal(mark.total_mtm),
+            )
+            for mark in marks
+        ],
         projection=ProjectionCursor(
             committed_at=cursor.committed_at if cursor else None,
             transition_id=cursor.transition_id if cursor else None,

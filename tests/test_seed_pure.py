@@ -86,10 +86,10 @@ def test_the_report_renders_stably() -> None:
         amendments=1,
         valuations=13,
         limits=2,
-        checkpoint_rows=39,
+        checkpoint_rows=52,
     )
     assert (
-        "13 valuation(s), 2 position limit(s); checkpoint over 39 audit row(s); verify: consistent"
+        "13 valuation(s), 2 position limit(s); checkpoint over 52 audit row(s); verify: consistent"
         in anchored.render()
     )
 

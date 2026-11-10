@@ -22,7 +22,8 @@ The fold is in two pure layers, so the projection logic is testable
 without a database and the SQL applier and the in-memory replay cannot
 drift apart. `fold_transition` classifies ONE transition's claims: a
 capture (identity plus the first terms version), an amendment (a new
-terms version with its lineage), a valuation - total over the model on
+terms version with its lineage), a valuation, a market's declared
+currency - total over the model on
 purpose, so the predicates it deliberately ignores are named and
 anything else (a retraction of a projected predicate, terms that are
 neither a capture's nor an amendment's, an unknown direction) raises
@@ -51,6 +52,7 @@ from glasshouse.commit import GlasshouseClient, envelopes, models
 from glasshouse.logging import get_logger
 from glasshouse.projections.tables import (
     blotter_trade,
+    market_currency,
     position_hour,
     projection_progress,
     trade_terms_version,
@@ -65,7 +67,9 @@ CURSOR = "needle"
 # Predicates whose claims become projection rows. Retracting one of
 # these is impossible under the current model (they are append only);
 # seeing it happen means the model changed and the folds must too.
-PROJECTED = frozenset({"TradeCaptured", "TradeTerms", "TradeTermsSupersedes", "TradeValued"})
+PROJECTED = frozenset(
+    {"MarketCurrency", "TradeCaptured", "TradeTerms", "TradeTermsSupersedes", "TradeValued"}
+)
 
 # Predicates the needle's projections deliberately ignore: authority is
 # queried from governed state, and curve officialness/lineage is read
@@ -129,6 +133,7 @@ class Fold:
     captures: tuple[Capture, ...] = ()
     amendments: tuple[Amendment, ...] = ()
     valuations: tuple[models.TradeValuedClaim, ...] = ()
+    markets: tuple[models.MarketCurrencyClaim, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -212,8 +217,11 @@ def fold_transition(
     terms: list[models.TradeTermsClaim] = []
     supersedes: dict[str, str] = {}
     valuations: list[models.TradeValuedClaim] = []
+    markets: list[models.MarketCurrencyClaim] = []
     for claim in asserted:
         match claim.predicate:
+            case "MarketCurrency":
+                markets.append(models.MarketCurrencyClaim.from_named(claim.args))
             case "TradeCaptured":
                 identity = models.TradeCapturedClaim.from_named(claim.args)
                 captured[identity.trade] = identity
@@ -262,6 +270,7 @@ def fold_transition(
         tuple(captures.values()),
         tuple(sorted(amendments, key=lambda a: (a.terms.trade, a.terms.effective_from))),
         tuple(valuations),
+        tuple(markets),
     )
 
 
@@ -398,6 +407,10 @@ def _apply(
     connection: sa.Connection, fold: Fold, committed_at: dt.datetime, tid: str, actor: str
 ) -> None:
     deltas: list[PositionDelta] = []
+    for market in fold.markets:
+        connection.execute(
+            sa.insert(market_currency).values(**_values(market_currency, market_row(market, tid)))
+        )
     for capture in fold.captures:
         row, opened = open_row(capture, committed_at, tid, actor)
         connection.execute(
@@ -482,8 +495,14 @@ def _apply(
                 transition_id=tid,
                 actor=actor,
                 terms_version=valuation.terms_version,
+                currency=valuation.currency,
             )
         )
+
+
+def market_row(market: models.MarketCurrencyClaim, tid: str) -> tuple[object, ...]:
+    """A `market_currency` row, in the table's column order."""
+    return (market.org, market.market, market.currency, tid)
 
 
 def _values(table: sa.Table, row: tuple[object, ...]) -> dict[str, object]:
@@ -587,6 +606,7 @@ def replay(
     history: dict[tuple[str, str, str], tuple[object, ...]] = {}
     positions: dict[tuple[str, str, str, dt.datetime], tuple[Decimal, str]] = {}
     valuations: dict[tuple[str, str, str, str], tuple[object, ...]] = {}
+    currencies: dict[tuple[str, str], tuple[object, ...]] = {}
     cursor: tuple[object, ...] | None = None
     folded = 0
     reached_up_to = up_to is None
@@ -637,7 +657,10 @@ def replay(
                 tid,
                 actor,
                 valuation.terms_version,
+                valuation.currency,
             )
+        for market in fold.markets:
+            currencies[market.org, market.market] = market_row(market, tid)
         cursor = (CURSOR, at, tid)
         folded += 1
         if tid == up_to:
@@ -652,6 +675,7 @@ def replay(
         "trade_terms_version": set(history.values()),
         "position_hour": {(*key, net, tid) for key, (net, tid) in positions.items()},
         "trade_valuation": set(valuations.values()),
+        "market_currency": set(currencies.values()),
         "projection_progress": {cursor} if cursor else set(),
     }
     return Replay(tables, folded)
@@ -677,6 +701,7 @@ def rebuild(client: GlasshouseClient, engine: sa.Engine) -> int:
             trade_terms_version,
             position_hour,
             trade_valuation,
+            market_currency,
             projection_progress,
         ):
             connection.execute(sa.delete(table))

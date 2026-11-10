@@ -62,6 +62,7 @@ def monday(morpholog: GlasshouseClient, engine: sa.Engine, store: CurveStore) ->
     for grant in (
         models.EstablishLedgerRequest(login_role=login_role()),
         models.EstablishOrganisationRequest(org=ORG),
+        models.DeclareMarketRequest(org=ORG, market="de-power", currency="EUR"),
         models.GrantCaptureAuthorityRequest(principal="alice", org=ORG, book=BOOK),
         models.GrantCurveAuthorityRequest(principal="carol", org=ORG, market=MARKET),
         models.GrantValuationAuthorityRequest(principal="risk-engine", org=ORG, book=BOOK),

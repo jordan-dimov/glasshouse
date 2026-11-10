@@ -22,6 +22,7 @@
 {% endif %}
 
 {% if versions %}
+<p class="page-header__note">Prices in {{ versions[0].currency }} per MWh, the currency the {{ market }} market was declared with.</p>
 {% for chain in chains %}
 <p class="chain-line">Lineage: {% for version in chain %}<span class="mono">{{ version }}</span>{% if not loop.last %} supersedes {% endif %}{% endfor %}</p>
 {% endfor %}
@@ -71,6 +72,7 @@
 {% if diff %}
 <section>
   <h2>{{ diff.compare }} against {{ diff.base }}</h2>
+  <p class="page-header__note">Prices in {{ diff.currency }} per MWh, the currency of the {{ diff.market }} market.</p>
   <div class="table-scroll">
     <table class="data-table" aria-label="Price changes from {{ diff.base }} to {{ diff.compare }}">
       <thead>
@@ -78,7 +80,7 @@
           <th scope="col">Delivery hour (UTC)</th>
           <th scope="col" class="numeric">{{ diff.base }}</th>
           <th scope="col" class="numeric">{{ diff.compare }}</th>
-          <th scope="col" class="numeric">Delta (EUR/MWh)</th>
+          <th scope="col" class="numeric">Delta ({{ diff.currency }}/MWh)</th>
         </tr>
       </thead>
       <tbody>
@@ -102,11 +104,11 @@
       <div class="table-scroll">
         <table class="data-table" aria-label="Marks struck on {{ diff.base if side == 'base' else diff.compare }}">
           <thead>
-            <tr><th scope="col">Trade</th><th scope="col">Book</th><th scope="col">Terms</th><th scope="col" class="numeric">MtM (EUR)</th></tr>
+            <tr><th scope="col">Trade</th><th scope="col">Book</th><th scope="col">Terms</th><th scope="col" class="numeric">MtM</th><th scope="col">Currency</th></tr>
           </thead>
           <tbody>
             {% for mark in marks %}
-            <tr><td class="mono">{{ mark.trade }}</td><td>{{ mark.book }}</td><td class="mono">{{ mark.terms_version }}</td>{{ num_cell(mark.mtm) }}</tr>
+            <tr><td class="mono">{{ mark.trade }}</td><td>{{ mark.book }}</td><td class="mono">{{ mark.terms_version }}</td>{{ num_cell(mark.mtm) }}<td>{{ mark.currency }}</td></tr>
             {% endfor %}
           </tbody>
         </table>
