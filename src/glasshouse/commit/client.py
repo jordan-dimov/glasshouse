@@ -15,20 +15,18 @@ genuinely ours, nothing duplicated:
   binary of another version, or a programme with other rules, by name.
   Every Glasshouse client is a deployment client, so there is no
   unchecked construction path here on purpose;
-* **the writer-role assertion**, carried as deployment configuration
-  rather than repeated at every call site (see below);
 * **`read`**, the typed per-predicate as-of read composing the generated
   named-claim surface;
 * **`write_checkpoint`**, the exact-bytes anchor writer over the
   generated checkpoint envelope.
 
-`writer_roles` is not a bridge - the flag is generated and typed
-(upstream #210) - it is a deployment property of the connection, exactly
-like `database_url` and the timeout, so it belongs on the client that
-holds those. Binding it here also makes it impossible to forget: a new
-audit-tailing call site inherits the assertion, where a per-call
-argument would pass every test on a self-hosted database and fail only
-on managed PostgreSQL.
+There was a third until v0.0.17: the writer-role assertion, three
+overrides that carried `--writer-role` to every audit tail because
+managed PostgreSQL hid the sessions the resume horizon was computed
+from. The horizon is now the lowest audit order still held under a
+lock, read from the lock table, so it needs no view of other sessions
+and no assertion of who writes (morpholog#632): the flag is gone from
+the binary and the overrides from here.
 """
 
 from __future__ import annotations
@@ -36,7 +34,7 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
-from typing import ClassVar, Protocol, Self, override
+from typing import ClassVar, Protocol, Self
 
 from glasshouse.commit.morpholog_client import MODEL_HASH, MORPHOLOG_VERSION, envelopes
 from glasshouse.commit.morpholog_client.adapter import Morpholog, MorphologNotCovered
@@ -54,8 +52,8 @@ class NamedClaimModel(Protocol):
 
 class GlasshouseClient(Morpholog):
     """The generated client plus Glasshouse's binary discovery, the
-    first-use compatibility check switched on, the configured
-    writer-role assertion, the typed as-of read and the anchor writer."""
+    first-use compatibility check switched on, the typed as-of read and
+    the anchor writer."""
 
     def __init__(
         self,
@@ -63,7 +61,6 @@ class GlasshouseClient(Morpholog):
         database_url: str,
         binary: str | None = None,
         timeout_seconds: float | None = None,
-        writer_roles: list[str] | None = None,
     ) -> None:
         super().__init__(
             file,
@@ -75,75 +72,6 @@ class GlasshouseClient(Morpholog):
             # not match the stamps this package was generated with.
             expected_version=MORPHOLOG_VERSION,
             expected_model_hash=MODEL_HASH,
-        )
-        # The session roles that write morpholog.audit, asserted so the
-        # resume horizon can be computed over their sessions alone. Empty
-        # (the default, and every self-hosted deployment) leaves the
-        # blessed all-sessions horizon exactly as it was.
-        self.writer_roles = writer_roles or None
-
-    def _asserted(self, writer_roles: list[str] | None) -> list[str] | None:
-        """The generated `None` means "no flag"; here it means "whatever
-        this deployment is configured with". An explicit empty list keeps
-        the generated meaning - no flag, the all-sessions horizon - so a
-        caller can still turn the assertion off for one call."""
-        return self.writer_roles if writer_roles is None else writer_roles
-
-    # The three surfaces that compute the resume horizon. Each keeps the
-    # generated signature and semantics; the configured assertion is
-    # simply the default a caller does not pass.
-    #
-    # These names must track the generated ones exactly: an override that
-    # no longer matches its base silently becomes a dead method, and the
-    # deployment's writer-role assertion stops reaching the binary with
-    # nothing failing - the managed-PostgreSQL horizon bug back again, and
-    # invisible to every self-hosted test. The v0.0.8 `audit` grouping
-    # renamed `checkpoint` to `audit_checkpoint` and did exactly that.
-    #
-    # `@override` is the guard that failure earned: mypy now refuses a
-    # method here that overrides nothing, so the next regrouping is a
-    # type error at the moment the client is regenerated rather than a
-    # dead function nobody notices. `tests/commit/test_client.py` still
-    # pins the argv each one emits - the decorator proves the method is
-    # reached, the test proves it sends the flag.
-    @override
-    def audit(
-        self,
-        after: str | None = None,
-        *,
-        writer_roles: list[str] | None = None,
-        mentions: str | None = None,
-    ) -> list[envelopes.AuditRow]:
-        return super().audit(after, writer_roles=self._asserted(writer_roles), mentions=mentions)
-
-    @override
-    def audit_named(
-        self,
-        after: str | None = None,
-        *,
-        writer_roles: list[str] | None = None,
-        mentions: str | None = None,
-    ) -> list[envelopes.AuditRowNamed]:
-        return super().audit_named(
-            after, writer_roles=self._asserted(writer_roles), mentions=mentions
-        )
-
-    @override
-    def audit_checkpoint(
-        self,
-        signing_key: str | None = None,
-        key_id: str | None = None,
-        *,
-        writer_roles: list[str] | None = None,
-        witnesses: list[str] | None = None,
-        covering: str | None = None,
-    ) -> envelopes.CheckpointCreated | envelopes.CheckpointNoNewRows:
-        return super().audit_checkpoint(
-            signing_key,
-            key_id,
-            writer_roles=self._asserted(writer_roles),
-            witnesses=witnesses,
-            covering=covering,
         )
 
     def write_checkpoint(
@@ -163,7 +91,6 @@ class GlasshouseClient(Morpholog):
             "checkpoint",
             "--database-url",
             self.database_url,
-            *self._repeat("--writer-role", self.writer_roles),
             *self._opt("--covering", covering),
         )
         payload = json.loads(raw)

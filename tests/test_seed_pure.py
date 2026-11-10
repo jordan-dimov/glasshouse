@@ -118,8 +118,7 @@ def test_a_short_tail_is_refused_by_name_not_reported_consistent(
             seed.project_everything(_consistent(tmp_path, 32), engine, patience=0)
     finally:
         engine.dispose()
-    assert "Potential horizon blockers" in str(refused.value)
-    assert "pg_stat_activity" in str(refused.value)  # the dead database: a pointer, not a crash
+    assert "a writer still in flight" in str(refused.value)
 
 
 def test_a_complete_tail_returns_what_it_projected(

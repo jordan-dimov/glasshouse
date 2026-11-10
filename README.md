@@ -1,65 +1,66 @@
 # Glasshouse
 
-**The open ETRM core for European power. Trades, curves, positions, P&L and audit, without the black box.**
+Glasshouse is an open-source system of record for power trading. It keeps a firm's trades, price curves, positions, and profit and loss in one place, with a complete history of every change.
 
-Glasshouse is an open-source system of record for European power operations: books, counterparties, trades, amendments, official curves, positions, P&L, corrections, and an audit history good enough to hand to an auditor. Apache 2.0. PostgreSQL. A documented HTTP API. CSV in, CSV out.
+**See it running: [glasshouse.a115.co.uk](https://glasshouse.a115.co.uk).** A small demo trading book: its trades, hourly positions, valuations, a corrected price curve, and the history behind them. The login is shared. Ask [Jordan on LinkedIn](https://www.linkedin.com/in/jdimov) for the password, or run it yourself in a few minutes (below).
 
-The architecture in one sentence: **a governed operational ledger for power trading, where every write is a proposal, every accepted proposal is a transition, every large artefact is hash-anchored, every operational view is replayable, and every number can be explained.**
+![The Positions screen: the demo book's net position for each delivery hour](docs/images/positions.png)
 
-> **Status: pre-v0, the vertical needle is built, all six demo screens exist, and the model has its first widening: trade amendment.** One trade, one official curve, one MTM only admissible against the official curve and the terms in force on its date, one correction that supersedes, one amendment that supersedes (a new terms version, effective-dated, with lineage), one as-of query - running end to end through a governed ledger, with CSV imports (quarantine per row, and a dry-run preview that explains refusals in business terms), replayable projections (blotter, hourly positions, valuations), generated per-predicate SQL views as the official inspection model over governed state, `glasshouse verify` (six legs) proving the database still agrees with the ledger, a read API over the projections and the ledger (blotter, positions, valuations, orgs, overview, markets, curves and the diff, the audit log) plus a dry-run `/explain`, six server-rendered screens under `/ui` (Overview, Blotter, Positions & P&L, Curves with the two-version diff, the Imports workbench - upload, preview, commit, the first governed write from a browser - and Audit/Evidence with on-demand verification and offline evidence downloads; readiness L0 stated on screen), a deterministic `glasshouse seed --reset` for the demo dataset including a curve correction, and CI that proves all of it live on every PR. **The hosted demo deploys to [glasshouse.a115.co.uk](https://glasshouse.a115.co.uk)** behind a shared login (HTTP Basic, username `demo`, password on request; close the browser to forget it), resets nightly to the known Monday-morning book, and states its readiness (L0) on every screen.
+## Why it exists
 
-## Why this exists
+A small power trading team, or a company running batteries or renewables, has two choices today. Spreadsheets and a home-made trade table are hard to audit. Vendor systems are expensive and closed.
 
-A modern power-trading team (a 3-20 person startup, a BESS or VPP operator, a renewables portfolio manager) lives in a gap: spreadsheets and a hand-rolled trade table on one side, heavyweight vendor ETRMs and black-box SaaS on the other. There is no mature, audit-first, lifecycle-complete open-source ETRM core for European power. Glasshouse is that core.
+Glasshouse sits between them: a book of record you can read, run and check yourself.
 
-What you get instead of building it in-house:
+## What makes it different
 
-- positions and P&L by delivery period, by book, against the **official** curve as of any business date;
-- corrections that **supersede, never overwrite**: "what did we know at 10:00 last Tuesday, and under which curve?" is a query, not a forensic project;
-- lawful rejection as a first-class outcome: the system refuses to commit state that breaks the rules, and explains why in business terms;
-- `glasshouse verify`: prove, on demand, that the operational database still agrees with the governed ledger;
-- native 15-minute Market Time Units alongside GB half-hours, DST handled correctly;
-- CSV import with quarantine (never silent coercion), tests, CI, OpenAPI, Docker.
+- **Nothing is overwritten.** A corrected curve or an amended trade is a new version beside the old one. The old figure, and every valuation made from it, stays on the record.
+- **Bad changes are refused, with a reason.** The rules live in [one readable file](src/glasshouse/commit/glasshouse.morph). A change that breaks one is not saved, and the refusal names the rule: this trader may not trade this book, this trade would take the book over its limit in this hour.
+- **Every valuation shows its sources.** It records the exact curve version and trade terms it was computed from, so last week's number can be explained this week.
+- **You can check the records yourself.** One command confirms the database still agrees with its own history. Another exports that history for an outsider to verify offline.
 
-## Reading order
+## How the rules are enforced
 
-1. [DESIGN.md](DESIGN.md) — the founding design document: what Glasshouse is, who adopts it, the four primitives, the architecture, the readiness ladder.
-2. [SCOPE.md](SCOPE.md) — what Glasshouse is **not**, stated plainly.
-3. [docs/morpholog-integration-contract.md](docs/morpholog-integration-contract.md) — the contract with the governed commit layer.
+Glasshouse is built on [Morpholog](https://github.com/jordan-dimov/morpholog), a separate open-source project: a small language for writing business rules, and an engine that runs them on PostgreSQL.
 
-## Development
+Every change to the book is a proposal. Morpholog checks it against the rule file and saves it only if every rule still holds. It keeps a tamper-evident record of each change it accepted.
 
-Requires Python 3.13+, [uv](https://docs.astral.sh/uv/), and Docker (for the TimescaleDB Postgres 18 the migrations need). The [morpholog](https://github.com/jordan-dimov/morpholog) binary is a checksummed download rather than a build: no Rust toolchain, and it is the exact release CI and the deployed image use. The install script selects the artefact for your machine and covers **linux x86_64, linux arm64 and macOS on Apple Silicon**. Intel Macs build morpholog from source (its README) and point `GLASSHOUSE_MORPHOLOG_BIN` at the result; nothing else differs.
+Glasshouse could have put its rules in application code. It does not, for three reasons. The rules sit in one file anyone can read. They are enforced in one place, outside the code that proposes changes, so a bug, a script or an AI agent working through Glasshouse cannot get round them. And the history can be replayed and checked by someone who does not trust us.
+
+## Where it stands
+
+Early. It handles one product, fixed-price power, from end to end: CSV imports, hourly positions, valuations, corrections, amendments, position limits, a web interface and an HTTP API.
+
+It is ready to evaluate, not yet to run a desk on. [SCOPE.md](SCOPE.md) says plainly what it is not.
+
+## Where it is going
+
+None of this exists yet. It is the road ahead.
+
+- **View any past moment.** The history is complete already. Next is seeing the whole system as it stood at a chosen time.
+- **Run beside what you have.** Import your spreadsheet's or current system's exports, compare daily, and see exactly where the two differ.
+- **More of the lifecycle.** Counterparty confirmations, settlement, and products such as power purchase agreements and battery storage.
+- **A safe place for software to trade.** Every change is a proposal the rules accept or refuse, whoever makes it. Algorithms and AI agents can propose trades, cannot break the book, and leave a full record of what they did.
+
+[DESIGN.md](DESIGN.md) has the full plan and the reasoning.
+
+## Run it locally
+
+You need Python 3.13 or later, [uv](https://docs.astral.sh/uv/) and Docker.
 
 ```bash
-./scripts/install-morpholog.sh ~/.local/bin   # the pinned release; export GLASSHOUSE_MORPHOLOG_BIN=~/.local/bin/morpholog
-docker compose up -d          # TimescaleDB-enabled Postgres 18 (the floor)
-uv sync --dev
-uv run pytest                 # live integration legs run when the binary and a database are reachable
-uv run uvicorn glasshouse.api.app:app --reload
+./scripts/install-morpholog.sh ~/.local/bin
+export GLASSHOUSE_MORPHOLOG_BIN=~/.local/bin/morpholog
+docker compose up -d
+uv sync
+uv run python -m glasshouse.cli seed --reset
+uv run uvicorn glasshouse.api.app:app
 ```
 
-The operator CLI exists ahead of the API:
+Then open <http://localhost:8000/ui>. These steps download the Morpholog engine, start a local PostgreSQL, install the Python packages, load the demo book and start the server.
 
-```bash
-uv run python -m glasshouse.cli provision            # non-destructive first boot: app schema to head, governed init, sealed views (idempotent; the deploy's pre-deploy step)
-uv run python -m glasshouse.cli seed --reset         # the Monday-morning demo dataset (destructive; refused in production; a plain `seed` refuses any ledger with history)
-uv run python -m glasshouse.cli apply-views          # the SQL inspection model, after `morpholog init`
-uv run python -m glasshouse.cli import-trades trades.csv --org acme --actor alice --project   # columns: book,trade,trade_date,counterparty,market,direction,quantity,price,delivery_start,delivery_end
-uv run python -m glasshouse.cli import-curves curves.csv --org acme --actor carol
-uv run python -m glasshouse.cli project --follow     # the projector as a worker
-uv run python -m glasshouse.cli verify               # all six legs agree, or the exit code says not
-uv run python -m glasshouse.cli checkpoint           # anchor the audit log's tamper-evidence tree
-uv run python -m glasshouse.cli evidence-export pack.ndjson # a portable pack a third party verifies offline
-uv run python -m glasshouse.cli evidence-verify pack.ndjson # recompute the Merkle root, no database needed
-```
+Tests, the command-line tools, configuration and deployment are in [docs/development.md](docs/development.md).
 
-Provisioning a fresh database is `morpholog init` (the governed schema), the Alembic migration (the app schema), `morpholog provision indexes` (the managed indexes and planner statistics the ledger's keyed reads and compiled checks seek through; `init` does not build them), then `glasshouse apply-views` (the official inspection model). `glasshouse provision` runs all of those in order and is idempotent, which is how the deployed service does it. `glasshouse verify`'s `views` leg fails until the views step has run, by design: the inspection model is part of the operational surface it checks.
+## Licence and contact
 
-### Configuration and logs
-
-Configuration is environment-only (twelve-factor), prefixed `GLASSHOUSE_`: `GLASSHOUSE_DATABASE_URL`, `GLASSHOUSE_MORPHOLOG_BIN`, `GLASSHOUSE_ENVIRONMENT` (`dev`, `demo` or `production`), and `GLASSHOUSE_DEMO_PASSWORD` (unset = no gate, for local dev; set = the shared demo login in front of everything but the health probes, and in the demo environment browser writes refuse to run without it). Operational logs go to **stderr**, leaving stdout as the CLI's data channel (the import report, the projector count); `dev` renders a readable console line, `demo` and `production` render JSON lines for a log aggregator. The operational log is separate from the governed audit log in the ledger, which stays the product.
-
-## Licence
-
-Apache 2.0. See [LICENSE](LICENSE).
+Apache 2.0, see [LICENSE](LICENSE). Questions, ideas and contributions are welcome through [GitHub issues](https://github.com/jordan-dimov/glasshouse/issues). To see the demo or talk about using Glasshouse, reach [Jordan on LinkedIn](https://www.linkedin.com/in/jdimov).

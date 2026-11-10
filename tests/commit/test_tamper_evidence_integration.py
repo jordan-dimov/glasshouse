@@ -133,7 +133,7 @@ def test_offline_verification_ignores_the_deployment_environment(
     pack = tmp_path / "forensic-pack.ndjson"
     assert cli.main(["evidence-export", str(pack), "--database-url", DB]) == 0
     monkeypatch.setenv("GLASSHOUSE_DEMO_PASSWORD", "short")
-    monkeypatch.setenv("GLASSHOUSE_AUDIT_WRITER_ROLES", "[broken")
+    monkeypatch.setenv("GLASSHOUSE_ENVIRONMENT", "staging")
     assert cli.main(["evidence-verify", str(pack)]) == 0
     assert "evidence verify: intact" in capsys.readouterr().out
 
