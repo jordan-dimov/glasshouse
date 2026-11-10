@@ -4,7 +4,7 @@
 {% block content %}
 <div class="page-header">
   <h1>Curves</h1>
-  <p class="page-header__note">Every registered version, its officialness and lineage, and its payload checked live against the hash the ledger admitted.</p>
+  <p class="page-header__note">A price curve is the market's price for each delivery hour, used to value trades. A correction never overwrites: it adds a new version, and the old one is kept.</p>
 </div>
 
 {% if markets %}
@@ -17,15 +17,17 @@
       {% endfor %}
     </select>
   </label>
-  <button type="submit">Show</button>
+  <noscript><button type="submit">Show</button></noscript>
 </form>
 {% endif %}
 
 {% if versions %}
-<p class="page-header__note">Prices in {{ versions[0].currency }} per MWh, the currency the {{ market }} market was declared with.</p>
-{% for chain in chains %}
-<p class="chain-line">Lineage: {% for version in chain %}<span class="mono">{{ version }}</span>{% if not loop.last %} supersedes {% endif %}{% endfor %}</p>
-{% endfor %}
+<p class="page-header__note">Prices in {{ versions[0].currency }} per MWh, the currency of the {{ market }} market.</p>
+{# With two or more versions, the likely question is "what did the
+   correction change": the version in use against the one it replaced
+   is chosen already, and one click compares them. #}
+{% set chosen_base = base or (shown.supersedes if shown else none) %}
+{% set chosen_compare = compare or (shown.version if shown and shown.supersedes else none) %}
 <form method="get" action="/ui/curves">
   <input type="hidden" name="org" value="{{ org }}">
   <input type="hidden" name="market" value="{{ market }}">
@@ -34,15 +36,15 @@
       <thead>
         <tr>
           <th scope="col">Version</th>
-          <th scope="col">As of</th>
+          <th scope="col">For the day</th>
           <th scope="col">Status</th>
-          <th scope="col">Payload hash</th>
-          <th scope="col">Payload</th>
-          <th scope="col">Supersedes</th>
-          <th scope="col" class="numeric">Marks</th>
-          <th scope="col">Books</th>
-          <th scope="col">Base</th>
-          <th scope="col">Compare</th>
+          <th scope="col">Replaces</th>
+          <th scope="col" class="numeric">Trades valued with it</th>
+          <th scope="col">Stored prices</th>
+          {% if versions | length > 1 %}
+          <th scope="col">Compare from</th>
+          <th scope="col">Compare to</th>
+          {% endif %}
         </tr>
       </thead>
       <tbody>
@@ -50,28 +52,49 @@
         <tr>
           <td class="mono">{{ version.version }}</td>
           <td>{{ version.as_of.isoformat() }}</td>
-          <td>{{ badge(version.status) }}</td>
-          <td>{{ evidence(version.payload_hash, 19) }}</td>
-          <td>{{ badge("ok" if version.payload == "ok" else "break", version.payload) }}</td>
+          <td>{{ badge(version.status, {"official": "in use", "superseded": "replaced", "registered": "not in use"}[version.status]) }}</td>
           <td>{% if version.supersedes %}<span class="mono">{{ version.supersedes }}</span>{% endif %}</td>
-          <td class="numeric">{{ version.mark_count }}</td>
-          <td>{{ version.books | join(", ") }}</td>
-          <td><input type="radio" name="base" value="{{ version.version }}" {% if version.version == base %}checked{% endif %} aria-label="diff base {{ version.version }}"></td>
-          <td><input type="radio" name="compare" value="{{ version.version }}" {% if version.version == compare %}checked{% endif %} aria-label="diff compare {{ version.version }}"></td>
+          <td class="numeric" title="{{ version.books | join(", ") }}">{{ version.mark_count }}</td>
+          <td title="{{ version.payload_hash }}">{{ badge("ok" if version.payload == "ok" else "break", {"ok": "unchanged", "mismatch": "ALTERED", "missing": "MISSING"}[version.payload]) }}</td>
+          {% if versions | length > 1 %}
+          <td><input type="radio" name="base" value="{{ version.version }}" {% if version.version == chosen_base %}checked{% endif %} aria-label="compare from {{ version.version }}"></td>
+          <td><input type="radio" name="compare" value="{{ version.version }}" {% if version.version == chosen_compare %}checked{% endif %} aria-label="compare to {{ version.version }}"></td>
+          {% endif %}
         </tr>
         {% endfor %}
       </tbody>
     </table>
   </div>
-  <p class="tile__note"><button type="submit">Compare selected versions</button> - pick a base and a compare version to see what changed and which marks each carries.</p>
+  <p class="tile__note">"Stored prices: unchanged" means the prices on file still match the fingerprint recorded when the version was added.{% if versions | length > 1 %} <button type="submit">Compare the two versions</button>{% endif %}</p>
 </form>
 {% else %}
-{{ empty_state("No curve versions registered for this organisation yet. Import curves or run glasshouse seed --reset.") }}
+{{ empty_state("No price curves yet. Import one on the Imports screen, or load the demo book with: glasshouse seed --reset") }}
+{% endif %}
+
+{% if prices %}
+<section class="section--after-form">
+  <h2>Prices in use: {{ shown.version }}</h2>
+  <div class="table-scroll table-scroll--narrow">
+    <table class="data-table" aria-label="Prices of {{ shown.version }}">
+      <thead>
+        <tr>
+          <th scope="col">Delivery hour (UTC)</th>
+          <th scope="col" class="numeric">Price ({{ shown.currency }} per MWh)</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for hour, price in prices %}
+        <tr><td>{{ hour | utc }}</td>{{ num_cell(price) }}</tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
 {% endif %}
 
 {% if diff %}
 <section>
-  <h2>{{ diff.compare }} against {{ diff.base }}</h2>
+  <h2>What changed from {{ diff.base }} to {{ diff.compare }}</h2>
   <p class="page-header__note">Prices in {{ diff.currency }} per MWh, the currency of the {{ diff.market }} market.</p>
   <div class="table-scroll">
     <table class="data-table" aria-label="Price changes from {{ diff.base }} to {{ diff.compare }}">
@@ -80,7 +103,7 @@
           <th scope="col">Delivery hour (UTC)</th>
           <th scope="col" class="numeric">{{ diff.base }}</th>
           <th scope="col" class="numeric">{{ diff.compare }}</th>
-          <th scope="col" class="numeric">Delta ({{ diff.currency }}/MWh)</th>
+          <th scope="col" class="numeric">Change ({{ diff.currency }} per MWh)</th>
         </tr>
       </thead>
       <tbody>
@@ -99,12 +122,12 @@
   <div class="marks-pair">
     {% for side, marks in (("base", diff.base_marks), ("compare", diff.compare_marks)) %}
     <section>
-      <h2>Marks struck on {{ diff.base if side == "base" else diff.compare }}</h2>
+      <h2>Trades valued with {{ diff.base if side == "base" else diff.compare }}</h2>
       {% if marks %}
       <div class="table-scroll">
-        <table class="data-table" aria-label="Marks struck on {{ diff.base if side == 'base' else diff.compare }}">
+        <table class="data-table" aria-label="Trades valued with {{ diff.base if side == 'base' else diff.compare }}">
           <thead>
-            <tr><th scope="col">Trade</th><th scope="col">Book</th><th scope="col">Terms</th><th scope="col" class="numeric">MtM</th><th scope="col">Currency</th></tr>
+            <tr><th scope="col">Trade</th><th scope="col">Book</th><th scope="col">Trade version</th><th scope="col" class="numeric">Value</th><th scope="col">Currency</th></tr>
           </thead>
           <tbody>
             {% for mark in marks %}
@@ -114,7 +137,7 @@
         </table>
       </div>
       {% else %}
-      {{ empty_state("No marks were struck on this version.") }}
+      {{ empty_state("No trade was valued with this version.") }}
       {% endif %}
     </section>
     {% endfor %}

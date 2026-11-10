@@ -73,7 +73,7 @@ def test_an_authenticated_import_carries_the_derived_actor(ui: TestClient) -> No
             auth=creds,
         )
         assert receipts.status_code == 200
-        assert "1 committed" in receipts.text
+        assert "1 recorded" in receipts.text
 
         blotter = client.get("/trades", params={"org": ORG, "book": "spec-de"}, auth=creds)
         by_trade = {row["trade"]: row for row in blotter.json()}
@@ -101,7 +101,7 @@ def test_a_tampered_org_field_is_ignored_on_authenticated_writes(ui: TestClient)
             auth=creds,
         )
         assert receipts.status_code == 200
-        assert "1 committed" in receipts.text
+        assert "1 recorded" in receipts.text
         # The trade landed in the CONFIGURED org, not the submitted one.
         ours = client.get("/trades", params={"org": ORG, "book": "spec-de"}, auth=creds).json()
         theirs = client.get("/trades", params={"org": "evil-corp"}, auth=creds).json()

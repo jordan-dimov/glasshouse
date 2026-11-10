@@ -4,7 +4,7 @@
 {% block content %}
 <div class="page-header">
   <h1>Choose an organisation</h1>
-  <p class="page-header__note">Organisations with projected activity in the read model. The organisation is the tenancy boundary: every screen is scoped to exactly one.</p>
+  <p class="page-header__note">Each organisation has its own books. Every screen shows one organisation at a time.</p>
 </div>
 {% if orgs %}
 <ul class="org-list">
@@ -13,6 +13,6 @@
   {% endfor %}
 </ul>
 {% else %}
-{{ empty_state("No organisations have projected activity yet. Seed the demo dataset with: glasshouse seed --reset") }}
+{{ empty_state("There is nothing here yet. Load the demo book with: glasshouse seed --reset") }}
 {% endif %}
 {% endblock %}

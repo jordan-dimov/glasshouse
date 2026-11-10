@@ -39,9 +39,9 @@ def test_versions_show_status_lineage_and_live_payload_verdicts(ui: TestClient) 
     # v2 is the official pointer, v1 stays on the record as superseded.
     assert "badge--official" in response.text
     assert "badge--superseded" in response.text
-    assert f"{CURVE_V2}</span> supersedes <span" in response.text
+    assert f'<td><span class="mono">{CURVE_V1}</span></td>' in response.text  # v2 replaces v1
     # Both payloads re-hash to their admitted hashes, live.
-    assert response.text.count(">ok<") >= 2
+    assert response.text.count(">unchanged<") >= 2
     assert "mismatch" not in response.text
 
 
@@ -58,7 +58,7 @@ def test_the_diff_shows_exactly_the_revised_hours_and_each_versions_marks(
     # identical, so the delta column carries exactly four 3s.
     assert response.text.count('class="numeric">3</td>') == 4
     # Each version carries all six marks (every trade re-marked).
-    assert response.text.count("<h2>Marks struck on") == 2
+    assert response.text.count("<h2>Trades valued with") == 2
     with ui as client:
         json_diff = client.get(
             "/curves/diff",

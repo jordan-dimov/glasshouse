@@ -3,45 +3,56 @@
 {% block content %}
 <div class="page-header">
   <h1>Imports</h1>
-  <p class="page-header__note">Upload a CSV, preview the ledger's verdict on every row, then commit the good ones. Nothing is committed until you say so.</p>
+  <p class="page-header__note">Bring trades or prices in from a CSV file. First you see what would happen to every row. Nothing is recorded until you confirm.</p>
 </div>
 
 <div class="tiles">
   <section class="tile">
-    <h2>Upload and preview</h2>
+    <h2>Try it with a sample</h2>
+    <p>Four trades for the demo book. One fits, one would break a position limit, one is British power in pounds, and one has a mistake in it.</p>
+    <form method="post" action="/ui/imports/sample" class="upload-form">
+      <input type="hidden" name="org" value="{{ org }}">
+      {% if not authenticated_actor %}
+      <label>Your name in the system <input type="text" name="actor" value="alice" required></label>
+      {% endif %}
+      <button type="submit">See what would happen</button>
+    </form>
+    <p class="tile__note"><a href="/ui/imports/sample-trades.csv">Download the sample file</a> to see its format or to change it.</p>
+  </section>
+
+  <section class="tile">
+    <h2>Use your own file</h2>
     <form method="post" action="/ui/imports/preview" enctype="multipart/form-data" class="upload-form">
       <input type="hidden" name="org" value="{{ org }}">
       <label>File <input type="file" name="file" accept=".csv,text/csv" required></label>
-      <label>Kind
+      <label>It contains
         <select name="kind">
           <option value="trades">trades</option>
-          <option value="curves">curves</option>
+          <option value="curves">prices (a curve)</option>
         </select>
       </label>
       {% if not authenticated_actor %}
-      <label>Actor <input type="text" name="actor" placeholder="who is importing" required></label>
+      <label>Your name in the system <input type="text" name="actor" placeholder="for example alice" required></label>
       {% endif %}
-      <button type="submit">Preview</button>
+      <button type="submit">See what would happen</button>
     </form>
     {% if authenticated_actor %}
-    <p class="tile__note">Importing as <strong>{{ authenticated_actor }}</strong>: the shared demo login maps to this actor, and the ledger records the gateway that asserted it on every write.</p>
+    <p class="tile__note">You are importing as <strong>{{ authenticated_actor }}</strong>, the name the demo login acts under. It is recorded with every change.</p>
     {% else %}
-    <p class="tile__note">Identity is asserted, not authenticated, at readiness L0; the ledger records who asserted every import.</p>
+    <p class="tile__note">The name is recorded with every change. It decides what you may do: in the demo book, alice may enter trades and carol may enter prices. Nobody checks that you are who you say on a local copy.</p>
     {% endif %}
   </section>
 
   <section class="tile">
-    <h2>Column contracts</h2>
+    <h2>What a file must look like</h2>
     {# The canonical column order is presentation; the source of truth is
        the frozenset contract in glasshouse.imports (kept in step by the
        template tests). #}
-    <p class="tile__note">trades</p>
+    <p class="tile__note">Trades: the first line must be exactly</p>
     <p class="mono">book,trade,trade_date,counterparty,market,direction,quantity,price,delivery_start,delivery_end</p>
-    <p class="tile__note">curves</p>
+    <p class="tile__note">Prices: the first line must be exactly</p>
     <p class="mono">market,as_of,version,period_start,price</p>
-    <p class="tile__note">A file whose header does not match its contract is refused whole; rows that fail their own checks are quarantined with the reason, never silently coerced.</p>
+    <p class="tile__note">Dates look like 2026-06-30. Times need an offset and whole hours, like 2026-07-01T12:00:00+00:00. Direction is buy or sell. Quantity is MW and price is per MWh, in the currency of the market.</p>
   </section>
 </div>
-
-<p class="omissions">Recent refusals across sessions will appear here once the substrate's rejection-log surface is pinned (morpholog#204).</p>
 {% endblock %}

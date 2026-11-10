@@ -81,6 +81,18 @@ _TRADES_MARKET = sa.and_(
 )
 
 
+def list_books_and_markets(engine: sa.Engine, *, org: str) -> tuple[list[str], list[str]]:
+    """The books and the markets this organisation has trades in: the
+    choices a filter offers, so nobody has to know a name to type it."""
+    statement = (
+        sa.select(blotter_trade.c.book, blotter_trade.c.market)
+        .where(blotter_trade.c.org == org)
+        .distinct()
+    )
+    rows = _rows(engine, statement)
+    return sorted({row["book"] for row in rows}), sorted({row["market"] for row in rows})
+
+
 def list_trades(
     engine: sa.Engine,
     *,

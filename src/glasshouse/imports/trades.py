@@ -123,7 +123,15 @@ def capture_request(row: dict[str, str], org: str) -> models.CaptureTradeRequest
         delivery_end=delivery_end,
         trade_date=trade_date,
     )
-    request.to_args_named()  # the codec is the final validator (naive instants, ...)
+    try:
+        request.to_args_named()  # the codec is the final validator (naive instants, ...)
+    except ValueError:
+        # The codec's own words name a Python object; a desk needs to be
+        # told what to write instead.
+        raise ValueError(
+            "delivery_start/delivery_end must carry an offset from UTC, like "
+            f"2026-07-01T12:00:00+00:00, got {row['delivery_start']!r}/{row['delivery_end']!r}"
+        ) from None
     return request
 
 

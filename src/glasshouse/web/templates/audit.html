@@ -1,19 +1,19 @@
 {% extends "base.html" %}
 {% from "_macros.html" import evidence, empty_state %}
-{% block title %}Audit - Glasshouse{% endblock %}
+{% block title %}Audit - {{ org }} - Glasshouse{% endblock %}
 {% block content %}
 <div class="page-header">
-  <h1>Audit &amp; Evidence</h1>
+  <h1>Audit</h1>
   {% if scope == "ledger" %}
-  <p class="page-header__note">The whole ledger - the auditor view: transitions from every tenant. Rows that mention {{ org }} are highlighted. <a href="/ui/audit?org={{ org | urlencode }}">Back to the {{ org }} view</a>.</p>
+  <p class="page-header__note">Every change ever recorded, for every organisation, newest first. Rows about {{ org }} are marked. <a href="/ui/audit?org={{ org | urlencode }}">Show only {{ org }}</a>.</p>
   {% else %}
-  <p class="page-header__note">Transitions relevant to {{ org }} - a scoped view of the wider ledger ({{ total }} of {{ ledger_total }}). <a href="/ui/audit?org={{ org | urlencode }}&scope=ledger">Show the whole ledger (auditor view)</a>.</p>
+  <p class="page-header__note">Every change ever recorded for {{ org }}, newest first ({{ total }} of {{ ledger_total }} in the whole record). Nothing in it can be edited or removed. <a href="/ui/audit?org={{ org | urlencode }}&scope=ledger">Show every organisation</a>.</p>
   {% endif %}
 </div>
 
 <div class="tiles">
   <section class="tile">
-    <h2>Prove it</h2>
+    <h2>Check that nothing has been tampered with</h2>
     {# A verify is several bounded subprocess calls, so the button is
        held disabled while one runs and the pending note shows; the
        client-side timeout is off because a request cut short would
@@ -22,19 +22,19 @@
           hx-post="/ui/audit/verify" hx-target="#verify-results" hx-swap="innerHTML"
           hx-disable="find button" hx-config='{"timeout": 0}'>
       <input type="hidden" name="org" value="{{ org }}">
-      <button type="submit">Run glasshouse verify</button>
-      <span class="htmx-indicator" role="status">Running the six legs...</span>
+      <button type="submit">Run the check</button>
+      <span class="htmx-indicator" role="status">Checking...</span>
     </form>
-    <p class="tile__note">Six independent read-only legs: model, ledger replay, history tree, projections, payloads, views. Safe to run any time.</p>
+    <p class="tile__note">Six separate checks that the record, the rules and what these screens show all still agree. It changes nothing and is safe to run at any time. The result appears below.</p>
   </section>
   <section class="tile">
-    <h2>Take the evidence with you</h2>
-    <p><a href="/ui/audit/evidence-pack">Download the evidence pack</a></p>
+    <h2>Take a copy to check elsewhere</h2>
+    <p><a href="/ui/audit/evidence-pack">Download the whole record</a></p>
     <form method="post" action="/ui/audit/checkpoint">
-      <button type="submit">Record and download a checkpoint anchor</button>
+      <button type="submit">Record and download a checkpoint</button>
     </form>
-    <p class="tile__note">Verify offline, no database access: <span class="mono">glasshouse evidence-verify glasshouse-evidence-pack.ndjson --anchor glasshouse-checkpoint-anchor.json</span></p>
-    <p class="tile__note">The pack covers the whole ledger prefix, every tenant included - it is the tamper-evidence surface, not a disclosure one. Per-organisation selective packs wait for their forcing case.</p>
+    <p class="tile__note">A checkpoint is a fingerprint of the record as it is now. With the two files, anyone can confirm on their own machine that the record has not been changed since, with no access to this system: <span class="mono">glasshouse evidence-verify glasshouse-evidence-pack.ndjson --anchor glasshouse-checkpoint-anchor.json</span></p>
+    <p class="tile__note">The download holds the record of every organisation, not only {{ org }}.</p>
   </section>
 </div>
 
@@ -43,38 +43,35 @@
 </div>
 
 <section>
-  <h2>Transitions ({{ total }})</h2>
+  <h2>Changes ({{ total }})</h2>
   {% if rows %}
   <div class="table-scroll">
-    <table class="data-table" aria-label="The ledger's transition log, newest first">
+    <table class="data-table" aria-label="Every recorded change, newest first">
       <thead>
         <tr>
-          <th scope="col">Committed at</th>
-          <th scope="col">Transformation</th>
-          <th scope="col">Actor</th>
-          <th scope="col">Identity asserted by</th>
-          <th scope="col" class="numeric">Invariants</th>
-          <th scope="col">Claims</th>
-          <th scope="col">Transition</th>
+          <th scope="col">When (UTC)</th>
+          <th scope="col">What was done</th>
+          <th scope="col">By</th>
+          <th scope="col">What it changed</th>
+          <th scope="col">Record</th>
         </tr>
       </thead>
       <tbody>
         {% for entry, ours in rows %}
         <tr {% if ours %}class="audit-row--org"{% endif %}>
           <td>{{ entry.committed_at | utc }}</td>
-          <td>{{ entry.transformation }}</td>
+          <td class="mono">{{ entry.transformation }}</td>
           <td>{{ entry.actor }}</td>
-          <td>{% if entry.attestation %}{{ entry.attestation.mode }} via <span class="mono">{{ entry.attestation.authenticated_by }}</span>{% else %}not recorded{% endif %}</td>
-          <td class="numeric">{{ entry.invariants_checked }}</td>
           <td>
             <details>
-              <summary>{{ entry.asserted | length }} asserted{% if entry.retracted %}, {{ entry.retracted | length }} retracted{% endif %}</summary>
+              <summary>{{ entry.asserted | length }} fact{{ "s" if entry.asserted | length != 1 }} added{% if entry.retracted %}, {{ entry.retracted | length }} withdrawn{% endif %}</summary>
               {% for claim in entry.asserted %}
               <p class="claim-line">+ {{ claim.predicate }}({% for field, value in claim.args.items() %}{{ field }}={{ value }}{% if not loop.last %}, {% endif %}{% endfor %})</p>
               {% endfor %}
               {% for claim in entry.retracted %}
               <p class="claim-line">- {{ claim.predicate }}({% for field, value in claim.args.items() %}{{ field }}={{ value }}{% if not loop.last %}, {% endif %}{% endfor %})</p>
               {% endfor %}
+              <p class="claim-line">{{ entry.invariants_checked }} rules checked. Signed in through: {% if entry.attestation %}{{ entry.attestation.mode }} ({{ entry.attestation.authenticated_by }}){% else %}not recorded{% endif %}.</p>
             </details>
           </td>
           <td>{{ evidence(entry.transition_id) }}</td>
@@ -83,12 +80,12 @@
       </tbody>
     </table>
   </div>
-  <nav class="pager" aria-label="Audit pages">
+  <nav class="pager" aria-label="Pages of changes">
     {% if offset > 0 %}<a href="/ui/audit?org={{ org | urlencode }}&scope={{ scope }}&offset={{ prev_offset }}">Newer</a>{% endif %}
     {% if has_more %}<a href="/ui/audit?org={{ org | urlencode }}&scope={{ scope }}&offset={{ next_offset }}">Older</a>{% endif %}
   </nav>
   {% else %}
-  {{ empty_state("The ledger has no transitions yet.") }}
+  {{ empty_state("Nothing has been recorded yet.") }}
   {% endif %}
 </section>
 {% endblock %}

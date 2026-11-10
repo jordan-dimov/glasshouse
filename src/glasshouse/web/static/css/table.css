@@ -7,6 +7,14 @@
   border-radius: var(--radius);
 }
 
+/* A table of two or three short columns reads badly stretched across
+   the page: it takes the width it needs. */
+.table-scroll--narrow {
+  display: inline-block;
+  min-width: 26rem;
+  max-width: 100%;
+}
+
 .data-table {
   width: 100%;
   border-collapse: collapse;
@@ -19,6 +27,14 @@
   padding: var(--space-2) var(--space-3);
   border-bottom: 1px solid var(--line);
   text-align: left;
+}
+
+/* A number sits on the right so its digits line up down the column.
+   Stated here because the cell rule above outweighs the bare
+   `.numeric` class, which left every number on the left. */
+.data-table th.numeric,
+.data-table td.numeric {
+  text-align: right;
 }
 
 .data-table thead th {
@@ -58,6 +74,13 @@
   margin: var(--space-1) 0 0;
   font-family: var(--font-mono);
   font-size: var(--size-0);
+  white-space: normal;
+}
+
+.rule-line {
+  font-family: var(--font-mono);
+  font-size: var(--size-0);
+  color: var(--ink-muted);
   white-space: normal;
 }
 

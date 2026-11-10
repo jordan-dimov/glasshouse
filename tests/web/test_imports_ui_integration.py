@@ -20,6 +20,7 @@ from glasshouse.compute.curves import HourlyCurve
 from glasshouse.compute.marking import correct_curve_version
 from glasshouse.compute.store import CurveStore
 from glasshouse.seed import CURVE_V1, CURVE_V2, ORG, seed_demo
+from glasshouse.web.routes import SAMPLE_TRADES
 from tests.support import BINARY, DB, needs_live_stack, provision
 
 pytestmark = needs_live_stack
@@ -65,7 +66,7 @@ def test_the_workbench_previews_commits_and_survives_a_resubmit(ui: TestClient) 
     with ui as client:
         preview = _post(client, "/ui/imports/preview", TRADES_CSV)
         assert preview.status_code == 200
-        assert "Nothing has been committed" in preview.text
+        assert "Nothing has been recorded" in preview.text
         assert "badge--admissible" in preview.text  # T-100 would commit
         assert "badge--quarantined" in preview.text  # the malformed row
         # Preview really committed nothing: the blotter shows no T-100.
@@ -74,10 +75,10 @@ def test_the_workbench_previews_commits_and_survives_a_resubmit(ui: TestClient) 
         text_b64 = base64.b64encode(TRADES_CSV.encode()).decode()
         receipts = _post(client, "/ui/imports/commit", "", text_b64=text_b64)
         assert receipts.status_code == 200
-        assert "1 committed" in receipts.text
+        assert "1 recorded" in receipts.text
         assert "badge--committed" in receipts.text
         assert "badge--quarantined" in receipts.text
-        assert "transition(s) applied" in receipts.text
+        assert "The screens are up to date" in receipts.text
         # The inline catch-up made the write visible on the blotter.
         assert "T-100" in client.get("/ui/blotter", params={"org": ORG}).text
 
@@ -85,8 +86,31 @@ def test_the_workbench_previews_commits_and_survives_a_resubmit(ui: TestClient) 
         # back as a lawful rejection, not a duplicate trade.
         again = _post(client, "/ui/imports/commit", "", text_b64=text_b64)
         assert again.status_code == 200
-        assert "0 committed" in again.text
-        assert "1 rejected" in again.text
+        assert "0 recorded" in again.text
+        assert "1 refused by the rules" in again.text
+
+
+def test_the_sample_shows_an_acceptance_a_refusal_and_a_mistake(ui: TestClient) -> None:
+    # What a visitor with no file of their own can do: one click on the
+    # built-in sample shows the whole idea. Nothing is recorded by it.
+    with ui as client:
+        before = len(client.get("/trades", params={"org": ORG}).json())
+        page = client.get("/ui/imports", params={"org": ORG}).text
+        preview = client.post("/ui/imports/sample", data={"org": ORG, "actor": "alice"})
+        download = client.get("/ui/imports/sample-trades.csv")
+        after = len(client.get("/trades", params={"org": ORG}).json())
+    assert "Try it with a sample" in page
+    assert preview.status_code == 200
+    assert "2 would be accepted, 1 would be refused, 1 could not be read" in preview.text
+    # The refusal is said in plain words, with the rule's own line kept.
+    assert "This would take the book past its position limit in that hour." in preview.text
+    assert "hour_within_limit:" in preview.text
+    assert "Nothing has been recorded" in preview.text
+    assert after == before
+    # The file offered for download is the one previewed.
+    assert download.headers["content-type"].startswith("text/csv")
+    assert download.text == SAMPLE_TRADES
+    assert "S-002" in download.text
 
 
 def test_a_curves_upload_reaches_the_curves_screen(ui: TestClient) -> None:
@@ -103,7 +127,7 @@ def test_a_curves_upload_reaches_the_curves_screen(ui: TestClient) -> None:
             text_b64=base64.b64encode(CURVES_CSV.encode()).decode(),
         )
         assert receipts.status_code == 200
-        assert "1 committed" in receipts.text
+        assert "1 recorded" in receipts.text
         # The new version is on the Curves screen, payload verified live.
         curves_page = client.get("/ui/curves", params={"org": ORG, "market": "de-power"})
         assert "crv-web-1" in curves_page.text
@@ -149,7 +173,7 @@ def test_a_refused_curve_commit_does_not_consume_the_version_id(
             actor="carol",
             text_b64=base64.b64encode(poison_csv.encode()).decode(),
         )
-        assert "1 rejected" in receipts.text  # committed anyway: lawful refusal
+        assert "1 refused by the rules" in receipts.text  # committed anyway: lawful refusal
 
     # The proper correction path now reuses the id with corrected bytes.
     day = dt.datetime(2026, 7, 1, tzinfo=dt.UTC)

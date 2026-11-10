@@ -101,7 +101,7 @@
 
 .page {
   padding: var(--space-5);
-  max-width: 90rem;
+  max-width: 104rem;
   margin: 0 auto;
 }
 
@@ -119,6 +119,8 @@
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(16rem, 1fr));
   gap: var(--space-4);
+  align-items: start;
+  margin-bottom: var(--space-5);
 }
 
 .tile {
@@ -186,7 +188,8 @@
   font-weight: 600;
 }
 
-section + section {
+section + section,
+.section--after-form {
   margin-top: var(--space-6);
 }
 
@@ -213,4 +216,15 @@ section + section {
   padding: var(--space-4) var(--space-5);
   border-top: 1px solid var(--line);
   margin-top: var(--space-6);
+}
+
+/* Tiles are sections side by side: the space that separates stacked
+   sections must not push every tile but the first down. */
+.tiles > section {
+  margin-top: 0;
+}
+
+/* A long line of column names breaks inside its tile, not out of it. */
+.tile .mono {
+  overflow-wrap: anywhere;
 }

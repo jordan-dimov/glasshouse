@@ -74,8 +74,8 @@ def test_totals_are_one_per_currency_and_the_german_figures_stand(app: TestClien
     # 287.5 EUR is the German total from before this change, to the cent.
     assert totals == {"EUR": (6, "287.5"), "GBP": (2, "140")}
     assert [v["currency"] for v in overview["valuations"]] == ["EUR", "GBP"]
-    assert "Total of latest marks (EUR)" in page
-    assert "Total of latest marks (GBP)" in page
+    assert "6 trades valued in EUR" in page
+    assert "2 trades valued in GBP" in page
     # No figure anywhere adds the two.
     assert "427.5" not in page
 

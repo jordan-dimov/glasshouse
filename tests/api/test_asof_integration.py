@@ -162,11 +162,11 @@ def test_the_screens_say_which_moment_they_show(
     assert "You are viewing the book as it stood at" in positions.text
     # Moving between screens stays in the mode; leaving it is one link.
     assert "/ui/positions?org=acme-energy&amp;as_of=" in blotter.text
-    assert "Back to current" in blotter.text
+    assert "Back to now" in blotter.text
     # A screen that cannot answer for the past says so, never pretends.
-    assert "This screen shows current data." in overview.text
+    assert "This screen always shows the present." in overview.text
     # And the present is still the present.
-    assert "Viewing: Current" in current.text
+    assert "Viewing: now" in current.text
     assert "T-001" in current.text
 
 
@@ -175,6 +175,11 @@ def test_a_future_moment_is_a_422_page_not_a_stale_screen(app: TestClient) -> No
         response = client.get("/ui/positions", params={"org": ORG, "as_of": "2999-01-01T00:00"})
     assert response.status_code == 422
     assert "Check the as-of time" in response.text
+    # A page that refused the moment is not showing it: no banner and no
+    # pill may say the book is being viewed as it stood then.
+    assert "You are viewing the book as it stood" not in response.text
+    assert "Viewing the past" not in response.text
+    assert "Viewing: now" in response.text
 
 
 def test_a_window_bound_with_no_offset_reads_the_same_then_and_now(
@@ -242,5 +247,5 @@ def test_the_screen_shows_utc_for_a_moment_written_with_an_offset(
     with app as client:
         page = client.get("/ui/blotter", params={"org": ORG, "as_of": plus_two.isoformat()})
     assert page.status_code == 200
-    assert f"Viewing: as of {at:%Y-%m-%d %H:%M:%S} UTC" in page.text
+    assert f"Viewing the past: {at:%Y-%m-%d %H:%M:%S} UTC" in page.text
     assert f"{plus_two:%H:%M:%S}+02:00" not in page.text
