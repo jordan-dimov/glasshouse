@@ -21,6 +21,16 @@ non-browser clients) pass.
 per (origin, realm), so after the first page's challenge every
 subresource request is answered from the credential cache with no
 second prompt - which is why `REALM` must never change.
+
+The agent's door (`/mcp`, `glasshouse.agents`) has its own credential and
+its own gate, `AgentDoorMiddleware`: a bearer token, because an MCP
+client is a program that sends a header, not a browser that answers a
+Basic challenge. The demo login steps aside for that one prefix, and only
+when the door is mounted; with no token configured `/mcp` is an unknown
+path behind the login like any other. The token maps to one actor string
+and nothing more, the same grade of identity as the login. It is not
+OAuth: there is no authorisation server here to send a client to, and
+the gate does not pretend there is.
 """
 
 from __future__ import annotations
@@ -49,11 +59,58 @@ _CROSS_SITE = JSONResponse({"detail": "cross-site request refused"}, status_code
 _REFUSED_FETCH_SITES = (b"cross-site", b"same-site")
 
 
+AGENT_PATH = "/mcp"
+_AGENT_CHALLENGE = JSONResponse(
+    {"detail": "a bearer token is required"},
+    status_code=401,
+    headers={"WWW-Authenticate": 'Bearer realm="glasshouse agents"'},
+)
+
+
+def _is_agent_path(path: str) -> bool:
+    return path in (AGENT_PATH, AGENT_PATH + "/")
+
+
+class AgentDoorMiddleware:
+    """The agent's door and its gate in one place: a request for `/mcp`
+    is answered by the MCP app, and only if it carries the configured
+    bearer token; every other request passes through untouched. A
+    middleware, not a mount: a mount answers `/mcp` with a redirect to
+    `/mcp/`, which a client behind a TLS proxy may follow to the wrong
+    scheme, and the path an operator pastes into a client should simply
+    work."""
+
+    def __init__(self, app: ASGIApp, *, door: ASGIApp, token: str) -> None:
+        self.app = app
+        self._door = door
+        self._expected = b"bearer " + token.encode("utf-8")
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] != "http" or not _is_agent_path(scope["path"]):
+            await self.app(scope, receive, send)
+            return
+        presented = b""
+        for name, value in scope["headers"]:
+            if name == b"authorization":
+                scheme, _, credential = value.partition(b" ")
+                presented = scheme.lower() + b" " + credential.strip()
+                break
+        if not secrets.compare_digest(presented, self._expected):
+            await _AGENT_CHALLENGE(scope, receive, send)
+            return
+        inner: Scope = {**scope, "path": AGENT_PATH, "raw_path": AGENT_PATH.encode()}
+        await self._door(inner, receive, send)
+
+
 class DemoAuthMiddleware:
-    def __init__(self, app: ASGIApp, *, username: str, password: str) -> None:
+    def __init__(
+        self, app: ASGIApp, *, username: str, password: str, agent_door: bool = False
+    ) -> None:
         self.app = app
         self._username = username.encode("utf-8")
         self._password = password.encode("utf-8")
+        # True only when /mcp is mounted behind its own token gate.
+        self._agent_door = agent_door
 
     def _authorised(self, scope: Scope) -> bool:
         header: bytes | None = None
@@ -90,6 +147,9 @@ class DemoAuthMiddleware:
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         if scope["type"] != "http" or scope["path"] in EXEMPT_PATHS:
+            await self.app(scope, receive, send)
+            return
+        if self._agent_door and _is_agent_path(scope["path"]):
             await self.app(scope, receive, send)
             return
         if not self._authorised(scope):

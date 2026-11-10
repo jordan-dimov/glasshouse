@@ -39,6 +39,10 @@ services:
         value: demo
       - key: GLASSHOUSE_DEMO_PASSWORD
         sync: false # prompted at Blueprint creation; lives only in Render
+      # The agent's door (docs/mcp.md) is not part of this blueprint: add
+      # GLASSHOUSE_MCP_TOKEN (12+ characters) to the service by hand to
+      # open /mcp to callers who send it as a bearer token. Without it
+      # the path does not exist.
       - key: GLASSHOUSE_DATABASE_URL
         fromDatabase:
           name: glasshouse-db

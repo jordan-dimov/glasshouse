@@ -34,21 +34,36 @@ class Settings(BaseSettings):
     # login active, org never comes from a request body.
     demo_org: str = "acme-energy"
     environment: Environment = "dev"
+    # The agent's way in over HTTP (`glasshouse.agents`, served at /mcp).
+    # None = not served at all. Set = a caller presenting this bearer
+    # token acts as `mcp_actor` in `demo_org`, with whatever authority
+    # the ledger has granted that actor and no more.
+    mcp_token: str | None = None
+    mcp_actor: str = "agent"
 
-    @field_validator("demo_password")
+    @field_validator("mcp_token", mode="before")
+    @classmethod
+    def _a_blank_token_is_no_token(cls, value: object) -> object:
+        # A variable left empty in a hosting dashboard means "not set":
+        # the door stays shut, which is the safe reading. (A blank demo
+        # password is different, and refused below: that one would open
+        # something.)
+        return None if isinstance(value, str) and not value.strip() else value
+
+    @field_validator("demo_password", "mcp_token")
     @classmethod
     def _password_is_a_real_perimeter(cls, value: str | None) -> str | None:
-        # This one secret is the whole perimeter of a public deployment:
-        # a blank or trivial value must fail LOUDLY at boot, never
-        # quietly enable the gate (or lift the write fence) with an
-        # empty password.
+        # Each secret is the whole perimeter of what it guards on a
+        # public deployment: a blank or trivial value must fail LOUDLY at
+        # boot, never quietly enable the gate (or lift the write fence,
+        # or open the agent's door) with an empty one.
         if value is None:
             return None
         if len(value.strip()) < 12:
             raise ValueError(
-                "GLASSHOUSE_DEMO_PASSWORD must be at least 12 non-blank characters "
-                "(it is the entire perimeter of a public deployment); unset it to "
-                "run without the gate"
+                "GLASSHOUSE_DEMO_PASSWORD and GLASSHOUSE_MCP_TOKEN must each be at "
+                "least 12 non-blank characters (each is the entire perimeter of what "
+                "it guards); unset one to switch its door off"
             )
         return value
 

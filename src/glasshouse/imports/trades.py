@@ -78,9 +78,11 @@ def _check_header(fieldnames: Sequence[str] | None) -> None:
         )
 
 
-def _request(row: dict[str, str], org: str) -> models.CaptureTradeRequest:
-    """One CSV row to one typed proposal, or a ValueError naming what
-    could not be honestly converted."""
+def capture_request(row: dict[str, str], org: str) -> models.CaptureTradeRequest:
+    """One row of text fields to one typed proposal, or a ValueError
+    naming what could not be honestly converted. A CSV line and an
+    agent's proposal (`glasshouse.agents`) both come through here, so a
+    trade is read one way whoever proposes it."""
     if any(value is None for value in row.values()):
         raise ValueError("row has fewer fields than the header")
     if row.get(None) is not None:  # type: ignore[call-overload]
@@ -137,7 +139,7 @@ def parse_trades(
     for row in reader:
         line = reader.line_num
         try:
-            accepted.append((line, _request(row, org)))
+            accepted.append((line, capture_request(row, org)))
         except (ValueError, values.CodecError) as reason:
             quarantined.append((line, RowOutcome(f"line {line}", QUARANTINED, str(reason))))
     return accepted, quarantined
