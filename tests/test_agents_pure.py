@@ -176,7 +176,7 @@ def test_no_tool_description_names_a_currency_for_a_price() -> None:
 
 def test_the_refusal_log_always_says_what_it_is(tmp_path: Path) -> None:
     result = call(desk(str(fake_binary(tmp_path, "[]"))), "recent_refusals")
-    assert result.structured_content == {"caveat": REFUSALS_CAVEAT, "refusals": []}
+    assert result.structured_content == {"caveat": REFUSALS_CAVEAT, "limit": 20, "refusals": []}
     assert "not the audit history" in REFUSALS_CAVEAT
     argv = (tmp_path / "argv.txt").read_text().splitlines()
     assert argv[:2] == ["inspect", "rejections"]

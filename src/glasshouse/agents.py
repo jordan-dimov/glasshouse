@@ -39,17 +39,16 @@ from mcp.server import MCPServer
 from mcp.server.mcpserver.exceptions import ToolError
 from pydantic import BaseModel, Field
 
-from glasshouse.api import asof, queries
+from glasshouse.api import asof, queries, refusals
 from glasshouse.api import audit as audit_queries
-from glasshouse.api.routers.explain import flatten_rejection, wire_compared, wire_witness
+from glasshouse.api.routers.explain import flatten_rejection
 from glasshouse.api.schemas import (
     AuditEntry,
     BlotterTrade,
-    Compared,
     ExactDecimal,
     PositionHour,
+    RefusalLog,
     Rejection,
-    WitnessBinding,
 )
 from glasshouse.commit import GlasshouseClient, models
 from glasshouse.commit.morpholog_client import envelopes
@@ -70,10 +69,7 @@ INSTRUCTIONS = (
     "text, never floating point. Times are UTC instants in ISO 8601."
 )
 
-REFUSALS_CAVEAT = (
-    "Best-effort log, not the audit history. A refusal is written at most once, after the "
-    "proposal is rolled back, so one can be missing. Accepted changes are in audit_history."
-)
+REFUSALS_CAVEAT = refusals.CAVEAT
 
 
 @dataclass(frozen=True)
@@ -121,23 +117,6 @@ class WouldBe(BaseModel):
     actor: str
     summary: str | None = None
     refusal: Rejection | None = Field(default=None, discriminator="kind")
-
-
-class RecordedRefusal(BaseModel):
-    rejected_at: dt.datetime
-    actor: str
-    transformation: str
-    kind: str
-    rule: str
-    reason: str
-    compared: Compared | None = None
-    # None means the values were not captured, never that there were none.
-    witness: list[WitnessBinding] | None = None
-
-
-class RefusalLog(BaseModel):
-    caveat: str = REFUSALS_CAVEAT
-    refusals: list[RecordedRefusal]
 
 
 def _past(desk: Desk, as_of: str | None) -> asof.Snapshot | None:
@@ -362,22 +341,6 @@ def build_server(desk: Callable[[], Desk]) -> MCPServer:
         first, with the rule and the figures. A best-effort log: read the
         caveat it returns."""
         at = desk()
-        rows = at.client.rejections(limit=max(1, min(limit, 500)), mentions=at.org)
-        return RefusalLog(
-            refusals=[
-                RecordedRefusal(
-                    rejected_at=row.rejected_at,
-                    actor=row.actor,
-                    transformation=row.transformation_name,
-                    kind=row.kind,
-                    rule=row.rule,
-                    reason=row.reason,
-                    compared=wire_compared(row.compared),
-                    witness=None if row.witness is None else wire_witness(row.witness),
-                )
-                for row in rows
-                if actor is None or row.actor == actor
-            ]
-        )
+        return refusals.list_refusals(at.client, org=at.org, limit=limit, actor=actor)
 
     return server

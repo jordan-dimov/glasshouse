@@ -1,8 +1,8 @@
 # Glasshouse
 
-Glasshouse is an open-source system of record for power trading. It keeps a firm's trades, price curves, positions, and profit and loss in one place, with a complete history of every change.
+Glasshouse is an open-source system of record for power trading. It keeps a firm's trades, price curves, positions and valuations in one place, with a complete history of every change.
 
-**See it running: [glasshouse.a115.co.uk](https://glasshouse.a115.co.uk).** A small demo trading book: its trades, hourly positions, valuations, a corrected price curve, and the history behind them. The login is shared. Ask [Jordan on LinkedIn](https://www.linkedin.com/in/jdimov) for the password, or run it yourself in a few minutes (below).
+**See it running: [glasshouse.a115.co.uk](https://glasshouse.a115.co.uk).** A small demo trading book: German power in euros and British power in pounds, with hourly positions, position limits, valuations, a corrected price curve, and the history behind them. The Imports screen has a sample file, so you can watch a trade being refused in one click. The login is shared. Ask [Jordan on LinkedIn](https://www.linkedin.com/in/jdimov) for the password, or run it yourself in a few minutes (below).
 
 ![The Positions screen: each book against its position limit, and what each trade is worth](docs/images/positions.png)
 
@@ -15,9 +15,10 @@ Glasshouse sits between them: a book of record you can read, run and check yours
 ## What makes it different
 
 - **Nothing is overwritten.** A corrected curve or an amended trade is a new version beside the old one. The old figure, and every valuation made from it, stays on the record. Pick a past time and the trades and positions screens show the book as it stood then.
-- **Bad changes are refused, with a reason.** The rules live in [one readable file](src/glasshouse/commit/glasshouse.morph). A change that breaks one is not saved, and the refusal names the rule: this trader may not trade this book, this trade would take the book over its limit in this hour.
+- **Bad changes are refused, with a reason.** The rules live in [one readable file](src/glasshouse/commit/glasshouse.morph). A change that breaks one is not saved, and the refusal names the rule and the figures: this trader may not trade this book, this trade would take the book to 26 MW in this hour and its limit is 25.
 - **Every valuation shows its sources.** It records the exact curve version and trade terms it was computed from, so last week's number can be explained this week.
-- **You can check the records yourself.** One command confirms the database still agrees with its own history. Another exports that history for an outsider to verify offline.
+- **You can check the records yourself.** One button, or one command, confirms the database still agrees with its own history. Another exports that history for an outsider to verify offline.
+- **Software is held to the same rules as people.** An AI agent can connect, read the book and propose trades under its own name. It is refused exactly where a trader would be, and gets the reason back as data. [docs/mcp.md](docs/mcp.md) shows how.
 
 ## How the rules are enforced
 
@@ -29,7 +30,9 @@ Glasshouse could have put its rules in application code. It does not, for three 
 
 ## Where it stands
 
-Early. It handles one product, fixed-price power, from end to end: CSV imports, hourly positions, valuations, corrections, amendments, position limits, a web interface and an HTTP API.
+Early. It handles one product, fixed-price power, from end to end: CSV imports, hourly positions, valuations, corrections, amendments and position limits. Each market is priced in its own currency, and currencies are never added together. There is a web interface, an HTTP API, and a way in for AI agents (MCP).
+
+One limit to know about. The history holds every change that was accepted. Refusals are kept in a separate, shorter list that is not guaranteed complete.
 
 It is ready to evaluate, not yet to run a desk on. [SCOPE.md](SCOPE.md) says plainly what it is not.
 
@@ -40,7 +43,7 @@ None of this exists yet. It is the road ahead.
 - **Every screen at any past moment.** Trades and positions can already be viewed as they stood at a chosen time. Next is the same for curves, the overview and the history screens.
 - **Run beside what you have.** Import your spreadsheet's or current system's exports, compare daily, and see exactly where the two differ.
 - **More of the lifecycle.** Counterparty confirmations, settlement, and products such as power purchase agreements and battery storage.
-- **A safe place for software to trade.** Every change is a proposal the rules accept or refuse, whoever makes it. Algorithms and AI agents can propose trades, cannot break the book, and leave a full record of what they did.
+- **More for software that trades.** Agents can read the book and propose a trade today. Next: amendments, prices and valuations as tools, and a sign-in of their own for each agent.
 
 [DESIGN.md](DESIGN.md) has the full plan and the reasoning.
 
@@ -57,7 +60,7 @@ uv run python -m glasshouse.cli seed --reset
 uv run uvicorn glasshouse.api.app:app
 ```
 
-Then open <http://localhost:8000/ui>. These steps download the Morpholog engine, start a local PostgreSQL, install the Python packages, load the demo book and start the server.
+Then open <http://localhost:8000/ui> and try the sample on the Imports screen. These steps download the Morpholog engine, start a local PostgreSQL, install the Python packages, load the demo book and start the server.
 
 Tests, the command-line tools, configuration and deployment are in [docs/development.md](docs/development.md).
 

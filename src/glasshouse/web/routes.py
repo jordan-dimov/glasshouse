@@ -27,7 +27,7 @@ import sqlalchemy as sa
 from fastapi import APIRouter, File, Form, Query, Request, Response, UploadFile
 from fastapi.responses import RedirectResponse
 
-from glasshouse.api import asof, health, queries
+from glasshouse.api import asof, health, queries, refusals
 from glasshouse.api import audit as audit_queries
 from glasshouse.api import curves as curve_queries
 from glasshouse.api.auth import authenticated_actor
@@ -735,6 +735,9 @@ def audit_screen(
         "next_offset": offset + PAGE_SIZE,
         "has_more": offset + PAGE_SIZE < len(entries),
         "report": None,
+        # What was refused sits beside what was recorded, on the first
+        # page only: it is a short recent list, not a second history.
+        "refused": refusals.list_refusals(client, org=org) if offset == 0 else None,
     }
     return templates.TemplateResponse(request, "audit.html", context)
 

@@ -42,6 +42,51 @@
 {% if report %}{% include "partials/verify_report.html" %}{% endif %}
 </div>
 
+{% if refused %}
+<section>
+  <h2>Refused lately</h2>
+  {% if refused.refusals %}
+  <div class="table-scroll">
+    <table class="data-table" aria-label="Recently refused proposals">
+      <thead>
+        <tr>
+          <th scope="col">When (UTC)</th>
+          <th scope="col">What was tried</th>
+          <th scope="col">By</th>
+          <th scope="col">Why it was refused</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for refusal in refused.refusals %}
+        <tr>
+          <td>{{ refusal.rejected_at | utc }}</td>
+          <td class="mono">{{ refusal.transformation }}</td>
+          <td>{{ refusal.actor }}</td>
+          <td>
+            {% if refusal.summary | plain_rule %}{{ refusal.summary | plain_rule }}<br>{% endif %}
+            <details>
+              <summary class="rule-line">{{ refusal.summary }}</summary>
+              {% if refusal.witness is none %}
+              <p class="claim-line">The values the rule was reading were not captured.</p>
+              {% else %}
+              {% for binding in refusal.witness %}
+              <p class="claim-line">{{ binding.var }} = {{ binding.value }}</p>
+              {% endfor %}
+              {% endif %}
+            </details>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+  {{ empty_state("Nothing refused lately.") }}
+  {% endif %}
+  <p class="tile__note">A refused proposal changes nothing, so it is not part of the record below. This list is kept separately and is not complete: it shows at most the latest {{ refused.limit }} refusals, and one can occasionally go unrecorded. Treat it as a good lead, not as proof.</p>
+</section>
+{% endif %}
+
 <section>
   <h2>Changes ({{ total }})</h2>
   {% if rows %}
