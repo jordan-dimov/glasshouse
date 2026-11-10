@@ -19,6 +19,7 @@ from glasshouse.projections.projector import (
     Capture,
     PositionDelta,
     advance_row,
+    market_row,
     open_row,
     terms_delta,
 )
@@ -184,6 +185,7 @@ def test_a_valuation_becomes_one_row() -> None:
                     "curve_version": "crv-v1",
                     "terms_version": "T-1/v1",
                     "mtm": "55.00",
+                    "currency": "GBP",
                 },
             )
         ],
@@ -195,6 +197,35 @@ def test_a_valuation_becomes_one_row() -> None:
         "T-1/v1",
         Decimal("55.00"),
     )
+    # The mark's currency is the one it states, carried as data.
+    assert valuation.currency == "GBP"
+
+
+def test_a_declared_market_becomes_one_currency_row() -> None:
+    fold = fold_transition(
+        [
+            envelopes.NamedClaim(
+                "MarketCurrency", {"org": "acme", "market": "gb-power", "currency": "GBP"}
+            )
+        ],
+        [],
+    )
+    (market,) = fold.markets
+    assert market_row(market, "tid-9") == ("acme", "gb-power", "GBP", "tid-9")
+    assert (fold.captures, fold.amendments, fold.valuations) == ((), (), ())
+
+
+def test_a_market_currency_is_never_withdrawn() -> None:
+    # Append only in the rule file: a retraction means the model changed.
+    with pytest.raises(ProjectionError, match="MarketCurrency"):
+        fold_transition(
+            [],
+            [
+                envelopes.NamedClaim(
+                    "MarketCurrency", {"org": "acme", "market": "gb-power", "currency": "GBP"}
+                )
+            ],
+        )
 
 
 def test_the_deliberately_ignored_predicates_fold_to_nothing() -> None:

@@ -46,6 +46,7 @@ def seeded() -> sa.Engine:
     for grant in (
         models.EstablishLedgerRequest(login_role=login_role()),
         models.EstablishOrganisationRequest(org=ORG),
+        models.DeclareMarketRequest(org=ORG, market="de-power", currency="EUR"),
         models.GrantCaptureAuthorityRequest(principal="alice", org=ORG, book=BOOK),
         models.GrantCurveAuthorityRequest(principal="carol", org=ORG, market=MARKET),
         models.GrantValuationAuthorityRequest(principal="risk-engine", org=ORG, book=BOOK),
@@ -280,9 +281,11 @@ def test_overview_summarises_one_coherent_snapshot(api: TestClient) -> None:
     assert summary["books"] == [{"book": BOOK, "trade_count": 1}]
     # The current total is the latest mark per trade - summing history
     # (55.00 + 35.00) would double-count the corrected curve.
-    assert summary["valuation"]["trade_count"] == 1
-    assert summary["valuation"]["total_mtm"] == "35.00"
-    assert summary["valuation"]["valued_at"] is not None
+    (marks,) = summary["valuations"]  # one currency in this book, so one total
+    assert marks["currency"] == "EUR"
+    assert marks["trade_count"] == 1
+    assert marks["total_mtm"] == "35.00"
+    assert marks["valued_at"] is not None
     assert summary["projection"]["transition_id"]  # the cursor is set after rebuild
 
 
@@ -290,7 +293,7 @@ def test_overview_for_an_unknown_org_is_empty_not_an_error(api: TestClient) -> N
     with api as client:
         summary = client.get("/overview", params={"org": "someone-else"}).json()
     assert summary["books"] == []
-    assert summary["valuation"] == {"trade_count": 0, "valued_at": None, "total_mtm": None}
+    assert summary["valuations"] == []
 
 
 def test_trades_market_filter_and_pagination(api: TestClient) -> None:

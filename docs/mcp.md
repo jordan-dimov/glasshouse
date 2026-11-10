@@ -8,15 +8,16 @@ An agent gets no special treatment. Its trade is a proposal like anyone's, and t
 
 | Tool | What it does |
 |---|---|
-| `list_trades` | Every trade in the book. Takes `as_of` to see the book at a past time. |
+| `list_trades` | Every trade in the book, each with its price and the currency of that price. Takes `as_of` to see the book at a past time. |
 | `list_positions` | Net MW per delivery hour, per book. Takes `as_of` too. |
+| `list_markets` | The markets, each with the currency it is priced in. |
 | `position_limits` | The cap on each book's position in any one hour. |
 | `explain_trade` | Asks whether a trade would be accepted. Records nothing. |
 | `propose_trade` | Proposes one trade. The answer is accepted or refused. |
 | `audit_history` | The accepted changes, newest first, with who made each. |
 | `recent_refusals` | Recent refused proposals, with the rule and the figures. |
 
-Quantities are MW and prices EUR/MWh, sent as text such as `"2.5"`, never as floating point numbers. Times are UTC and must carry an offset, such as `2026-07-01T12:00:00+00:00`.
+Quantities are MW. A price is per MWh in the currency of its market: euros for German power, pounds for British. Every price and valuation a tool returns comes with a `currency` field, and `list_markets` gives each market's currency. Numbers are sent as text such as `"2.5"`, never as floating point numbers. Times are UTC and must carry an offset, such as `2026-07-01T12:00:00+00:00`.
 
 No tool takes an actor or an organisation. Both are fixed when the server starts, so an agent cannot act as someone else or read another organisation's book.
 
@@ -113,5 +114,6 @@ Each of these is enforced by the rules in the ledger, not by the MCP server. The
 
 - One trade type: a fixed-price power trade. No amendments yet.
 - No tools yet for curves, valuations or the list of organisations.
+- A trade takes the currency of its market. You do not state one, and a trade in a market that has not been declared is refused.
 - One token and one actor per hosted Glasshouse. Everyone holding the token shares one name and one limit, so a class should run local copies.
 - The hosted demo resets every night.

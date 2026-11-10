@@ -53,6 +53,7 @@ def granted() -> None:
     for request in (
         models.EstablishLedgerRequest(login_role=login_role()),
         models.EstablishOrganisationRequest(org=ORG),
+        models.DeclareMarketRequest(org=ORG, market="de-power", currency="EUR"),
         models.GrantCaptureAuthorityRequest(principal="alice", org=ORG, book=BOOK),
     ):
         assert isinstance(client.submit(request, actor="bootstrap"), Committed)

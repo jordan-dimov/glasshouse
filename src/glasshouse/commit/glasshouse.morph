@@ -42,6 +42,16 @@ predicate MayEstablishOrganisations(actor: Subject)
 predicate ActorAssertionRestricted(actor: Subject)
 predicate ActorAssertionAuthority(actor: Subject, login_role: Subject)
 
+-- The currency a market's prices and valuations are in. Set once, when
+-- the market is declared, and never changed. This is the one place a
+-- currency comes from: a trade or a curve takes its market's.
+-- A currency is a field here, not a unit like MW, because a unit is
+-- fixed for a whole predicate and a currency differs from market to
+-- market.
+predicate MarketCurrency(org: Subject, market: Subject, currency: Subject)
+    unique by (org, market)
+    append only
+
 -- A trade's identity. It never changes. Direction and counterparty are
 -- part of what the trade is.
 predicate TradeCaptured(org: Subject, book: Subject, trade: Subject, counterparty: Subject, market: Subject, direction: Subject)
@@ -52,7 +62,8 @@ predicate TradeCaptured(org: Subject, book: Subject, trade: Subject, counterpart
 -- version. `effective by` gives us `trade_terms_in_force_on`: the
 -- version in force for a trade on a date. `partial` allows dates with
 -- no version (before the trade date).
--- The price is EUR/MWh. That is a ratio, so it carries no unit here.
+-- The price is per MWh, in the currency of the trade's market (see
+-- MarketCurrency). It is a ratio, so it carries no unit here.
 predicate TradeTerms(org: Subject, trade: Subject, version: Subject, quantity: Decimal[MW], price: Decimal, delivery_start: Timestamp, delivery_end: Timestamp, effective_from: Date)
     unique by (version)
     effective by (trade) on (effective_from) partial
@@ -79,8 +90,9 @@ predicate CurveSupersedes(new_version: Subject, prior_version: Subject)
 
 -- One mark-to-market result. It names the exact curve version and terms
 -- version it was computed from, so a later correction never changes a
--- number someone already saw.
-predicate TradeValued(org: Subject, book: Subject, trade: Subject, curve_version: Subject, terms_version: Subject, mtm: Decimal[EUR])
+-- number someone already saw. It states its currency, which must be
+-- the currency of the trade's market.
+predicate TradeValued(org: Subject, book: Subject, trade: Subject, curve_version: Subject, terms_version: Subject, mtm: Decimal, currency: Subject)
     unique by (trade, curve_version, terms_version)
     append only
 
@@ -98,6 +110,14 @@ predicate PositionLimit(org: Subject, book: Subject, cap: Decimal[MW])
 -- names. Name the claim's unique key (`trade`, `version`) even when the
 -- rule does not use it. Then a write re-checks one claim, not every
 -- claim that shares a value, and concurrent writers do not collide.
+
+-- The currencies European power markets are priced in. A closed list,
+-- so a mistyped code cannot become a market's currency for good.
+-- Adding one is a change to this file.
+invariant currency_is_one_power_is_priced_in:
+    MarketCurrency(org: org, market: market, currency: currency)
+    implies (currency = #EUR or currency = #GBP or currency = #NOK or currency = #SEK
+        or currency = #DKK or currency = #PLN or currency = #RON)
 
 invariant direction_is_buy_or_sell:
     TradeCaptured(trade: trade, direction: direction, ..)
@@ -216,6 +236,14 @@ transformation grant_limit_authority(principal, org):
     require may_grant_authority: MayGrantAuthority(actor, org)
     admit MaySetLimit(principal, org)
 
+-- Declare a market and the currency it is priced in. Done once per
+-- market, by whoever may grant permissions in the organisation. Trades
+-- and curves in a market are refused until it is declared.
+transformation declare_market(org, market, currency):
+    require may_grant_authority: MayGrantAuthority(actor, org)
+    require market_is_new: not MarketCurrency(org: org, market: market, ..)
+    admit MarketCurrency(org, market, currency)
+
 -- Set a book's cap, or replace the one it has. The retract removes the
 -- standing cap if there is one and does nothing if there is none.
 -- A book with no cap is uncapped. Lowering a cap does not undo trades
@@ -235,6 +263,7 @@ transformation set_position_limit(org, book, cap):
 -- check passes.
 transformation capture_trade(org, book, trade, counterparty, market, direction, version, quantity, price, delivery_start, delivery_end, trade_date):
     require may_capture_trade: MayCaptureTrade(actor, org, book)
+    require market_has_a_currency: MarketCurrency(org: org, market: market, ..)
     require trade_is_new: not TradeCaptured(trade: trade, ..)
     require terms_version_is_new: not TradeTerms(version: version, ..)
     require delivery_is_forward: delivery_start strictly_before delivery_end
@@ -272,6 +301,7 @@ transformation amend_trade(org, trade, prior_version, new_version, quantity, pri
 -- If one is already official, this is refused: use correct_curve.
 transformation register_curve(org, market, as_of, version, payload_hash):
     require may_register_curve: MayRegisterCurve(actor, org, market)
+    require market_has_a_currency: MarketCurrency(org: org, market: market, ..)
     require curve_version_is_new: not CurveRegistered(version: version, ..)
     require no_official_curve_yet: not OfficialCurve(org: org, market: market, as_of: as_of, ..)
     admit CurveRegistered(org, market, as_of, version, payload_hash)
@@ -295,12 +325,19 @@ transformation correct_curve(org, market, as_of, prior_version, new_version, pay
 -- be the official one for the trade's market right now, and the terms
 -- version must be the one in force on that curve's date. A mark against
 -- a stale curve or the wrong terms cannot be recorded.
--- The three patterns share one `require` because a name bound in one
--- pattern (`market`, `as_of`) is only visible within the same `require`.
-transformation admit_valuation(org, book, trade, curve_version, terms_version, mtm):
+-- The mark says which currency it is in, and that must be the currency
+-- of the trade's market. Trade and curve share a market, so they share
+-- a currency already. The mark is the number that comes from outside.
+-- The patterns of a gate share one `require` because a name bound in
+-- one pattern (`market`, `as_of`) is only visible within that `require`.
+-- That is also why the currency gate looks the trade's market up again,
+-- under its own name.
+transformation admit_valuation(org, book, trade, curve_version, terms_version, mtm, currency):
     require may_value_trade: MayValueTrade(actor, org, book)
     require valued_against_official_curve_and_terms_in_force: TradeCaptured(org: org, book: book, trade: trade, market: market, ..)
     and OfficialCurve(org: org, market: market, as_of: as_of, version: curve_version)
     and trade_terms_in_force_on(trade: trade, as_of: as_of, org: org, version: terms_version, ..)
+    require mark_is_in_market_currency: TradeCaptured(org: org, trade: trade, market: traded_in, ..)
+    and MarketCurrency(org: org, market: traded_in, currency: currency)
     require valuation_is_new: not TradeValued(trade: trade, curve_version: curve_version, terms_version: terms_version, ..)
-    admit TradeValued(org, book, trade, curve_version, terms_version, mtm)
+    admit TradeValued(org, book, trade, curve_version, terms_version, mtm, currency)

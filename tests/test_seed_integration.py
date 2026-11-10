@@ -36,23 +36,23 @@ def test_seed_reset_seeds_verifies_and_repeats(capsys: pytest.CaptureFixture[str
 
     assert cli.main(["seed", "--reset", "--database-url", DB]) == 0
     out = capsys.readouterr().out
-    assert "seeded acme-energy: 2 book(s), 6 trade(s)" in out
+    assert "seeded acme-energy: 3 book(s), 8 trade(s)" in out
     assert "verify: consistent" in out  # printed only after all six legs passed
     # The close is checkpointed covering its last transition, so the
     # seeded ledger's history tree has a head to prove (one checkpoint,
     # over every audit row the story wrote).
-    assert "2 position limit(s); checkpoint over 39 audit row(s); verify" in out
+    assert "2 position limit(s); checkpoint over 52 audit row(s); verify" in out
 
     engine = sa.create_engine(engine_url(DB))
     with engine.connect() as connection:
         checkpoints = connection.execute(
             sa.text("select count(*), max(tree_size) from morpholog.audit_checkpoints")
         ).one()
-        assert tuple(checkpoints) == (1, 39)
+        assert tuple(checkpoints) == (1, 52)
         trades = connection.execute(sa.select(blotter_trade)).all()
-        assert len(trades) == 6
-        assert {t.book for t in trades} == {"spec-de", "hedge-de"}
-        assert {t.counterparty for t in trades} == {"stadtwerk-x", "nordkraft"}
+        assert len(trades) == 8
+        assert {t.book for t in trades} == {"spec-de", "hedge-de", "spec-gb"}
+        assert {t.counterparty for t in trades} == {"stadtwerk-x", "nordkraft", "albion-power"}
         # Every screen has a negative to show: a net-short delivery hour
         # and a mark struck above the curve.
         assert connection.execute(
@@ -62,9 +62,22 @@ def test_seed_reset_seeds_verifies_and_repeats(capsys: pytest.CaptureFixture[str
             sa.select(sa.func.count()).where(trade_valuation.c.mtm < 0)
         ).scalar()
         marks = connection.execute(sa.select(sa.func.count()).select_from(trade_valuation))
-        # Two marks per trade (v1 and the corrected v2) plus T-003's
-        # re-mark under its amended terms.
-        assert marks.scalar() == 13
+        # Two marks per German trade (v1 and the corrected v2) plus
+        # T-003's re-mark under its amended terms, and one per British
+        # trade.
+        assert marks.scalar() == 15
+        # Two currencies side by side, each mark stating its own, and the
+        # German figures what they were before a second market existed.
+        totals: dict[str, Decimal] = dict(
+            connection.execute(
+                sa.text(
+                    "select currency, sum(mtm) from (select distinct on (trade) trade, currency,"
+                    " mtm from trade_valuation order by trade, valued_at desc, transition_id desc)"
+                    " latest group by currency"
+                )
+            ).all()
+        )
+        assert totals == {"EUR": Decimal("287.5"), "GBP": Decimal("140")}
         amended = connection.execute(
             sa.select(blotter_trade).where(blotter_trade.c.trade == "T-003")
         ).one()
@@ -74,14 +87,14 @@ def test_seed_reset_seeds_verifies_and_repeats(capsys: pytest.CaptureFixture[str
             1,
         )
         versions = connection.execute(sa.select(sa.func.count()).select_from(trade_terms_version))
-        assert versions.scalar() == 7  # six first versions and one amendment
+        assert versions.scalar() == 9  # eight first versions and one amendment
 
     # Plain seed is idempotent by refusal: any ledger history refuses.
     assert cli.main(["seed", "--database-url", DB]) == 1
     assert "already has transitions" in capsys.readouterr().err
     with engine.connect() as connection:
         count = connection.execute(sa.select(sa.func.count()).select_from(blotter_trade))
-        assert count.scalar() == 6  # the refusal changed nothing
+        assert count.scalar() == 8  # the refusal changed nothing
 
     # The nightly-cron semantics: a second reset succeeds from the top.
     assert cli.main(["seed", "--reset", "--database-url", DB]) == 0

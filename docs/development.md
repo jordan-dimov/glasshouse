@@ -59,7 +59,7 @@ Run as `uv run python -m glasshouse.cli <command>`; every command has `--help`.
 | `provision` | Non-destructive first boot, safe on every deploy: migrate the app schema, initialise and migrate the ledger's schema, check the rules fit the ledger, build the managed indexes, apply the inspection views. |
 | `seed` | Load the demo book and verify it. `--reset` wipes first; it is refused in production, and in dev on anything but a local database. A plain `seed` refuses a ledger that already has history. |
 | `import-trades` | Import a trades CSV (`book,trade,trade_date,counterparty,market,direction,quantity,price,delivery_start,delivery_end`). Bad rows are quarantined and explained, never coerced. `--preview` commits nothing. |
-| `import-curves` | Import a curves CSV (`market,as_of,version,period_start,price`). |
+| `import-curves` | Import a curves CSV (`market,as_of,version,period_start,price`). Prices are in the currency of the market named. |
 | `set-limit` | Set or replace a book's cap on its net position in any delivery hour. |
 | `project` | Bring the read tables up to date with the ledger. `--follow` runs it as a worker. |
 | `verify` | Check that the operational database still agrees with the ledger (six independent checks). The exit code says whether it does. |
@@ -68,6 +68,26 @@ Run as `uv run python -m glasshouse.cli <command>`; every command has `--help`.
 | `evidence-export` | Write the audit history to a file a third party can verify. |
 | `evidence-verify` | Verify such a file offline, with no database. |
 | `apply-views` | Apply the SQL inspection views on their own (`provision` already does). |
+
+## Currencies
+
+A market is declared once, with the currency it is priced in (`declare_market` in the rule file). That declaration is the only place a currency comes from. A trade's price and a curve's prices are per MWh in their market's currency, and a valuation states its currency, which the ledger checks against the market's. A trade or a curve in a market that has not been declared is refused.
+
+Every price and valuation is returned with a `currency` field, by the API, the MCP tools and the screens. Nothing is added across currencies: the overview gives one total per currency. There is no conversion and no exchange rate.
+
+The list of currencies is closed and lives in the rule file: EUR, GBP, NOK, SEK, DKK, PLN and RON, the currencies European power markets are priced in. Adding one is a change to the rule file.
+
+The CSV files have no currency column. A row takes the currency of the market it names.
+
+## Upgrading
+
+Pull, then run `glasshouse provision`. It applies any schema change and is safe to run every time.
+
+A change to the rule file is different. If it changes the shape of a fact the ledger already holds, an existing ledger no longer fits the rules and `provision` refuses it by name. Two such changes have been made so far, and each was made as a clean break because no ledger was being kept anywhere: the only one was the demo's, which is re-seeded every night.
+
+- **Currencies (November 2026).** A valuation gained a `currency` field and every market must now be declared with its currency. A database from before this has no upgrade path. Re-seed it: `uv run python -m glasshouse.cli seed --reset`.
+
+That will not be acceptable once someone keeps a ledger. From the first kept ledger onwards, a change to the shape of a recorded fact needs an upgrade path that keeps the old record readable, and a change without one should not be merged.
 
 ## Provisioning
 

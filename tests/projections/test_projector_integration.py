@@ -29,6 +29,7 @@ from glasshouse.projections import (
     accumulate,
     blotter_trade,
     catch_up,
+    market_currency,
     position_hour,
     projection_progress,
     rebuild,
@@ -44,7 +45,14 @@ T0 = dt.datetime(2026, 7, 1, tzinfo=dt.UTC)
 # business date these tests value under.
 TRADE_DATE = dt.date(2026, 6, 1)
 
-TABLES = (blotter_trade, trade_terms_version, position_hour, trade_valuation, projection_progress)
+TABLES = (
+    blotter_trade,
+    trade_terms_version,
+    position_hour,
+    trade_valuation,
+    market_currency,
+    projection_progress,
+)
 
 
 pytestmark = [needs_live_stack, pytest.mark.usefixtures("cli_binary")]
@@ -72,6 +80,7 @@ def history(morpholog: GlasshouseClient, engine: sa.Engine) -> tuple[int, str]:
     for grant in (
         models.EstablishLedgerRequest(login_role=login_role()),
         models.EstablishOrganisationRequest(org=ORG),
+        models.DeclareMarketRequest(org=ORG, market="de-power", currency="EUR"),
         models.GrantCaptureAuthorityRequest(principal="alice", org=ORG, book=BOOK),
         models.GrantCurveAuthorityRequest(principal="carol", org=ORG, market=MARKET),
         models.GrantValuationAuthorityRequest(principal="risk-engine", org=ORG, book=BOOK),
@@ -158,7 +167,7 @@ def history(morpholog: GlasshouseClient, engine: sa.Engine) -> tuple[int, str]:
         value_trade(morpholog, store, actor="risk-engine", org=ORG, book=BOOK, trade="T-001"),
         Committed,
     )
-    return 12, captured.transition_id
+    return 13, captured.transition_id
 
 
 def _rows(engine: sa.Engine) -> dict[str, list[tuple[object, ...]]]:
@@ -215,7 +224,11 @@ def test_the_projector_replays_the_monday_morning_loop(
     # Every mark stands, each pinned to its curve AND terms version:
     # 10 MW under v1 (55.00, 85.00), then 4 MW over two hours under the
     # amended terms against v2 (4 * (4.75 + 2.75) = 30.00).
-    marks = {(r[2], r[-1]): r[4] for r in rows["trade_valuation"]}
+    names = [column.name for column in trade_valuation.c]
+    by_name = [dict(zip(names, r, strict=True)) for r in rows["trade_valuation"]]
+    marks = {(m["curve_version"], m["terms_version"]): m["mtm"] for m in by_name}
+    assert {m["currency"] for m in by_name} == {"EUR"}  # the mark states it
+    assert rows["market_currency"] == [(ORG, MARKET, "EUR", rows["market_currency"][0][3])]
     assert marks == {
         ("crv-v1", "T-001/v1"): Decimal("55.00"),
         ("crv-v2", "T-001/v1"): Decimal("85.00"),

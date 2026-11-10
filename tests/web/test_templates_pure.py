@@ -58,6 +58,7 @@ def _sell(trade: str = "T-002") -> BlotterTrade:
         direction="sell",
         quantity=Decimal("7.5"),
         price=Decimal("86.25"),
+        currency="EUR",
         delivery_start=T0,
         delivery_end=T0 + dt.timedelta(hours=2),
         captured_at=T0,
@@ -143,6 +144,7 @@ def test_negatives_are_loud_on_positions_and_marks() -> None:
                 curve_version="crv-v2",
                 book="spec-de",
                 mtm=Decimal("-101.25"),
+                currency="EUR",
                 valued_at=T0,
                 transition_id="txn-2",
                 actor="risk-engine",
@@ -160,7 +162,11 @@ def test_overview_renders_the_tiles_and_health() -> None:
     summary = OverviewSummary(
         org="acme-energy",
         books=[BookSummary(book="spec-de", trade_count=2)],
-        valuation=ValuationSummary(trade_count=2, valued_at=T0, total_mtm=Decimal("-66.25")),
+        valuations=[
+            ValuationSummary(
+                currency="EUR", trade_count=2, valued_at=T0, total_mtm=Decimal("-66.25")
+            )
+        ],
         projection=ProjectionCursor(committed_at=T0, transition_id="txn-3"),
     )
     html = _render(
@@ -189,7 +195,11 @@ def test_overview_says_when_a_failing_projector_is_failing() -> None:
     summary = OverviewSummary(
         org="acme-energy",
         books=[BookSummary(book="spec-de", trade_count=2)],
-        valuation=ValuationSummary(trade_count=2, valued_at=T0, total_mtm=Decimal("-66.25")),
+        valuations=[
+            ValuationSummary(
+                currency="EUR", trade_count=2, valued_at=T0, total_mtm=Decimal("-66.25")
+            )
+        ],
         projection=ProjectionCursor(committed_at=T0, transition_id="txn-3"),
     )
     html = _render(
@@ -215,7 +225,11 @@ def test_overview_does_not_invent_a_verdict_for_another_services_projector() -> 
     summary = OverviewSummary(
         org="acme-energy",
         books=[BookSummary(book="spec-de", trade_count=2)],
-        valuation=ValuationSummary(trade_count=2, valued_at=T0, total_mtm=Decimal("-66.25")),
+        valuations=[
+            ValuationSummary(
+                currency="EUR", trade_count=2, valued_at=T0, total_mtm=Decimal("-66.25")
+            )
+        ],
         projection=ProjectionCursor(committed_at=T0, transition_id="txn-3"),
     )
     html = _render(
@@ -236,6 +250,7 @@ def test_curves_render_status_lineage_and_the_diff() -> None:
         CurveVersion(
             version="crv-a-v1",
             as_of=dt.date(2026, 7, 1),
+            currency="EUR",
             status="superseded",
             payload_hash="sha256:aa11",
             payload="ok",
@@ -247,6 +262,7 @@ def test_curves_render_status_lineage_and_the_diff() -> None:
         CurveVersion(
             version="crv-a-v2",
             as_of=dt.date(2026, 7, 1),
+            currency="EUR",
             status="official",
             payload_hash="sha256:bb22",
             payload="mismatch",
@@ -261,6 +277,7 @@ def test_curves_render_status_lineage_and_the_diff() -> None:
         market="de-power",
         base="crv-a-v1",
         compare="crv-a-v2",
+        currency="EUR",
         periods=[
             CurveDiffPeriod(
                 period_start=T0,
@@ -271,7 +288,11 @@ def test_curves_render_status_lineage_and_the_diff() -> None:
         ],
         base_marks=[
             VersionMark(
-                trade="T-001", book="spec-de", terms_version="T-001/v1", mtm=Decimal("-220")
+                trade="T-001",
+                book="spec-de",
+                terms_version="T-001/v1",
+                mtm=Decimal("-220"),
+                currency="EUR",
             )
         ],
         compare_marks=[],

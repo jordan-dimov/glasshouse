@@ -166,6 +166,7 @@ def _filler(database_url: str, orgs: list[str], max_attempts: int) -> Tally:
         try:
             for grant in (
                 models.EstablishOrganisationRequest(org=org),
+                models.DeclareMarketRequest(org=org, market="de-power", currency="EUR"),
                 models.GrantCaptureAuthorityRequest(principal=actor, org=org, book=BOOK),
             ):
                 _retrying(
@@ -196,6 +197,7 @@ def _story(database_url: str, org: str, trades: int, max_attempts: int) -> Tally
     try:
         for request in (
             models.EstablishOrganisationRequest(org=org),
+            models.DeclareMarketRequest(org=org, market="de-power", currency="EUR"),
             models.GrantCaptureAuthorityRequest(principal=trader, org=org, book=BOOK),
             models.GrantCurveAuthorityRequest(principal=curator, org=org, market=MARKET),
             models.GrantValuationAuthorityRequest(principal=risk, org=org, book=BOOK),

@@ -189,7 +189,7 @@ def test_the_cli_serves_the_same_tools_over_stdio(desk: Desk) -> None:
 
     names, limits = anyio.run(go)
     assert "propose_trade" in names
-    assert len(names) == 7
+    assert len(names) == 8
     assert {"book": "spec-de", "cap_mw": "25"} in limits["result"]
 
 

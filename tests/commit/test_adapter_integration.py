@@ -120,6 +120,7 @@ def test_the_needle_lifecycle(morpholog: GlasshouseClient) -> None:
     for grant in (
         models.EstablishLedgerRequest(login_role=login_role()),
         models.EstablishOrganisationRequest(org=ORG),
+        models.DeclareMarketRequest(org=ORG, market="de-power", currency="EUR"),
         models.GrantCaptureAuthorityRequest(principal="alice", org=ORG, book=BOOK),
         models.GrantCurveAuthorityRequest(principal="carol", org=ORG, market=MARKET),
         models.GrantValuationAuthorityRequest(principal="risk-engine", org=ORG, book=BOOK),
@@ -243,6 +244,7 @@ def test_the_needle_lifecycle(morpholog: GlasshouseClient) -> None:
             curve_version="crv-v0",
             terms_version="T-001/v1",
             mtm=Decimal("99"),
+            currency="EUR",
         ),
         actor="risk-engine",
         explain_on_reject=True,
@@ -265,6 +267,7 @@ def test_the_needle_lifecycle(morpholog: GlasshouseClient) -> None:
             curve_version="crv-v1",
             terms_version="T-001/v1",
             mtm=Decimal("-1250.50"),
+            currency="EUR",
         ),
         actor="risk-engine",
     )
@@ -296,6 +299,7 @@ def test_the_needle_lifecycle(morpholog: GlasshouseClient) -> None:
             curve_version="crv-v1",
             terms_version="T-001/v1",
             mtm=Decimal("0"),
+            currency="EUR",
         ),
         actor="risk-engine",
     )
@@ -308,6 +312,7 @@ def test_the_needle_lifecycle(morpholog: GlasshouseClient) -> None:
             curve_version="crv-v2",
             terms_version="T-001/v1",
             mtm=Decimal("-1180.00"),
+            currency="EUR",
         ),
         actor="risk-engine",
     )
@@ -345,6 +350,7 @@ def test_the_needle_lifecycle(morpholog: GlasshouseClient) -> None:
             curve_version="crv-v2",
             terms_version="T-001/v1",
             mtm=Decimal("0"),
+            currency="EUR",
         ),
         actor="risk-engine",
         explain_on_reject=True,
@@ -360,6 +366,7 @@ def test_the_needle_lifecycle(morpholog: GlasshouseClient) -> None:
             curve_version="crv-v2",
             terms_version="T-001/v2",
             mtm=Decimal("-944.00"),
+            currency="EUR",
         ),
         actor="risk-engine",
     )
@@ -517,6 +524,6 @@ def test_the_needle_lifecycle(morpholog: GlasshouseClient) -> None:
     # no invariant's condition has gone unexercised by committed history.
     report = morpholog.coverage()
     in_programme = [t for t in report.transformations if not t.not_in_programme]
-    assert len(in_programme) == 13
+    assert len(in_programme) == 14
     assert all(t.transitions > 0 for t in in_programme)
     assert not [i.invariant for i in report.invariants if i.verdict == "never_fired"]

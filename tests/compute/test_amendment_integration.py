@@ -59,6 +59,7 @@ def _desk(
     ensure_ledger_root(client)
     for grant in (
         models.EstablishOrganisationRequest(org=org),
+        models.DeclareMarketRequest(org=org, market="de-power", currency="EUR"),
         models.GrantCaptureAuthorityRequest(principal="alice", org=org, book=BOOK),
         models.GrantCurveAuthorityRequest(principal="carol", org=org, market=MARKET),
         models.GrantValuationAuthorityRequest(principal="risk-engine", org=org, book=BOOK),
@@ -118,6 +119,7 @@ def _mark(client: GlasshouseClient, org: str, curve: str, terms: str) -> object:
             curve_version=curve,
             terms_version=terms,
             mtm=Decimal("0"),
+            currency="EUR",
         ),
         actor="risk-engine",
         explain_on_reject=True,

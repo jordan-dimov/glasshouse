@@ -40,7 +40,12 @@ import sqlalchemy as sa
 
 from glasshouse.commit import GlasshouseClient, MorphologError
 from glasshouse.projections.projector import replay
-from glasshouse.projections.tables import blotter_trade, position_hour, trade_valuation
+from glasshouse.projections.tables import (
+    blotter_trade,
+    market_currency,
+    position_hour,
+    trade_valuation,
+)
 
 
 class NotYetHistoryError(ValueError):
@@ -137,10 +142,19 @@ def snapshot(
         raise NotYetHistoryError(f"{at.isoformat()} is in the future; as-of reads answer the past")
     settle(client, at)
     replayed = replay(client, until=at)
+    # A trade's price is in its market's currency, joined here from the
+    # markets declared by then, as the live query joins the table.
+    currencies = {
+        (row["org"], row["market"]): row["currency"]
+        for row in _dicts(market_currency, replayed.tables["market_currency"])
+    }
     return Snapshot(
         at=at,
         transitions=replayed.transitions,
-        trades=_dicts(blotter_trade, replayed.tables["blotter_trade"]),
+        trades=[
+            row | {"currency": currencies[row["org"], row["market"]]}
+            for row in _dicts(blotter_trade, replayed.tables["blotter_trade"])
+        ],
         positions=_dicts(position_hour, replayed.tables["position_hour"]),
         valuations=_dicts(trade_valuation, replayed.tables["trade_valuation"]),
     )

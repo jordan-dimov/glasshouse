@@ -51,6 +51,7 @@ def provisioned(cli_binary: None) -> None:
     for grant, actor in (
         (models.EstablishLedgerRequest(login_role=login_role()), "bootstrap"),
         (models.EstablishOrganisationRequest(org=ORG), "bootstrap"),
+        (models.DeclareMarketRequest(org=ORG, market="de-power", currency="EUR"), "bootstrap"),
         (models.GrantCaptureAuthorityRequest(principal="alice", org=ORG, book=BOOK), "bootstrap"),
         (models.GrantCurveAuthorityRequest(principal="carol", org=ORG, market=MARKET), "bootstrap"),
     ):

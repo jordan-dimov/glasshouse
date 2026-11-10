@@ -60,11 +60,14 @@ from glasshouse.projections import catch_up
 INSTRUCTIONS = (
     "Glasshouse is a book of record for power trading. Every change is a proposal that "
     "the rules accept or refuse. You act as one named actor in one organisation. Read the "
-    "book with list_trades, list_positions and position_limits. Ask whether a trade would "
-    "be accepted with explain_trade (nothing is recorded). Propose one with propose_trade. "
+    "book with list_trades, list_positions, list_markets and position_limits. Ask whether "
+    "a trade would be accepted with explain_trade (nothing is recorded). Propose one with "
+    "propose_trade. "
     "A refusal is a normal answer, not an error: it names the rule and the figures that "
-    "broke it. Quantities are MW and prices EUR/MWh, written as decimal text, never as "
-    "floating point numbers. Times are UTC instants in ISO 8601."
+    "broke it. Quantities are MW. A price is per MWh in the currency of its market, and "
+    "every price and valuation you are given names its currency: read it, never assume "
+    "one. list_markets says which currency each market is priced in. Numbers are decimal "
+    "text, never floating point. Times are UTC instants in ISO 8601."
 )
 
 REFUSALS_CAVEAT = (
@@ -89,6 +92,13 @@ class PositionLimit(BaseModel):
 
     book: str
     cap_mw: ExactDecimal
+
+
+class Market(BaseModel):
+    """A market and the currency its prices and valuations are in."""
+
+    market: str
+    currency: str
 
 
 class ProposalOutcome(BaseModel):
@@ -169,7 +179,8 @@ def build_server(desk: Callable[[], Desk]) -> MCPServer:
     def list_trades(
         book: str | None = None, market: str | None = None, as_of: str | None = None
     ) -> list[BlotterTrade]:
-        """Every captured trade under its current terms. Narrow by book or
+        """Every captured trade under its current terms, each with its
+        price per MWh and the currency that price is in. Narrow by book or
         market. With as_of (a past UTC instant, ISO 8601) the answer is
         the book as it stood then."""
         at = desk()
@@ -204,6 +215,21 @@ def build_server(desk: Callable[[], Desk]) -> MCPServer:
             start=_window(start, "start"),
             end=_window(end, "end"),
             past=_past(at, as_of),
+        )
+
+    @server.tool()
+    def list_markets() -> list[Market]:
+        """The markets this organisation trades in, each with the currency
+        its prices are in (EUR for German power, GBP for British). A
+        trade's price is per MWh in its market's currency."""
+        at = desk()
+        return sorted(
+            (
+                Market(market=declared.market, currency=declared.currency)
+                for declared in at.client.read(models.MarketCurrencyClaim)
+                if declared.org == at.org
+            ),
+            key=lambda market: market.market,
         )
 
     @server.tool()
@@ -277,9 +303,12 @@ def build_server(desk: Callable[[], Desk]) -> MCPServer:
         refuse it; a refusal is a normal answer and names the rule.
 
         trade: your identifier for it, unique in the organisation.
-        quantity: MW as decimal text ("2.5"). price: EUR/MWh as decimal
-        text. delivery_start, delivery_end: UTC instants on the hour with
-        an offset ("2026-07-01T12:00:00+00:00"); the end is exclusive.
+        quantity: MW as decimal text ("2.5"). price: per MWh, as decimal
+        text, in the currency of the market (see list_markets); the
+        trade takes that currency, you do not state one. A market that
+        has not been declared is refused. delivery_start, delivery_end:
+        UTC instants on the hour with an offset
+        ("2026-07-01T12:00:00+00:00"); the end is exclusive.
         trade_date: the ISO date the trade was struck, on or before
         delivery starts."""
         at = desk()

@@ -25,13 +25,16 @@
 
   <section class="tile">
     <h2>Latest marks</h2>
-    {% if summary.valuation.trade_count %}
+    {% if summary.valuations %}
+    {# One total per currency. Amounts in different currencies are never added together. #}
+    {% for marks in summary.valuations %}
     <dl class="tile-facts">
-      <div><dt>Trades with a mark</dt><dd class="numeric">{{ summary.valuation.trade_count }}</dd></div>
-      <div><dt>Newest mark</dt><dd>{{ summary.valuation.valued_at | utc }}</dd></div>
-      <div><dt>Total of latest marks (EUR)</dt><dd>{{ num(summary.valuation.total_mtm) }}</dd></div>
+      <div><dt>Trades with a mark in {{ marks.currency }}</dt><dd class="numeric">{{ marks.trade_count }}</dd></div>
+      <div><dt>Newest mark</dt><dd>{{ marks.valued_at | utc }}</dd></div>
+      <div><dt>Total of latest marks ({{ marks.currency }})</dt><dd>{{ num(marks.total_mtm) }}</dd></div>
     </dl>
-    <p class="tile__note">Each trade's newest admitted mark; the total may span valuation times and curve versions (a corrected curve leaves the old mark newest until revaluation), so it is not a valuation-run P&amp;L. History is never summed.</p>
+    {% endfor %}
+    <p class="tile__note">Each trade's newest admitted mark; a total may span valuation times and curve versions (a corrected curve leaves the old mark newest until revaluation), so it is not a valuation-run P&amp;L. History is never summed, and neither are currencies: there is one total per currency.</p>
     {% else %}
     {{ empty_state("No valuations admitted yet.") }}
     {% endif %}

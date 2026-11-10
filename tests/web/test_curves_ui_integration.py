@@ -97,7 +97,8 @@ def test_the_json_twin_lists_versions_with_exact_hashes(ui: TestClient) -> None:
     with ui as client:
         versions = client.get("/curves", params={"org": ORG, "market": "de-power"}).json()
         markets = client.get("/markets", params={"org": ORG}).json()
-    assert markets == ["de-power"]
+    assert markets == ["de-power", "gb-power"]
+    assert {v["currency"] for v in versions} == {"EUR"}
     by_version = {v["version"]: v for v in versions}
     assert by_version[CURVE_V2]["status"] == "official"
     assert by_version[CURVE_V1]["status"] == "superseded"

@@ -49,6 +49,7 @@ def _desk(client: GlasshouseClient, store: CurveStore, org: str) -> None:
     ensure_ledger_root(client)
     for grant in (
         models.EstablishOrganisationRequest(org=org),
+        models.DeclareMarketRequest(org=org, market="de-power", currency="EUR"),
         models.GrantCaptureAuthorityRequest(principal="alice", org=org, book=BOOK),
         models.GrantCurveAuthorityRequest(principal="carol", org=org, market=MARKET),
         models.GrantValuationAuthorityRequest(principal="risk-engine", org=org, book=BOOK),

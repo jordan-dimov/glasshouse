@@ -30,6 +30,7 @@ PASSWORD = "a-password-long-enough"
 TOOLS = {
     "list_trades",
     "list_positions",
+    "list_markets",
     "position_limits",
     "explain_trade",
     "propose_trade",
@@ -73,7 +74,7 @@ def said(result: CallToolResult) -> str:
     return block.text
 
 
-def test_the_tools_are_the_seven_and_none_takes_an_actor_or_an_organisation() -> None:
+def test_the_tools_are_the_eight_and_none_takes_an_actor_or_an_organisation() -> None:
     async def listed() -> dict[str, dict[str, Any]]:
         async with Client(build_server(desk)) as client:
             return {tool.name: tool.input_schema for tool in (await client.list_tools()).tools}
@@ -139,6 +140,38 @@ def test_the_limits_are_read_through_the_commit_client_for_this_organisation(
     assert result.structured_content == {
         "result": [{"book": "hedge-de", "cap_mw": "20"}, {"book": "spec-de", "cap_mw": "25"}]
     }
+
+
+def test_the_markets_come_with_their_currency(tmp_path: Path) -> None:
+    claims = [
+        {"predicate": "MarketCurrency", "args": {"org": org, "market": market, "currency": ccy}}
+        | {"asserted_in": "t-1"}
+        for org, market, ccy in (
+            ("acme-energy", "gb-power", "GBP"),
+            ("acme-energy", "de-power", "EUR"),
+            ("someone-else", "pl-power", "PLN"),
+        )
+    ]
+    result = call(desk(str(fake_binary(tmp_path, json.dumps(claims)))), "list_markets")
+    assert result.structured_content == {
+        "result": [
+            {"market": "de-power", "currency": "EUR"},
+            {"market": "gb-power", "currency": "GBP"},
+        ]
+    }
+
+
+def test_no_tool_description_names_a_currency_for_a_price() -> None:
+    # A price's currency is its market's, read from the result. A
+    # description that said "EUR/MWh" would be a second, wrong source.
+    async def described() -> dict[str, str]:
+        async with Client(build_server(desk)) as client:
+            return {t.name: t.description or "" for t in (await client.list_tools()).tools}
+
+    for name, text in anyio.run(described).items():
+        assert "EUR/MWh" not in text, name
+        assert "GBP/MWh" not in text, name
+    assert "currency of the market" in anyio.run(described)["propose_trade"]
 
 
 def test_the_refusal_log_always_says_what_it_is(tmp_path: Path) -> None:

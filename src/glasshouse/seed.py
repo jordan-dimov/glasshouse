@@ -61,7 +61,16 @@ _ALEMBIC_INI = ALEMBIC_INI
 
 ORG = "acme-energy"
 MARKET = "de-power"
+CURRENCY = "EUR"
 BOOKS = ("spec-de", "hedge-de")
+# A second market in another currency, small on purpose: British power
+# in pounds, one book, one curve, two whole-hour trades and their marks.
+# It is there so that two currencies sit side by side in every screen
+# and total, not to tell a story of its own.
+GB_MARKET = "gb-power"
+GB_CURRENCY = "GBP"
+GB_BOOK = "spec-gb"
+GB_CURVE = "crv-gb-2026-07-01-v1"
 # The actor an MCP client acts as by default, and the one book it may
 # trade in (`GLASSHOUSE_MCP_ACTOR`, `glasshouse mcp --actor`).
 AGENT = "agent"
@@ -88,8 +97,8 @@ AMENDED_TRADE = "T-003"
 AMENDED_QUANTITY = Decimal("8")
 AMENDMENT_EFFECTIVE = AS_OF
 
-# The official curve: 24 hourly prices, 70 EUR/MWh at midnight rising by
-# one each hour - dull on purpose, so every mark is checkable by eye.
+# The official German curve: 24 hourly prices, 70 EUR/MWh at midnight
+# rising by one each hour - dull on purpose, so every mark is checkable by eye.
 CURVE = HourlyCurve(
     tuple((DAY + dt.timedelta(hours=hour), Decimal(str(70 + hour))) for hour in range(24))
 )
@@ -105,7 +114,18 @@ CORRECTED_CURVE = HourlyCurve(
     )
 )
 
-# Six trades: both books, both directions, two counterparties, at least
+# The British curve: 24 hourly prices, 60 GBP/MWh at midnight rising by
+# one each hour.
+GB_PRICES = HourlyCurve(
+    tuple((DAY + dt.timedelta(hours=hour), Decimal(str(60 + hour))) for hour in range(24))
+)
+_GB_TRADES: tuple[tuple[str, str, str, str, str, int, int], ...] = (
+    # (trade, counterparty, direction, quantity, price, start hour, end hour)
+    ("G-001", "albion-power", "buy", "10", "66", 7, 11),
+    ("G-002", "albion-power", "sell", "4", "80", 16, 20),
+)
+
+# Six German trades: both books, both directions, two counterparties, at least
 # one net-short delivery hour (T-006 alone in hedge-de at 09-11) and at
 # least one negative mark (T-001, struck well above the curve).
 _TRADES: tuple[tuple[str, str, str, str, str, str, int, int], ...] = (
@@ -244,6 +264,17 @@ def seed_demo(
         # speculative book and nothing else, so its cap binds it and the
         # hedge book refuses it, both by the rules as written.
         models.GrantCaptureAuthorityRequest(principal=AGENT, org=ORG, book=AGENT_BOOK),
+        # Each market is declared with the currency it is priced in
+        # before anything trades in it: the one place a currency comes
+        # from.
+        models.DeclareMarketRequest(org=ORG, market=MARKET, currency=CURRENCY),
+        models.DeclareMarketRequest(org=ORG, market=GB_MARKET, currency=GB_CURRENCY),
+        models.GrantCaptureAuthorityRequest(principal="alice", org=ORG, book=GB_BOOK),
+        models.GrantCurveAuthorityRequest(principal="carol", org=ORG, market=GB_MARKET),
+        models.GrantValuationAuthorityRequest(principal="risk-engine", org=ORG, book=GB_BOOK),
+        models.GrantCaptureAuthorityRequest(principal="demo", org=ORG, book=GB_BOOK),
+        models.GrantCurveAuthorityRequest(principal="demo", org=ORG, market=GB_MARKET),
+        models.GrantValuationAuthorityRequest(principal="demo", org=ORG, book=GB_BOOK),
     )
     for grant in grants:
         _committed(client.submit(grant, actor="bootstrap"))
@@ -256,6 +287,45 @@ def seed_demo(
             client.submit(
                 models.SetPositionLimitRequest(org=ORG, book=book, cap=cap), actor="risk-manager"
             )
+        )
+
+    # The British book first, whole: its trades, its curve, its marks.
+    # The German story below then runs to its close uninterrupted.
+    for trade, counterparty, direction, quantity, price, start, end in _GB_TRADES:
+        _committed(
+            client.submit(
+                models.CaptureTradeRequest(
+                    org=ORG,
+                    book=GB_BOOK,
+                    trade=trade,
+                    counterparty=counterparty,
+                    market=GB_MARKET,
+                    direction=direction,
+                    version=terms_version_id(trade, 1),
+                    quantity=Decimal(quantity),
+                    price=Decimal(price),
+                    delivery_start=DAY + dt.timedelta(hours=start),
+                    delivery_end=DAY + dt.timedelta(hours=end),
+                    trade_date=TRADE_DATE,
+                ),
+                actor="alice",
+            )
+        )
+    _committed(
+        register_curve_version(
+            client,
+            store,
+            actor="carol",
+            org=ORG,
+            market=GB_MARKET,
+            as_of=AS_OF,
+            version=GB_CURVE,
+            curve=GB_PRICES,
+        )
+    )
+    for trade, *_ in _GB_TRADES:
+        _committed(
+            value_trade(client, store, actor="risk-engine", org=ORG, book=GB_BOOK, trade=trade)
         )
 
     for trade, book, counterparty, direction, quantity, price, start, end in _TRADES:
@@ -349,11 +419,11 @@ def seed_demo(
     anchored = client.audit_checkpoint(covering=close.transition_id)
     return SeedReport(
         org=ORG,
-        books=len(BOOKS),
-        trades=len(_TRADES),
-        curves=2,
+        books=len(BOOKS) + 1,
+        trades=len(_TRADES) + len(_GB_TRADES),
+        curves=3,
         amendments=1,
-        valuations=2 * len(_TRADES) + 1,
+        valuations=2 * len(_TRADES) + 1 + len(_GB_TRADES),
         limits=len(LIMITS),
         checkpoint_rows=anchored.checkpoint.tree_size,
     )

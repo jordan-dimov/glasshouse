@@ -10,7 +10,7 @@ bookkeeping under the same law (it records a position in the log and is
 rebuilt from zero like everything else), kept as a table so an idle
 projector can answer "am I caught up?" without scanning the data tables.
 
-DDL lives in Alembic (revisions 0002-0005); the table objects below are
+DDL lives in Alembic (revisions 0002-0006); the table objects below are
 the single Python-side definition. Columns added by a later revision are
 listed LAST in their table, whatever their physical position in a
 migrated database: the projector's tuples and `verify`'s `select(table)`
@@ -98,12 +98,29 @@ trade_valuation = sa.Table(
     sa.Column("trade", sa.Text, primary_key=True),
     sa.Column("curve_version", sa.Text, primary_key=True),
     sa.Column("book", sa.Text, nullable=False),
-    sa.Column("mtm", sa.Numeric, nullable=False),  # EUR; exact
+    sa.Column("mtm", sa.Numeric, nullable=False),  # exact, in `currency` below
     sa.Column("valued_at", sa.DateTime(timezone=True), nullable=False),
     sa.Column("transition_id", sa.Text, nullable=False),
     sa.Column("actor", sa.Text, nullable=False),  # who admitted it - the evidence trail
     # Revision 0005: part of the key, listed last (see the module note).
     sa.Column("terms_version", sa.Text, primary_key=True),
+    # Revision 0006: the currency the mark itself states (the ledger has
+    # checked it is the market's).
+    sa.Column("currency", sa.Text, nullable=False),
+)
+
+# The currency each market is priced in: one row per declared market,
+# from its `MarketCurrency` claim. The one place a price's currency is
+# read from: `blotter_trade` and `trade_terms_version` carry a price and
+# a market (or a trade whose row has one), and every read joins here
+# rather than keeping its own copy to disagree with.
+market_currency = sa.Table(
+    "market_currency",
+    metadata,
+    sa.Column("org", sa.Text, primary_key=True),
+    sa.Column("market", sa.Text, primary_key=True),
+    sa.Column("currency", sa.Text, nullable=False),
+    sa.Column("transition_id", sa.Text, nullable=False),
 )
 
 # The projector's position in the log: (committed_at, transition_id) of
