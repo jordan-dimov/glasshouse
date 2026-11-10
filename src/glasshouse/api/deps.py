@@ -16,8 +16,9 @@ from __future__ import annotations
 from typing import Annotated
 
 import sqlalchemy as sa
-from fastapi import Depends, Request
+from fastapi import Depends, HTTPException, Query, Request
 
+from glasshouse.api import asof
 from glasshouse.commit import MODEL_FILE, GlasshouseClient
 from glasshouse.compute.store import CurveStore, engine_url
 from glasshouse.config import Settings
@@ -71,3 +72,32 @@ type EngineDep = Annotated[sa.Engine, Depends(get_engine)]
 type ClientDep = Annotated[GlasshouseClient, Depends(get_client)]
 type StoreDep = Annotated[CurveStore, Depends(get_store)]
 type ProjectorDep = Annotated[RunningProjector | None, Depends(get_projector)]
+
+
+def get_past(
+    client: ClientDep,
+    as_of: Annotated[
+        str | None,
+        Query(
+            description="answer as the book stood at this past instant (ISO 8601; no offset "
+            "means UTC). Omitted: the present."
+        ),
+    ] = None,
+) -> asof.Snapshot | None:
+    """The as-of mode of a read, resolved once per request: None for the
+    present, otherwise the replayed snapshot every query of this request
+    answers from. A malformed or future instant is the caller's error
+    (422). An instant whose history can still change is refused as a 409
+    with `Retry-After`: the request is sound and will be answerable."""
+    try:
+        at = asof.parse_instant(as_of)
+        return None if at is None else asof.snapshot(client, at)
+    except ValueError as refused:
+        raise HTTPException(status_code=422, detail=f"as_of: {refused}") from refused
+    except asof.NotSettledError as unsettled:
+        raise HTTPException(
+            status_code=409, detail=f"as_of: {unsettled}", headers={"Retry-After": "1"}
+        ) from unsettled
+
+
+type PastDep = Annotated[asof.Snapshot | None, Depends(get_past)]

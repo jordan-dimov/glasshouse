@@ -14,7 +14,7 @@ Glasshouse sits between them: a book of record you can read, run and check yours
 
 ## What makes it different
 
-- **Nothing is overwritten.** A corrected curve or an amended trade is a new version beside the old one. The old figure, and every valuation made from it, stays on the record.
+- **Nothing is overwritten.** A corrected curve or an amended trade is a new version beside the old one. The old figure, and every valuation made from it, stays on the record. Pick a past time and the trades and positions screens show the book as it stood then.
 - **Bad changes are refused, with a reason.** The rules live in [one readable file](src/glasshouse/commit/glasshouse.morph). A change that breaks one is not saved, and the refusal names the rule: this trader may not trade this book, this trade would take the book over its limit in this hour.
 - **Every valuation shows its sources.** It records the exact curve version and trade terms it was computed from, so last week's number can be explained this week.
 - **You can check the records yourself.** One command confirms the database still agrees with its own history. Another exports that history for an outsider to verify offline.
@@ -37,7 +37,7 @@ It is ready to evaluate, not yet to run a desk on. [SCOPE.md](SCOPE.md) says pla
 
 None of this exists yet. It is the road ahead.
 
-- **View any past moment.** The history is complete already. Next is seeing the whole system as it stood at a chosen time.
+- **Every screen at any past moment.** Trades and positions can already be viewed as they stood at a chosen time. Next is the same for curves, the overview and the history screens.
 - **Run beside what you have.** Import your spreadsheet's or current system's exports, compare daily, and see exactly where the two differ.
 - **More of the lifecycle.** Counterparty confirmations, settlement, and products such as power purchase agreements and battery storage.
 - **A safe place for software to trade.** Every change is a proposal the rules accept or refuse, whoever makes it. Algorithms and AI agents can propose trades, cannot break the book, and leave a full record of what they did.

@@ -18,7 +18,12 @@
   <div class="topbar__identity">
     <a class="brand" href="/ui">Glasshouse</a>
     <nav class="topbar__nav" aria-label="Screens">
-      {% set org_query = ("?org=" ~ (org | urlencode)) if org else "" %}
+      {# As-of mode is global and visible (UI law 5): the chosen instant
+         rides every screen link, so moving between screens stays in it. #}
+      {% set mode = viewing(request.query_params) if request is defined else {"at": none, "carried": []} %}
+      {% set viewing_as_of = mode.query if mode.at else "" %}
+      {% set carried_query %}{% for key, value in mode.carried %}&{{ key | urlencode }}={{ value | urlencode }}{% endfor %}{% endset %}
+      {% set org_query = (("?org=" ~ (org | urlencode)) ~ (("&as_of=" ~ (viewing_as_of | urlencode)) if viewing_as_of else "")) if org else "" %}
       <a href="/ui{{ org_query }}" {% if active == "overview" %}aria-current="page"{% endif %}>Overview</a>
       <a href="/ui/blotter{{ org_query }}" {% if active == "blotter" %}aria-current="page"{% endif %}>Blotter</a>
       <a href="/ui/positions{{ org_query }}" {% if active == "positions" %}aria-current="page"{% endif %}>Positions &amp; P&amp;L</a>
@@ -36,14 +41,37 @@
         <option value="{{ option }}" {% if option == org %}selected{% endif %}>{{ option }}</option>
         {% endfor %}
       </select>
+      {% if viewing_as_of %}<input type="hidden" name="as_of" value="{{ viewing_as_of }}">{% endif %}
       <button type="submit">Switch</button>
     </form>
     {% endif %}
-    <span class="as-of-pill" title="Historical (as-of) viewing is not available yet">Viewing: Current</span>
+    {% if org %}
+    <form class="as-of-form" method="get" action="{{ request.url.path }}">
+      <input type="hidden" name="org" value="{{ org }}">
+      {# The screen's own filters ride along: the same book and window at another moment. #}
+      {% for key, value in mode.carried %}<input type="hidden" name="{{ key }}" value="{{ value }}">{% endfor %}
+      <label class="org-form__label" for="as-of-input">As of (UTC)</label>
+      <input id="as-of-input" type="datetime-local" name="as_of" step="1" value="{{ mode.picker if mode.at else "" }}">
+      <button type="submit">View</button>
+    </form>
+    {% endif %}
+    {% if viewing_as_of %}
+    <span class="as-of-pill as-of-pill--past">Viewing: as of {{ mode.shown }}</span>
+    <a class="as-of-return" href="{{ request.url.path }}?org={{ org | urlencode }}{{ carried_query | trim }}">Back to current</a>
+    {% else %}
+    <span class="as-of-pill" title="Pick a past time to see the book as it stood then">Viewing: Current</span>
+    {% endif %}
     <span class="l0-badge" title="Local dev and evaluation readiness; no production claims">Demo - readiness L0</span>
   </div>
 </header>
 <main class="page">
+{% if viewing_as_of %}
+{% if active in ("blotter", "positions") %}
+<p class="as-of-banner" role="status">You are viewing the book as it stood at {{ mode.shown }}. Every figure on this screen is from that moment, not from now.</p>
+{% else %}
+<p class="as-of-banner as-of-banner--current" role="status">This screen shows current data. As-of viewing covers the Blotter and Positions screens so far.</p>
+{% endif %}
+{% endif %}
 {% block content %}{% endblock %}
 </main>
 <footer class="footer">

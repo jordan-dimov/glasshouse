@@ -559,7 +559,9 @@ def accumulate(
     return replay(client, up_to).tables
 
 
-def replay(client: GlasshouseClient, up_to: str | None = None) -> Replay:
+def replay(
+    client: GlasshouseClient, up_to: str | None = None, *, until: dt.datetime | None = None
+) -> Replay:
     """Replay the tail through the pure folds into in-memory row sets
     matching the projection tables' column order - the non-destructive
     half of `glasshouse verify`'s projection leg. Reads the blessed
@@ -572,7 +574,15 @@ def replay(client: GlasshouseClient, up_to: str | None = None) -> Replay:
     contain raises `ProjectionError` - a cursor naming an unknown
     transition is corruption, never lag (committed-row visibility is
     monotonic, so a previously applied transition cannot vanish from a
-    later snapshot)."""
+    later snapshot).
+
+    With `until` (an instant), folding stops before the first transition
+    placed in the audit order after it: the rows are the tables as they
+    stood then (as-of viewing, glasshouse#41). The instant a row is
+    judged by is the one the substrate's own as-of reads use: when its
+    transaction took its place in the order, or, for a row from before
+    the order existed, when it began. A transaction's acts share that
+    instant, so the cut never splits one."""
     blotter: dict[tuple[str, str], BlotterRow] = {}
     history: dict[tuple[str, str, str], tuple[object, ...]] = {}
     positions: dict[tuple[str, str, str, dt.datetime], tuple[Decimal, str]] = {}
@@ -582,6 +592,9 @@ def replay(client: GlasshouseClient, up_to: str | None = None) -> Replay:
     reached_up_to = up_to is None
     for row in client.audit_named():
         if up_to is not None and reached_up_to:
+            break
+        placed = row.ordering.ordered_at if row.ordering else row.committed_at
+        if until is not None and placed > until:
             break
         fold = fold_transition(row.asserted_claims, row.retracted_claims)
         at, tid, actor = row.committed_at, row.transition_id, row.actor

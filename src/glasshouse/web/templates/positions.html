@@ -4,11 +4,12 @@
 {% block content %}
 <div class="page-header">
   <h1>Positions &amp; P&amp;L</h1>
-  <p class="page-header__note">Net MW per UTC delivery hour (buy +, sell -) under each trade's current terms (the latest effective version), and each trade's latest admitted mark.</p>
+  <p class="page-header__note">Net MW per UTC delivery hour (buy +, sell -) under each trade's {{ "terms at that moment" if as_of else "current terms" }} (the latest effective version), and each trade's latest admitted mark.</p>
 </div>
 
 <form class="filter-bar" method="get" action="/ui/positions">
   <input type="hidden" name="org" value="{{ org }}">
+  {% if as_of %}<input type="hidden" name="as_of" value="{{ as_of }}">{% endif %}
   <label>Book <input type="text" name="book" value="{{ book or "" }}" placeholder="exact match"></label>
   <label>Market <input type="text" name="market" value="{{ market or "" }}" placeholder="exact match"></label>
   <label>From (UTC) <input type="datetime-local" name="start" value="{{ start or "" }}"></label>

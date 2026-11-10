@@ -58,6 +58,38 @@
   white-space: nowrap;
 }
 
+/* A past moment is never the default look: the pill and the banner take
+   the quarantine colour so a historical screen cannot be mistaken for
+   the live one (UI law 5). */
+.as-of-pill--past {
+  background: var(--status-quarantined);
+}
+
+.as-of-form {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.as-of-return {
+  font-size: var(--size-0);
+  white-space: nowrap;
+}
+
+.as-of-banner {
+  margin: 0 0 var(--space-4);
+  padding: var(--space-2) var(--space-3);
+  border-left: 4px solid var(--status-quarantined);
+  background: color-mix(in srgb, var(--status-quarantined) 8%, transparent);
+  font-weight: 600;
+}
+
+.as-of-banner--current {
+  border-left-color: var(--status-superseded);
+  background: color-mix(in srgb, var(--status-superseded) 8%, transparent);
+  font-weight: 400;
+}
+
 .l0-badge {
   color: var(--ink-muted);
   border: 1px solid var(--line);

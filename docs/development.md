@@ -27,6 +27,20 @@ uv run uvicorn glasshouse.api.app:app --reload
 
 The screens are under <http://localhost:8000/ui> and the API's OpenAPI page is at <http://localhost:8000/docs>.
 
+If you already run a PostgreSQL on port 5432, the compose database cannot bind it. Change the left-hand side of the `ports` entry in `docker-compose.yml` (for example `"5433:5432"`) and set `GLASSHOUSE_DATABASE_URL=postgresql://glasshouse:glasshouse@localhost:5433/glasshouse`.
+
+## Viewing the past
+
+`/trades`, `/positions` and `/valuations` take `as_of`, an ISO 8601 instant (no offset means UTC), and answer as the book stood then. The Blotter and Positions screens have the same control in the top bar, and changing the time keeps the filters you had. The other screens show current data and say so.
+
+The answer is computed by replaying the ledger's history up to that instant through the same code that maintains the live tables. Three things follow:
+
+- An answer, once given, does not change. A moment is refused with a 409 while a write that started before it is still in progress, because that write's rows could still land before it. Morpholog makes that call, not a timer here. Ask again shortly. A future moment is a 422.
+- Read at the present, it matches the live tables whenever the projector has caught up with the ledger. If the projector is behind, the as-of read is the more recent of the two.
+- It shows the past as today's code reads it. If the way positions are computed ever changes, an old moment will be recomputed the new way.
+
+Each as-of request replays the whole history, and the work grows with the number of delivery hours as well as the number of transitions. That is fine for the demo book and has not been measured on a large one.
+
 ## Checks
 
 ```bash

@@ -14,8 +14,8 @@ import pytest
 from fastapi.testclient import TestClient
 
 from glasshouse.api.app import create_app
+from glasshouse.api.asof import parse_instant
 from glasshouse.web import STATIC_DIR
-from glasshouse.web.routes import _utc_instant
 from tests.support import fake_binary
 
 DEAD_DB = "postgresql://127.0.0.1:1/nowhere"
@@ -345,11 +345,11 @@ def test_the_commit_endpoint_enforces_the_same_cap_as_the_upload() -> None:
 def test_datetime_local_values_are_defined_as_utc() -> None:
     # Law 9 at the filter boundary: a browser's offset-less value becomes
     # an aware UTC instant, an aware value is converted, blank is None.
-    parsed = _utc_instant("2026-07-01T08:30")
+    parsed = parse_instant("2026-07-01T08:30")
     assert parsed == dt.datetime(2026, 7, 1, 8, 30, tzinfo=dt.UTC)
-    aware = _utc_instant("2026-07-01T08:30+02:00")
+    aware = parse_instant("2026-07-01T08:30+02:00")
     assert aware == dt.datetime(2026, 7, 1, 6, 30, tzinfo=dt.UTC)
-    assert _utc_instant(None) is None
-    assert _utc_instant("") is None
+    assert parse_instant(None) is None
+    assert parse_instant("") is None
     with pytest.raises(ValueError, match="Invalid isoformat"):
-        _utc_instant("yesterday-ish")
+        parse_instant("yesterday-ish")

@@ -3,12 +3,13 @@
 {% block content %}
 <div class="page-header">
   <h1>Blotter</h1>
-  <p class="page-header__note">Every captured trade under its current terms (the latest effective version), exactly as admitted. No editable cells: an amendment is a governed proposal that supersedes the terms, never an edit.</p>
+  <p class="page-header__note">Every captured trade under its {{ "terms at that moment" if as_of else "current terms" }} (the latest effective version), exactly as admitted. No editable cells: an amendment is a governed proposal that supersedes the terms, never an edit.</p>
 </div>
 
 <form class="filter-bar" method="get" action="/ui/blotter"
       hx-get="/ui/blotter" hx-target="#blotter-results" hx-swap="innerHTML" hx-push-url="true">
   <input type="hidden" name="org" value="{{ org }}">
+  {% if as_of %}<input type="hidden" name="as_of" value="{{ as_of }}">{% endif %}
   <label>Book <input type="text" name="book" value="{{ book or "" }}" placeholder="exact match"></label>
   <label>Market <input type="text" name="market" value="{{ market or "" }}" placeholder="exact match"></label>
   <button type="submit">Apply</button>

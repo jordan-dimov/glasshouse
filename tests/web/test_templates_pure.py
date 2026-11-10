@@ -8,6 +8,8 @@ import datetime as dt
 from decimal import Decimal
 from types import SimpleNamespace
 
+from starlette.datastructures import QueryParams
+
 from glasshouse.api.schemas import (
     AttestationInfo,
     AuditClaim,
@@ -39,7 +41,7 @@ def _now() -> dt.datetime:
     return dt.datetime.now(dt.UTC)
 
 
-REQUEST = SimpleNamespace(url=SimpleNamespace(path="/ui"))
+REQUEST = SimpleNamespace(url=SimpleNamespace(path="/ui"), query_params=QueryParams())
 
 
 def _render(name: str, **context: object) -> str:
@@ -506,3 +508,75 @@ def test_the_verify_fragment_shows_readiness_beside_the_verdict() -> None:
     assert "NOT caught up (32 transition(s) not yet projected)" in behind
     assert "badge--ok" in fragment.render(report=VerifyReport(legs, projection_lag=0))
     assert "badge--draft" in fragment.render(report=VerifyReport(legs))
+
+
+def _blotter_at(query: str) -> str:
+    past = SimpleNamespace(url=SimpleNamespace(path="/ui/blotter"), query_params=QueryParams(query))
+    return templates.env.get_template("blotter.html").render(
+        request=past,
+        org="acme-energy",
+        org_options=["acme-energy"],
+        active="blotter",
+        as_of="2026-07-01T10:00:00",
+        book="spec-de",
+        trades=[_sell()],
+        has_more=True,
+        offset=0,
+        prev_offset=0,
+        next_offset=50,
+    )
+
+
+def test_a_past_moment_is_announced_and_rides_every_link() -> None:
+    # UI law 5: as-of mode is global and visible. The pill changes, the
+    # banner says which moment, every screen link keeps it, and one link
+    # leaves it.
+    html = _blotter_at("org=acme-energy&as_of=2026-07-01T10:00")
+    assert "Viewing: as of 2026-07-01 10:00:00 UTC" in html
+    assert "Viewing: Current" not in html
+    assert "You are viewing the book as it stood at 2026-07-01 10:00:00 UTC" in html
+    assert 'href="/ui/positions?org=acme-energy&amp;as_of=2026-07-01T10%3A00%3A00"' in html
+    assert "&amp;as_of=2026-07-01T10%3A00%3A00&offset=50" in html  # paging stays in the past
+    assert '<input type="hidden" name="as_of" value="2026-07-01T10:00:00">' in html
+    assert 'href="/ui/blotter?org=acme-energy">Back to current' in html
+
+
+def test_the_moment_is_shown_in_utc_however_it_was_written() -> None:
+    # 12:00 at +02:00 is 10:00 UTC: the pill, the banner, the links and
+    # the picker all carry that one instant, never the caller's spelling
+    # with "UTC" appended. A fraction of a second survives in the links
+    # and the banner; the picker holds whole seconds.
+    html = _blotter_at("org=acme-energy&as_of=2026-07-01T12:00:00.250000%2B02:00")
+    assert "Viewing: as of 2026-07-01 10:00:00.250000 UTC" in html
+    assert "12:00" not in html
+    assert "as_of=2026-07-01T10%3A00%3A00.250000" in html
+    assert 'name="as_of" step="1" value="2026-07-01T10:00:00"' in html
+
+
+def test_changing_the_moment_keeps_the_filters_and_drops_the_page() -> None:
+    # The natural question is the same book at another time. The as-of
+    # form and the way back both carry the screen's filters; the page
+    # offset is dropped, since another moment holds other rows.
+    html = _blotter_at(
+        "org=acme-energy&book=spec-de&market=de-power&offset=50&as_of=2026-07-01T10:00"
+    )
+    form = html[html.index('class="as-of-form"') : html.index('id="as-of-input"')]
+    assert '<input type="hidden" name="book" value="spec-de">' in form
+    assert '<input type="hidden" name="market" value="de-power">' in form
+    assert "offset" not in form
+    assert 'href="/ui/blotter?org=acme-energy&book=spec-de&market=de-power">Back to current' in html
+
+
+def test_a_moment_nothing_can_read_leaves_the_top_bar_in_the_present() -> None:
+    html = _blotter_at("org=acme-energy&as_of=last-tuesday")
+    assert "Viewing: Current" in html
+    assert "You are viewing the book as it stood" not in html
+
+
+def test_a_screen_that_cannot_answer_for_the_past_says_so() -> None:
+    past = SimpleNamespace(
+        url=SimpleNamespace(path="/ui/audit"), query_params=QueryParams("as_of=2026-07-01T10:00")
+    )
+    html = templates.env.get_template("error.html").render(request=past, org="acme", active="audit")
+    assert "This screen shows current data." in html
+    assert "You are viewing the book as it stood" not in html
