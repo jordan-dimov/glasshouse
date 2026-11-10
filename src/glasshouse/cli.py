@@ -35,7 +35,6 @@ from glasshouse.commit import (
     Rejected,
     apply_views,
 )
-from glasshouse.commit.morpholog_client.adapter import Request
 from glasshouse.commit.morpholog_client.envelopes import (
     CheckpointCreated,
     RoleRebindingsEvaluated,
@@ -45,7 +44,6 @@ from glasshouse.commit.morpholog_client.envelopes import (
     TreeUnsupportedPack,
 )
 from glasshouse.commit.morpholog_client.models import (
-    ChangePositionLimitRequest,
     PositionLimitClaim,
     SetPositionLimitRequest,
 )
@@ -84,10 +82,8 @@ def _db(database_url: str) -> str:
 
 
 def _client(db: str) -> GlasshouseClient:
-    """One construction site for the operator's client, so the writer-role
-    assertion the audit tail needs on managed PostgreSQL is configuration,
-    never something a new command can forget."""
-    return GlasshouseClient(str(MODEL_FILE), db, writer_roles=get_settings().audit_writer_roles)
+    """One construction site for the operator's client."""
+    return GlasshouseClient(str(MODEL_FILE), db)
 
 
 def _run_import(
@@ -188,12 +184,7 @@ def provision_command(
     ] = False,
     database_url: DatabaseUrl = "",
 ) -> None:
-    settings = get_settings()
-    report = run_provision(
-        _db(database_url),
-        least_privilege=least_privilege,
-        writer_roles=settings.audit_writer_roles,
-    )
+    report = run_provision(_db(database_url), least_privilege=least_privilege)
     print(report.render())
 
 
@@ -230,13 +221,18 @@ def set_limit_command(
 ) -> None:
     client = _client(_db(database_url))
     cap_mw = Decimal(cap)
-    standing = [limit for limit in client.read(PositionLimitClaim) if limit.book == book]
-    request: Request = (
-        ChangePositionLimitRequest(org=org, book=book, cap=cap_mw)
-        if standing
-        else SetPositionLimitRequest(org=org, book=book, cap=cap_mw)
+    standing = [
+        limit
+        for limit in client.read(PositionLimitClaim)
+        if limit.org == org and limit.book == book
+    ]
+    # One act sets a cap or replaces the standing one; the read above is
+    # only for telling the operator what stood.
+    outcome = client.submit(
+        SetPositionLimitRequest(org=org, book=book, cap=cap_mw),
+        actor=actor,
+        explain_on_reject=True,
     )
-    outcome = client.submit(request, actor=actor, explain_on_reject=True)
     if isinstance(outcome, Rejected):
         print(f"refused: {why(outcome.explanation)}", file=sys.stderr)
         raise typer.Exit(code=1)
@@ -354,7 +350,7 @@ def evidence_verify_command(
 ) -> None:
     # Offline: no database is touched, so no --database-url - and no
     # settings either. This command is the forensic one, run by a third
-    # party against a pack and an anchor; a malformed writer-role list or
+    # party against a pack and an anchor; an unknown environment name or
     # a rejected demo password in the environment must not be able to
     # stop a valid pack from being verified.
     client = GlasshouseClient(str(MODEL_FILE), "")
@@ -391,8 +387,8 @@ def evidence_verify_command(
 def _logging_settings() -> Settings:
     """Configuring logging must never be the thing that refuses a command.
 
-    A misconfigured environment (a weak demo password, a malformed
-    writer-role list) is a real failure for any command that reads
+    A misconfigured environment (a weak demo password, an unknown
+    environment name) is a real failure for any command that reads
     settings - and those raise below, cleanly. But `evidence-verify` is
     forensic: a third party runs it against a pack and an anchor, on a
     machine whose environment is none of their business, and it must not

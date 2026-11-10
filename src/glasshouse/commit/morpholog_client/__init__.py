@@ -15,8 +15,8 @@ if sys.version_info < (3, 12):
     )
 
 PROGRAM = "glasshouse"
-MODEL_HASH = "sha256:cece3f7264c38cb7af98fc046f8dea8b40d51ccecec96785381b6b63756fd5c5"
-MORPHOLOG_VERSION = "0.0.16"
+MODEL_HASH = "sha256:6abb3f1631c44d87c78d78b024a9c90f3de0a99fbaa68bf90066354f3310d52a"
+MORPHOLOG_VERSION = "0.0.18"
 PYTHON_FLOOR = (3, 12)
 
 from . import envelopes, models, values  # noqa: E402
@@ -80,6 +80,24 @@ def open_session(
     )
 
 
+def connect_service(
+    socket_path: str,
+    *,
+    timeout: float | None = None,
+) -> Session:
+    """Connect to a ``morpholog serve`` socket pinned to this package's
+    stamps: a service of another version than it was generated for,
+    or one running other rules, is refused at the handshake, before a
+    single proposal is written. ``Session.connect`` connects
+    deliberately unpinned."""
+    return Session.connect(
+        socket_path,
+        timeout=timeout,
+        expected_model_hash=MODEL_HASH,
+        expected_version=MORPHOLOG_VERSION,
+    )
+
+
 __all__ = [
     "PROGRAM",
     "MODEL_HASH",
@@ -96,6 +114,7 @@ __all__ = [
     "Session",
     "open_client",
     "open_session",
+    "connect_service",
     "envelopes",
     "models",
     "values",

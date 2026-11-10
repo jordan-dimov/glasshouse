@@ -19,7 +19,7 @@ from glasshouse.projections.tables import (
     trade_terms_version,
     trade_valuation,
 )
-from glasshouse.seed import SEED_LOCK_KEY, SeedError, run_seed
+from glasshouse.seed import SEED_LOCK_KEY, run_seed
 from tests.support import BINARY, DB, needs_live_stack, provision
 
 pytestmark = needs_live_stack
@@ -99,13 +99,15 @@ def test_seed_refuses_to_overlap_itself(capsys: pytest.CaptureFixture[str]) -> N
             guard.execute(sa.text("select pg_advisory_unlock(:key)"), {"key": SEED_LOCK_KEY})
 
 
-def test_a_tail_held_short_fails_the_seed_by_name() -> None:
-    # The audit tail withholds every row younger than the oldest open
-    # transaction in the database (the binary's slow-writer horizon:
-    # withheld, never lost). A TimescaleDB background worker in a fresh
-    # database has held one across a whole seed, which projected nothing
-    # and still reported "verify: consistent". A transaction held open
-    # here plays that worker: the seed must refuse, naming it.
+def test_an_open_transaction_no_longer_holds_the_tail() -> None:
+    # Until v0.0.17 the audit tail withheld every row younger than the
+    # oldest open transaction in the database, so a TimescaleDB background
+    # worker holding one across a seed left the projections empty (contract
+    # section 31). The tail now withholds only what a writer in flight
+    # holds an audit order below (morpholog#632), which an idle transaction
+    # is not. A transaction held open here plays that worker: the seed
+    # projects everything and verifies. This is the behaviour that let the
+    # telemetry switch leave CI, pinned so a regression is a red test.
     provision()
     holder_engine = sa.create_engine(
         engine_url(DB), connect_args={"application_name": "held-open-by-test"}
@@ -113,8 +115,6 @@ def test_a_tail_held_short_fails_the_seed_by_name() -> None:
     try:
         with holder_engine.connect() as holder:
             holder.execute(sa.text("SELECT 1"))  # autobegin: a transaction is now open
-            with pytest.raises(SeedError, match=r"delivered 0 of \d+ transition") as refused:
-                run_seed(DB, reset=True, patience=0)
-            assert "held-open-by-test" in str(refused.value)
+            run_seed(DB, reset=True, patience=0)
     finally:
         holder_engine.dispose()

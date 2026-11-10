@@ -86,19 +86,21 @@ class MorphologError(RuntimeError):
     business rejection, which is a decided outcome on stdout."""
 
     #: Whether re-submitting the same request is known to be safe. False
-    #: for every error but a ``serialization_failure`` receipt and a
-    #: checkpoint's ``transition_not_covered`` refusal: an unknown outcome
-    #: may already have committed, and any other failure needs its cause
-    #: fixed first. The one retry predicate.
+    #: for every error but a ``serialization_failure`` or
+    #: ``deadlock_detected`` receipt and a checkpoint's
+    #: ``transition_not_covered`` refusal: an unknown outcome may already
+    #: have committed, and any other failure needs its cause fixed first.
+    #: The one retry predicate.
     retriable: bool = False
 
 
 class MorphologRequestError(MorphologError):
     """A per-request error receipt with its stable ``code``: the request
     was received, classified, and refused, and the session (or the
-    one-shot binary) did nothing durable. ``serialization_failure`` is
-    re-submittable as is - ``retriable`` says so; ``not_committed`` once
-    its cause is fixed; every other code is the request's own fault.
+    one-shot binary) did nothing durable. ``serialization_failure`` and
+    ``deadlock_detected`` are re-submittable as is - ``retriable`` says
+    so; ``not_committed`` once its cause is fixed; every other code is
+    the request's own fault.
     ``row`` is the session request number, or ``None`` for a one-shot
     ``propose``, ``transact`` or a batch refused before its first row."""
 
@@ -111,7 +113,7 @@ class MorphologRequestError(MorphologError):
 
     @property
     def retriable(self) -> bool:  # type: ignore[override]
-        return self.code == "serialization_failure"
+        return self.code in envelopes.RETRIABLE_CODES
 
 
 class MorphologNotCovered(MorphologError):
@@ -426,7 +428,9 @@ class Morpholog:
             args.extend(["--role-prefix", role_prefix])
         return envelopes.InitReport.from_json(self._json(*args))
 
-    def migrate(self, *, check: bool = False) -> envelopes.MigrationReport:
+    def migrate(
+        self, *, check: bool = False, prepare: bool = False
+    ) -> envelopes.MigrationReport:
         """Bring the database up to the schema this binary expects.
 
         The migrations are embedded in the binary, so an upgrade needs
@@ -447,10 +451,20 @@ class Morpholog:
 
             if not client.migrate(check=True).is_current:
                 ...
+
+        `prepare` does everything except the one step that pauses writers:
+        the plain migrations and every preparation step of the staged one,
+        which then stays pending with its `activation_preflight` reporting
+        `ready`. A later plain `migrate()` completes it, in the window you
+        choose. `check` and `prepare` exclude each other.
         """
+        if check and prepare:
+            raise ValueError("check and prepare exclude each other")
         args = ["migrate", "--database-url", self.database_url]
         if check:
             args.append("--check")
+        if prepare:
+            args.append("--prepare")
         return envelopes.MigrationReport.from_json(self._json(*args))
 
     def provision_indexes(
@@ -553,6 +567,22 @@ class Morpholog:
             args.extend(["--pack", str(pack)])
         args.extend(self._opt("--train-until", train_until))
         return envelopes.ScoreReport.from_json(self._json(*args))
+
+    def rehearse(self, pack: str | None = None) -> envelopes.RehearsalReport:
+        """Re-decide every committed proposal under this client's programme
+        file, through the ordinary kernel (gates, bindings, claims and
+        intents, not only invariants), each against the state the audit
+        rows before it build in canonical order: from ``pack``, an evidence
+        pack read offline, or else from this client's database. Reports
+        the rows decided differently and refusals counted per rule. The
+        record holds admitted history only, so this says what the
+        programme would have refused, never what demand there was."""
+        args = ["rehearse", self.file]
+        if pack is None:
+            args.extend(["--database-url", self.database_url])
+        else:
+            args.extend(["--pack", str(pack)])
+        return envelopes.RehearsalReport.from_json(self._json(*args))
 
     # ------------------------------------------------------------
     # The commit path.
@@ -701,7 +731,8 @@ class Morpholog:
         act) or ``AtomicRejected`` (the refusing act, nothing written) -
         both lawful outcomes. A known error of the whole batch raises
         ``MorphologRequestError`` with its code, whose ``retriable`` is
-        true only for ``serialization_failure``; a commit whose outcome
+        true for ``serialization_failure`` and ``deadlock_detected``; a
+        commit whose outcome
         the runtime could not prove, or a timeout after submission,
         raises ``MorphologOutcomeUnknown`` - read the record first,
         never re-submit blind. ``timeout`` bounds this one call and
@@ -788,7 +819,7 @@ class Morpholog:
 
         `as_of` reads the claims as they were at a past moment - a
         transition id, or an RFC 3339 timestamp resolved to the last
-        transition committed at or before it.
+        transition placed in the audit order at or before it.
         """
         return self._claims(predicates, envelopes.ClaimRead.from_json, named=False, as_of=as_of)
 
@@ -871,7 +902,8 @@ class Morpholog:
 
         `as_of` computes the view over the state as it was at a past
         moment - a transition id, or an RFC 3339 timestamp resolved to
-        the last transition committed at or before it. Diffing the same
+        the last transition placed in the audit order at or before it.
+        Diffing the same
         view at two coordinates is the correction blast-radius read.
         """
         return self._derived(name, envelopes.ClaimInstance.from_json, named=False, as_of=as_of)
@@ -912,22 +944,14 @@ class Morpholog:
         self,
         after: str | None = None,
         *,
-        writer_roles: list[str] | None = None,
         mentions: str | None = None,
     ) -> list[envelopes.AuditRow]:
-        """The audit tail: committed transitions in commit order, one
-        ``AuditRow`` per NDJSON line. ``after`` resumes strictly after
-        a previously seen transition id - lossless: rows whose writers
-        were still in flight are withheld until the next call, never
-        skipped. An empty tail is a lawful empty list.
-
-        ``writer_roles`` asserts the session roles that write audit,
-        for managed PostgreSQL where the platform's hidden sessions
-        make the default refuse. The binary verifies the assertion
-        against the catalog; superuser writes are the residue the
-        assertion explicitly accepts, and role grants, memberships,
-        and login attributes must stay unchanged until the command
-        establishes its read snapshot.
+        """The audit tail: committed transitions in the log's canonical
+        order, one ``AuditRow`` per NDJSON line. ``after`` resumes
+        strictly after a previously seen transition id - lossless: rows
+        at or after the order of a writer still in flight are withheld
+        until the next call, never skipped. An empty tail is a lawful
+        empty list.
 
         ``mentions`` keeps only the transitions naming that subject in
         their arguments, claims or intents. ``after`` and the watermark
@@ -936,28 +960,23 @@ class Morpholog:
         walks the tail to find it, and an empty result moves no cursor."""
         return [
             envelopes.AuditRow.from_json(row)
-            for row in self._audit_lines(
-                after, named=False, writer_roles=writer_roles, mentions=mentions
-            )
+            for row in self._audit_lines(after, named=False, mentions=mentions)
         ]
 
     def audit_named(
         self,
         after: str | None = None,
         *,
-        writer_roles: list[str] | None = None,
         mentions: str | None = None,
     ) -> list[envelopes.AuditRowNamed]:
         """The audit tail with asserted/retracted claims decoded by
         declared field name under this programme's authority (skew is
         a hard error on the binary side). ``arguments`` and intent
         payloads stay positional - a different vocabulary.
-        ``writer_roles`` and ``mentions`` as on ``audit``."""
+        ``mentions`` as on ``audit``."""
         return [
             envelopes.AuditRowNamed.from_json(row)
-            for row in self._audit_lines(
-                after, named=True, writer_roles=writer_roles, mentions=mentions
-            )
+            for row in self._audit_lines(after, named=True, mentions=mentions)
         ]
 
     @staticmethod
@@ -972,7 +991,6 @@ class Morpholog:
         self,
         after: str | None,
         named: bool,
-        writer_roles: list[str] | None = None,
         mentions: str | None = None,
     ) -> list[dict[str, object]]:
         # Not _invoke: an empty tail is a lawful empty stdout, not a
@@ -984,7 +1002,6 @@ class Morpholog:
         if named:
             argv.extend(["--named", self.file])
         argv += self._mentions(mentions)
-        argv += self._repeat("--writer-role", writer_roles)
         argv.extend(["--database-url", self.database_url])
         proc = self._run(argv, timeout=self.timeout)
         if proc.returncode != 0:
@@ -1022,6 +1039,20 @@ class Morpholog:
             self._json(
                 "refresh", "derived", self.file,
                 "--database-url", self.database_url,
+            )
+        )
+
+    def refresh_snapshots(self, every: int | None = None) -> envelopes.RefreshSnapshotsReport:
+        """Keep the admitted state after every ``every`` rows of the
+        audit log (the binary's default when omitted), so an as-of read
+        replays only the rows after the nearest one. A disposable cache:
+        builds what is missing, deletes what is off that grid, and no
+        verifier reads it. Run it on a schedule."""
+        return envelopes.RefreshSnapshotsReport.from_json(
+            self._json(
+                "refresh", "snapshots",
+                "--database-url", self.database_url,
+                *self._opt("--every", None if every is None else str(every)),
             )
         )
 
@@ -1074,16 +1105,15 @@ class Morpholog:
         signing_key: str | None = None,
         key_id: str | None = None,
         *,
-        writer_roles: list[str] | None = None,
         witnesses: list[str] | None = None,
         covering: str | None = None,
     ) -> envelopes.CheckpointCreated | envelopes.CheckpointNoNewRows:
         """Record a checkpoint over the current stable prefix, or return
         the unchanged head - either way a usable external anchor. Pass
         ``signing_key`` (a PKCS#8 PEM path) and ``key_id`` to sign the new
-        tree head, so the anchor is attributable. ``writer_roles`` as on
-        ``audit`` - the checkpoint's stable prefix rests on the same
-        resume horizon. ``witnesses`` (each ``"rfc3161:<url>"``) has those
+        tree head, so the anchor is attributable. The checkpoint's stable
+        prefix rests on the same resume horizon as ``audit``.
+        ``witnesses`` (each ``"rfc3161:<url>"``) has those
         timestamp authorities countersign the new head after the commit;
         the checkpoint is recorded either way, and a failed submission
         raises ``MorphologWitnessFailed`` carrying the head as stored, to
@@ -1098,7 +1128,6 @@ class Morpholog:
         args = ["audit", "checkpoint", "--database-url", self.database_url]
         if signing_key is not None:
             args.extend(["--signing-key", str(signing_key), "--key-id", str(key_id)])
-        args += self._repeat("--writer-role", writer_roles)
         args += self._repeat("--witness", witnesses)
         args += self._opt("--covering", covering)
         proc = self._run(args, timeout=self.timeout)

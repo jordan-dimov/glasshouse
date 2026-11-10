@@ -999,6 +999,7 @@ PROPOSE_ERROR_CODES = frozenset(
     {
         "actor_assertion_unauthorised",
         "commit_outcome_unknown",
+        "deadlock_detected",
         "duplicate_intent",
         "invalid_arguments",
         "invalid_request",
@@ -1009,6 +1010,11 @@ PROPOSE_ERROR_CODES = frozenset(
     }
 )
 
+
+#: The codes whose request is safe to submit again as it is: the
+#: transaction was aborted by the database, for a serialization conflict
+#: or a deadlock, before anything was recorded.
+RETRIABLE_CODES = frozenset({"serialization_failure", "deadlock_detected"})
 
 #: The codes that say nothing was recorded: every published code but
 #: ``commit_outcome_unknown``. A caller that hand-rolls its own handling
@@ -1043,7 +1049,8 @@ class RequestError:
 class SessionErrorReceipt:
     """A per-request session failure with its stable ``code`` - the
     field a caller consults to decide whether re-submitting is safe
-    (``serialization_failure`` is the one re-submittable code)."""
+(``serialization_failure`` and ``deadlock_detected`` are the
+    re-submittable codes)."""
 
     code: str
     error: str
@@ -1277,7 +1284,13 @@ _AUDIT_ROW_OPTIONAL_KEYS = {
     "model_hash",
     "semantics_version",
     "drawn_subjects",
+    "audit_order",
+    "act_ordinal",
+    "ordered_at",
+    "operations",
 }
+
+_ORDERING_KEYS = ("audit_order", "act_ordinal", "ordered_at", "operations")
 
 
 def _parameters_of(data: _Fields) -> list[str] | None:
@@ -1336,12 +1349,70 @@ def _drawn_subjects_of(data: _Fields) -> list[str] | None:
 
 
 @dataclass(frozen=True)
+class Operation:
+    """One row operation a commit performed on the claims table: ``del``,
+    ``ins``, or ``noop`` (an insert that found the claim already present).
+    On the activation record's baseline, each insert names in
+    ``asserted_in`` the transition that admitted the claim."""
+
+    op: str
+    predicate: str
+    args: list[object]
+    asserted_in: str | None = None
+
+    @classmethod
+    def from_json(cls, payload: object) -> Operation:
+        data = _strict("audit operation", payload, {"op", "predicate", "args"}, {"asserted_in"})
+        return cls(
+            op=data.member("op", {"del", "ins", "noop"}),
+            predicate=data.text("predicate"),
+            args=data.array("args", _tagged_item),
+            asserted_in=data.optional_text("asserted_in"),
+        )
+
+
+@dataclass(frozen=True)
+class Ordering:
+    """A row's place in the log's canonical order and what its commit did:
+    the order its transaction drew, the act's place within it, the ordered
+    timestamp, and the operations. Rows from before the order existed
+    carry none, and come first."""
+
+    audit_order: int
+    act_ordinal: int
+    ordered_at: datetime
+    operations: list[Operation]
+
+
+def _ordering_of(data: _Fields) -> Ordering | None:
+    """The four ordering fields together or none, only on a row that also
+    records its draws."""
+    present = [key in data for key in _ORDERING_KEYS]
+    if not any(present):
+        return None
+    if not all(present):
+        raise EnvelopeError("an audit row carries some of its ordering fields but not all")
+    if "drawn_subjects" not in data:
+        raise EnvelopeError("an audit row carries an order without drawn subjects")
+    ordinal = data.integer("act_ordinal", minimum=0)
+    if ordinal > 0x7FFFFFFF:
+        raise data.fail("act_ordinal", "within the i32 range")
+    return Ordering(
+        audit_order=data.integer("audit_order", minimum=1),
+        act_ordinal=ordinal,
+        ordered_at=data.timestamp("ordered_at"),
+        operations=data.array("operations", Operation.from_json),
+    )
+
+
+@dataclass(frozen=True)
 class Attestation:
     """How the actor identity on an audit row was established. Gateway
     mode records which PostgreSQL-authenticated role asserted the
     actor; it proves who asserted, never that the named actor
-    authorised anything. Rows written before attestation existed
-    carry none."""
+    authorised anything. Migration mode records the role that ran the
+    migration that wrote the activation record, the one row that carries
+    it. Rows written before attestation existed carry none."""
 
     mode: str
     authenticated_by: str
@@ -1355,11 +1426,16 @@ class Attestation:
         data = _strict(
             "attestation", payload, {"mode", "authenticated_by"}, {"authenticated_by_oid"}
         )
-        data.constant("mode", "gateway")
+        mode = data.member("mode", {"gateway", "migration"})
+        oid = data.optional_integer("authenticated_by_oid", minimum=0)
+        if oid is not None and oid > 0xFFFFFFFF:
+            raise data.fail("authenticated_by_oid", "within the u32 range")
+        if mode == "migration" and oid is None:
+            raise data.fail("authenticated_by_oid", "present on a migration attestation")
         return cls(
-            mode="gateway",
+            mode=mode,
             authenticated_by=data.text("authenticated_by"),
-            authenticated_by_oid=data.optional_integer("authenticated_by_oid", minimum=0),
+            authenticated_by_oid=oid,
         )
 
 
@@ -1396,6 +1472,9 @@ class AuditRow:
     # The subjects the act drew from `new Subject()`, in draw order; empty
     # when it drew none. None on rows from before draws were recorded.
     drawn_subjects: list[str] | None = None
+    # The row's place in the canonical order and its commit's operations.
+    # None on rows from before the order existed.
+    ordering: Ordering | None = None
 
     @classmethod
     def from_json(cls, payload: object) -> AuditRow:
@@ -1416,6 +1495,7 @@ class AuditRow:
             model_hash=_model_hash_of(data),
             semantics_version=_semantics_version_of(data),
             drawn_subjects=_drawn_subjects_of(data),
+            ordering=_ordering_of(data),
         )
 
 
@@ -1451,6 +1531,9 @@ class AuditRowNamed:
     # The subjects the act drew from `new Subject()`, in draw order; empty
     # when it drew none. None on rows from before draws were recorded.
     drawn_subjects: list[str] | None = None
+    # The row's place in the canonical order and its commit's operations.
+    # None on rows from before the order existed.
+    ordering: Ordering | None = None
 
     @classmethod
     def from_json(cls, payload: object) -> AuditRowNamed:
@@ -1471,6 +1554,7 @@ class AuditRowNamed:
             model_hash=_model_hash_of(data),
             semantics_version=_semantics_version_of(data),
             drawn_subjects=_drawn_subjects_of(data),
+            ordering=_ordering_of(data),
         )
 
 
@@ -1954,6 +2038,236 @@ class ScoreReport:
         )
 
 
+
+
+def _non_empty(data: _Fields, key: str, items: list[_T]) -> list[_T]:
+    if not items:
+        raise data.fail(key, "a non-empty list (absent, never empty)")
+    return items
+
+_REHEARSAL_CLASSES = frozenset(
+    {"different_delta", "would_reject", "would_error", "unreplayable"}
+)
+_REHEARSAL_REFUSAL_KINDS = frozenset({"require", "bind", "invariant"})
+_REHEARSAL_UNREPLAYABLE = frozenset({"no_such_act", "arity", "draws"})
+
+
+@dataclass(frozen=True)
+class RehearsalEffect:
+    """What one admission changed against the prefix state, and what it
+    emitted, in order."""
+
+    asserted: list[ClaimInstance]
+    retracted: list[ClaimInstance]
+    emitted: list[IntentInstance]
+
+    @classmethod
+    def from_json(cls, payload: object) -> RehearsalEffect:
+        data = _strict("rehearsal effect", payload, {"asserted", "retracted", "emitted"})
+        return cls(
+            asserted=data.array("asserted", ClaimInstance.from_json),
+            retracted=data.array("retracted", ClaimInstance.from_json),
+            emitted=data.array("emitted", IntentInstance.from_json),
+        )
+
+
+@dataclass(frozen=True)
+class RehearsalRow:
+    """A recorded proposal the candidate does not decide the same way.
+    ``klass`` is ``different_delta`` (``recorded`` and ``candidate``
+    effects), ``would_reject`` (``rule``, ``kind``, ``witness`` absent when
+    no binding was pinned, ``compared`` when a comparison failed),
+    ``would_error`` (``error``) or ``unreplayable`` (``because``, one of
+    ``no_such_act``, ``arity`` and ``draws``, with the prose ``reason``).
+    ``model_hash`` is the programme that admitted the row and
+    ``semantics_version`` the semantics, each ``None`` on rows written
+    before it was recorded. A ``would_reject`` whose rule the admitting
+    programme did not have is a rule newer than the row, not the same
+    rule deciding differently."""
+
+    transition_id: str
+    transformation: str
+    klass: str
+    model_hash: str | None = None
+    semantics_version: int | None = None
+    recorded: RehearsalEffect | None = None
+    candidate: RehearsalEffect | None = None
+    rule: str | None = None
+    kind: str | None = None
+    witness: list[WitnessBinding] | None = None
+    compared: Compared | None = None
+    error: str | None = None
+    because: str | None = None
+    reason: str | None = None
+
+    @classmethod
+    def from_json(cls, payload: object) -> RehearsalRow:
+        base = {"transition_id", "transformation", "class"}
+        head = _strict("rehearsal row", payload, base, _REHEARSAL_ROW_OPTIONAL)
+        klass = head.member("class", _REHEARSAL_CLASSES)
+        required, optional = _REHEARSAL_ROW_SHAPES[klass]
+        data = _strict(
+            f"rehearsal row ({klass})",
+            payload,
+            base | required,
+            optional | {"model_hash", "semantics_version"},
+        )
+        return cls(
+            transition_id=data.text("transition_id"),
+            transformation=data.text("transformation"),
+            klass=klass,
+            model_hash=_hash(data, "model_hash") if "model_hash" in data else None,
+            semantics_version=data.optional_integer("semantics_version", minimum=1),
+            recorded=data.optional_nested("recorded", RehearsalEffect.from_json),
+            candidate=data.optional_nested("candidate", RehearsalEffect.from_json),
+            rule=data.optional_text("rule"),
+            kind=data.member("kind", _REHEARSAL_REFUSAL_KINDS) if "kind" in data else None,
+            witness=(
+                _non_empty(data, "witness", data.array("witness", WitnessBinding.from_json))
+                if "witness" in data
+                else None
+            ),
+            compared=data.optional_nested("compared", Compared.from_json),
+            error=data.optional_text("error"),
+            because=(
+                data.member("because", _REHEARSAL_UNREPLAYABLE) if "because" in data else None
+            ),
+            reason=data.optional_text("reason"),
+        )
+
+
+_REHEARSAL_ROW_SHAPES: dict[str, tuple[frozenset[str], frozenset[str]]] = {
+    "different_delta": (frozenset({"recorded", "candidate"}), frozenset()),
+    "would_reject": (frozenset({"rule", "kind"}), frozenset({"witness", "compared"})),
+    "would_error": (frozenset({"error"}), frozenset()),
+    "unreplayable": (frozenset({"because", "reason"}), frozenset()),
+}
+_REHEARSAL_ROW_OPTIONAL = frozenset(
+    {
+        "model_hash",
+        "semantics_version",
+        "recorded",
+        "candidate",
+        "rule",
+        "kind",
+        "witness",
+        "compared",
+        "error",
+        "because",
+        "reason",
+    }
+)
+
+
+@dataclass(frozen=True)
+class RuleRefusals:
+    """The proposals one rule refused first; a proposal that would break
+    several rules counts once, under the first."""
+
+    rule: str
+    kind: str
+    would_refuse: int
+    refused_transitions: list[str]
+
+    @classmethod
+    def from_json(cls, payload: object) -> RuleRefusals:
+        data = _strict(
+            "rule refusals", payload, {"rule", "kind", "would_refuse", "refused_transitions"}
+        )
+        return cls(
+            rule=data.text("rule"),
+            kind=data.member("kind", _REHEARSAL_REFUSAL_KINDS),
+            would_refuse=data.integer("would_refuse", minimum=0),
+            refused_transitions=data.texts("refused_transitions"),
+        )
+
+
+@dataclass(frozen=True)
+class RehearsalUnreplayable:
+    """The unreplayable rows by cause; the three sum to ``unreplayable``."""
+
+    no_such_act: int
+    arity: int
+    draws: int
+
+    @classmethod
+    def from_json(cls, payload: object) -> RehearsalUnreplayable:
+        keys = {"no_such_act", "arity", "draws"}
+        data = _strict("unreplayable totals", payload, keys)
+        return cls(**{k: data.integer(k, minimum=0) for k in keys})
+
+
+@dataclass(frozen=True)
+class RehearsalTotals:
+    same: int
+    different_delta: int
+    would_reject: int
+    would_error: int
+    unreplayable: int
+    unreplayable_because: RehearsalUnreplayable
+
+    @classmethod
+    def from_json(cls, payload: object) -> RehearsalTotals:
+        counts = {"same", "different_delta", "would_reject", "would_error", "unreplayable"}
+        data = _strict("rehearsal totals", payload, counts | {"unreplayable_because"})
+        return cls(
+            **{k: data.integer(k, minimum=0) for k in counts},
+            unreplayable_because=data.nested(
+                "unreplayable_because", RehearsalUnreplayable.from_json
+            ),
+        )
+
+
+@dataclass(frozen=True)
+class RehearsalReport:
+    """Every committed proposal re-decided under a candidate programme,
+    each against the state the audit rows before it build in canonical
+    order: ``contract`` names that, and it is not the snapshot a proposal
+    saw under concurrent writers. The log holds admitted history only, so
+    this says what the candidate would have refused, never what demand
+    there was. ``differences`` lists every row not decided the same way;
+    ``totals`` counts them all."""
+
+    rehearsal_format_version: int
+    contract: str
+    program: str
+    program_hash: str
+    semantics_version: int
+    transitions_replayed: int
+    totals: RehearsalTotals
+    refusals: list[RuleRefusals]
+    differences: list[RehearsalRow]
+
+    @classmethod
+    def from_json(cls, payload: object) -> RehearsalReport:
+        data = _strict(
+            "rehearsal report",
+            payload,
+            {
+                "rehearsal_format_version",
+                "contract",
+                "program",
+                "program_hash",
+                "semantics_version",
+                "transitions_replayed",
+                "totals",
+                "refusals",
+                "differences",
+            },
+        )
+        data.constant("contract", "canonical_audit_prefix_v1")
+        return cls(
+            rehearsal_format_version=data.integer("rehearsal_format_version", minimum=1),
+            contract=data.text("contract"),
+            program=data.text("program"),
+            program_hash=_hash(data, "program_hash"),
+            semantics_version=data.integer("semantics_version", minimum=1),
+            transitions_replayed=data.integer("transitions_replayed", minimum=0),
+            totals=data.nested("totals", RehearsalTotals.from_json),
+            refusals=data.array("refusals", RuleRefusals.from_json),
+            differences=data.array("differences", RehearsalRow.from_json),
+        )
+
 def version_skew(payload: object, expected: str) -> str | None:
     """The version the binary states in its envelope against the one this
     client was generated for, or ``None`` when they agree or the envelope
@@ -1981,9 +2295,10 @@ def predates_versioned_hash(payload: object) -> bool:
 
 @dataclass(frozen=True)
 class LeastPrivilege:
-    """The `--least-privilege` floor as applied: the two group roles,
-    plus the membership grants only the operator can decide."""
+    """The `--least-privilege` floor as applied: the group roles, plus
+    the membership grants only the operator can decide."""
 
+    executor_role: str
     next_steps: tuple[str, ...]
     reader_role: str
     writer_role: str
@@ -1991,9 +2306,12 @@ class LeastPrivilege:
     @classmethod
     def from_json(cls, payload: object) -> LeastPrivilege:
         data = _strict(
-            "least privilege", payload, {"next_steps", "reader_role", "writer_role"}
+            "least privilege",
+            payload,
+            {"executor_role", "next_steps", "reader_role", "writer_role"},
         )
         return cls(
+            executor_role=data.text("executor_role"),
             next_steps=tuple(data.texts("next_steps")),
             reader_role=data.text("reader_role"),
             writer_role=data.text("writer_role"),
@@ -2034,6 +2352,48 @@ class BelowBaseline:
 
 
 @dataclass(frozen=True)
+class ActivationPreflight:
+    """Where the staged migration's preparation stands, what its cutover
+    would cost, and what refuses it. Present while that migration is
+    pending."""
+
+    state: str
+    steps_done: list[str]
+    legacy_rows: int
+    # How many of them the saved frontier already holds.
+    legacy_rows_prepared: int
+    audit_bytes: int
+    live_claims: int
+    baseline_bytes: int
+    estimated_preparation_ms: int
+    estimated_writer_pause_ms: int
+    # Why the cutover is refused now; empty when it may proceed.
+    refusals: list[str]
+
+    @classmethod
+    def from_json(cls, payload: object) -> ActivationPreflight:
+        data = _strict(
+            "activation preflight",
+            payload,
+            {"state", "steps_done", "legacy_rows", "legacy_rows_prepared", "audit_bytes",
+             "live_claims", "baseline_bytes",
+             "estimated_preparation_ms", "estimated_writer_pause_ms", "refusals"},
+        )
+        return cls(
+            state=data.member("state", {"pending", "preparing", "ready"}),
+            steps_done=data.texts("steps_done"),
+            legacy_rows=data.integer("legacy_rows", minimum=0),
+            legacy_rows_prepared=data.integer("legacy_rows_prepared", minimum=0),
+            audit_bytes=data.integer("audit_bytes", minimum=0),
+            live_claims=data.integer("live_claims", minimum=0),
+            baseline_bytes=data.integer("baseline_bytes", minimum=0),
+            estimated_preparation_ms=data.integer("estimated_preparation_ms", minimum=0),
+            estimated_writer_pause_ms=data.integer("estimated_writer_pause_ms", minimum=0),
+            refusals=data.texts("refusals"),
+        )
+
+
+@dataclass(frozen=True)
 class MigrationReport:
     """What `migrate` found, and what it did about it."""
 
@@ -2048,6 +2408,9 @@ class MigrationReport:
     # Set only when the database is older than the baseline. Nothing is
     # pending then, since this binary can apply nothing to it.
     below_baseline: BelowBaseline | None = None
+    # Present while the staged migration is pending: its preparation state,
+    # the cutover's estimated cost, and what refuses it.
+    activation_preflight: ActivationPreflight | None = None
 
     @property
     def is_current(self) -> bool:
@@ -2064,7 +2427,7 @@ class MigrationReport:
             payload,
             {"recorded_version_before", "recorded_version_after", "binary_version",
              "applied", "pending"},
-            {"unknown", "below_baseline"},
+            {"unknown", "below_baseline", "activation_preflight"},
         )
         return cls(
             recorded_version_before=data.integer("recorded_version_before"),
@@ -2074,6 +2437,9 @@ class MigrationReport:
             pending=data.array("pending", MigrationRef.from_json),
             unknown=data.optional_array("unknown", MigrationRef.from_json),
             below_baseline=data.optional_nested("below_baseline", BelowBaseline.from_json),
+            activation_preflight=data.optional_nested(
+                "activation_preflight", ActivationPreflight.from_json
+            ),
         )
 
 
@@ -2324,6 +2690,35 @@ class RefreshDerivedReport:
         )
 
 
+@dataclass(frozen=True)
+class RefreshSnapshotsReport:
+    """What `refresh snapshots` kept: one snapshot after every `every`
+    rows of the audit log. A cache for as-of reads, never evidence;
+    `latest` is absent when none is kept."""
+
+    built: int
+    every: int
+    kept: int
+    removed: int
+    latest: str | None = None
+
+    @classmethod
+    def from_json(cls, payload: object) -> RefreshSnapshotsReport:
+        data = _strict(
+            "refresh snapshots report",
+            payload,
+            {"built", "every", "kept", "removed"},
+            {"latest"},
+        )
+        return cls(
+            built=data.integer("built", minimum=0),
+            every=data.integer("every", minimum=1),
+            kept=data.integer("kept", minimum=0),
+            removed=data.integer("removed", minimum=0),
+            latest=data.optional_text("latest"),
+        )
+
+
 # ------------------------------------------------------------
 # Tamper-evidence: verify / checkpoint / evidence pack.
 # ------------------------------------------------------------
@@ -2344,28 +2739,86 @@ class ReplayConsistent:
 
 
 @dataclass(frozen=True)
+class ReplayIndeterminate:
+    """Everything holds except the legacy history, written before the log
+    had one order: replayed from what it proposed, it does not reach the
+    activation baseline. Uncertainty about that history, not evidence of
+    tampering, and it does not pass. Each claim carries the transition
+    that side says admitted it, so a claim both sides hold but attribute
+    differently is in both lists."""
+
+    transitions: int
+    claims: int
+    legacy_only_in_baseline: list[ClaimRead]
+    legacy_only_in_replay: list[ClaimRead]
+
+    @classmethod
+    def from_json(cls, payload: object) -> ReplayIndeterminate:
+        data = _strict(
+            "indeterminate replay",
+            payload,
+            {
+                "status",
+                "transitions",
+                "claims",
+                "legacy_only_in_baseline",
+                "legacy_only_in_replay",
+            },
+        )
+        data.constant("status", "indeterminate")
+        return cls(
+            transitions=data.integer("transitions"),
+            claims=data.integer("claims"),
+            legacy_only_in_baseline=data.array("legacy_only_in_baseline", ClaimRead.from_json),
+            legacy_only_in_replay=data.array("legacy_only_in_replay", ClaimRead.from_json),
+        )
+
+
+@dataclass(frozen=True)
+class ReplayConflict:
+    """A row whose record contradicts the history before it or the
+    claims table."""
+
+    transition_id: str
+    detail: str
+
+    @classmethod
+    def from_json(cls, payload: object) -> ReplayConflict:
+        data = _strict("replay conflict", payload, {"transition_id", "detail"})
+        return cls(transition_id=data.text("transition_id"), detail=data.text("detail"))
+
+
+@dataclass(frozen=True)
 class ReplayDivergent:
-    """The claims table and the audit log disagree - evidence one was
-    edited out of band."""
+    """The claims table and the audit log disagree, or the log contradicts
+    itself - evidence one was edited out of band."""
 
     only_in_claims_table: list[ClaimInstance]
     only_in_replay: list[ClaimInstance]
+    conflicts: list[ReplayConflict]
 
     @classmethod
     def from_json(cls, payload: object) -> ReplayDivergent:
         data = _strict(
-            "divergent replay", payload, {"status", "only_in_claims_table", "only_in_replay"}
+            "divergent replay",
+            payload,
+            {"status", "only_in_claims_table", "only_in_replay", "conflicts"},
         )
         data.constant("status", "divergent")
         return cls(
             only_in_claims_table=data.array("only_in_claims_table", ClaimInstance.from_json),
             only_in_replay=data.array("only_in_replay", ClaimInstance.from_json),
+            conflicts=data.array("conflicts", ReplayConflict.from_json),
         )
 
 
-def parse_verify_outcome(payload: object) -> ReplayConsistent | ReplayDivergent:
-    parsers: dict[str, Callable[[object], ReplayConsistent | ReplayDivergent]] = {
+ReplayVerdict = ReplayConsistent | ReplayIndeterminate | ReplayDivergent
+
+
+def parse_verify_outcome(payload: object) -> ReplayVerdict:
+    parsers: dict[str, Callable[[object], ReplayVerdict]] = {
         "consistent": ReplayConsistent.from_json,
+        "indeterminate": ReplayIndeterminate.from_json,
         "divergent": ReplayDivergent.from_json,
     }
     return _by_status(payload, "a replay verdict", parsers)
@@ -2445,6 +2898,20 @@ class TreeMalformedPack:
     def from_json(cls, payload: object) -> TreeMalformedPack:
         data = _strict("malformed pack", payload, {"status", "detail"})
         data.constant("status", "malformed_pack")
+        return cls(detail=data.text("detail"))
+
+
+@dataclass(frozen=True)
+class TreeActivationFaulty:
+    """The activation's rows are not the shape the migration writes; the
+    tree is otherwise intact."""
+
+    detail: str
+
+    @classmethod
+    def from_json(cls, payload: object) -> TreeActivationFaulty:
+        data = _strict("activation faulty", payload, {"status", "detail"})
+        data.constant("status", "activation_faulty")
         return cls(detail=data.text("detail"))
 
 
@@ -2565,6 +3032,7 @@ TreeVerification = (
     | TreeChainBroken
     | TreeAnchorMismatch
     | TreeMalformedPack
+    | TreeActivationFaulty
     | TreeUnsupportedPack
     | TreeSignatureInvalid
     | TreeUnauthorizedKey
@@ -2582,6 +3050,7 @@ def parse_tree_verification(payload: object) -> TreeVerification:
         "chain_broken": TreeChainBroken.from_json,
         "anchor_mismatch": TreeAnchorMismatch.from_json,
         "malformed_pack": TreeMalformedPack.from_json,
+        "activation_faulty": TreeActivationFaulty.from_json,
         "unsupported_pack": TreeUnsupportedPack.from_json,
         "signature_invalid": TreeSignatureInvalid.from_json,
         "unauthorized_key": TreeUnauthorizedKey.from_json,
@@ -2815,7 +3284,7 @@ class VerifyReport:
     no witness judged invalid. Read it rather than re-deriving the rule."""
 
     passes: bool
-    replay: ReplayConsistent | ReplayDivergent
+    replay: ReplayVerdict
     tree: TreeVerification
     role_rebindings: RoleRebindings
     views: ViewsVerification | None = None

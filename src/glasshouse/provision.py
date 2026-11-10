@@ -6,8 +6,7 @@ initialise the governed schema if absent (`init --skip-if-exists`),
 bring that governed schema up to the binary's own version (`migrate`),
 reconcile the managed indexes and planner statistics the programme's
 keyed loads and compiled checks seek through (`provision indexes
---prune`), apply the sealed
-inspection views, and prove the audit tail can be read at all. This is
+--prune`) and apply the sealed inspection views. This is
 the web service's pre-deploy command (DESIGN section 13: migrations and
 the Morpholog bootstrap run in a pre-deploy step, never at app startup)
 and is safe to run on every deploy: both migrations no-op when current,
@@ -15,22 +14,17 @@ the init skips an existing schema, the index plan keeps what is already
 right, and the committed view script re-applies and re-seals.
 
 `--least-privilege` passes the upstream provisioning floor through
-(reader/writer group roles; the report names the membership grants only
+(reader, writer and executor group roles; the report names the membership grants only
 the operator can decide - printed, never executed). It needs CREATEROLE
 on the connecting role, which managed hosts may not grant; the flag is
 off by default and adopted deliberately per host.
 
-The tail check earns its place from a real outage. On managed
-PostgreSQL the platform's hidden sessions make the audit tail's resume
-horizon uncomputable unless the writing roles are asserted
-(`GLASSHOUSE_AUDIT_WRITER_ROLES`); misconfigured, everything that reads
-the ledger refuses - the projector, `seed`, `verify` - while the service
-itself comes up healthy and serves stale reads until someone notices.
-Reading one tail here turns that into a FAILED DEPLOY carrying the
-substrate's own remedy, which is where a configuration error belongs.
-The deliberate trade: a transient refusal now blocks a deploy rather
-than degrading a running demo. That is the right way round - the deploy
-is watched, 02:30 is not.
+There is no tail check any more. Until v0.0.17 the last step read one
+audit tail, because on managed PostgreSQL a missing writer-role
+assertion left the resume horizon uncomputable and everything that read
+the ledger refused while the service came up healthy. The horizon now
+reads the lock table and needs no assertion (morpholog#632), so there is
+no configuration left for that read to prove.
 
 This module never prints; the CLI renders the report and turns
 `ProvisionError` into stderr plus exit 1.
@@ -200,7 +194,8 @@ class ProvisionReport:
         if self.least_privilege is not None:
             floor = self.least_privilege
             lines.append(
-                f"least-privilege floor: reader {floor.reader_role}, writer {floor.writer_role}"
+                f"least-privilege floor: reader {floor.reader_role}, writer {floor.writer_role}, "
+                f"executor {floor.executor_role}"
             )
             lines.extend(f"  next: {step}" for step in floor.next_steps)
         return "\n".join(lines)
@@ -210,16 +205,13 @@ def run_provision(
     database_url: str,
     *,
     least_privilege: bool = False,
-    writer_roles: list[str] | None = None,
 ) -> ProvisionReport:
     """The whole operation, in dependency order: app schema first (the
     migration owns the TimescaleDB extension), then the governed schema,
     then the programme checked against the claims it holds, then the
-    managed indexes, then the inspection views over it, then one audit
-    tail read to prove the ledger is readable with this deployment's
-    configuration."""
+    managed indexes, then the inspection views over it."""
     command.upgrade(alembic_config(database_url), "head")
-    client = GlasshouseClient(str(MODEL_FILE), database_url, writer_roles=writer_roles)
+    client = GlasshouseClient(str(MODEL_FILE), database_url)
     init_report = client.init(skip_if_exists=True, least_privilege=least_privilege)
     # `init` provisions but never alters, so a governed schema laid down by
     # an older binary stays behind it forever - and since v0.0.8 the binary
@@ -243,11 +235,6 @@ def run_provision(
         apply_views(engine)
     finally:
         engine.dispose()
-    # An empty tail is a lawful answer, so this costs nothing on a fresh
-    # database; what it refuses is a deployment that cannot read the
-    # ledger at all. The substrate's message names the remedy, so it is
-    # carried through rather than summarised.
-    client.audit()
     return ProvisionReport(
         governed=init_report.status,
         least_privilege=init_report.least_privilege,

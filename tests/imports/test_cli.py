@@ -109,7 +109,9 @@ def test_a_refused_setting_is_a_clean_exit_not_a_traceback(
     # to escape as a raw ValidationError traceback from the logging setup
     # before any command ran - which also meant the offline forensic
     # commands could be blocked by a variable they never read.
-    monkeypatch.setenv("GLASSHOUSE_AUDIT_WRITER_ROLES", "[broken")
-    code = cli.main(["project", "--database-url", "postgres:///x"])
+    # No --database-url: the command reads its database from settings,
+    # and settings refuse an environment they do not know.
+    monkeypatch.setenv("GLASSHOUSE_ENVIRONMENT", "staging")
+    code = cli.main(["project"])
     assert code == 1
     assert "error:" in capsys.readouterr().err

@@ -2,14 +2,15 @@
 
 The transition log arrives through the blessed tail (`inspect audit
 --named` via the generated client - the surface this projector forced
-upstream as morpholog#136): committed transitions in `(committed_at,
-transition_id)` order, resumed losslessly with `--after`, their claims
-keyed by declared field rather than position. Lossless is
-the binary's guarantee, not ours: `committed_at` is the writer's
-transaction START instant while visibility follows commit order, so a
+upstream as morpholog#136): committed transitions in the one audit
+order (`audit_order`, then the act within its transaction; v0.0.17),
+resumed losslessly with `--after`, their claims keyed by declared field
+rather than position. Lossless is the binary's guarantee, not ours:
+order numbers are drawn in sequence but commits land in any order, so a
 naive cursor over the raw table can skip a slow writer's transition
-forever - the tail computes the resume horizon before snapshotting, and
-rows it withholds surface on the next call.
+forever - the tail reads the lowest order a writer still holds before
+snapshotting, emits nothing at or above it, and the rows it withholds
+surface on the next call.
 
 Each fetched page's effects and the cursor advance happen in one
 app-schema transaction under an advisory lock, so application is
@@ -652,12 +653,7 @@ def rebuild(client: GlasshouseClient, engine: sa.Engine) -> int:
     projector can never interleave with a half-rebuilt world (an
     unlocked wipe once let a live page advance the cursor to the tip
     over freshly emptied tables - permanent divergence), and the replay
-    is deterministic for a verify that runs immediately after (a
-    two-step wipe-then-catch-up could be blinded by a lock-waiting
-    transaction pinning the audit tail's resume horizon). The tail is
-    fetched inside the open transaction: every transition to replay
-    committed before this transaction began, so the horizon never
-    withholds them."""
+    is deterministic for a verify that runs immediately after."""
     log.warning("projector.rebuild_started")
     with engine.begin() as connection:
         connection.execute(

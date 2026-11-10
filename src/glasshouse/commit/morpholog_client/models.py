@@ -151,25 +151,6 @@ class SetPositionLimitRequest:
 
 
 @dataclass(frozen=True)
-class ChangePositionLimitRequest:
-    """Arguments for `change_position_limit`."""
-
-    TRANSFORMATION: ClassVar[str] = "change_position_limit"
-
-    org: str
-    book: str
-    cap: Decimal
-    # amount in MW (the declaration carries the unit)
-
-    def to_args_named(self) -> dict[str, object]:
-        return {
-            "org": values.encode_named(self.org),
-            "book": values.encode_named(self.book),
-            "cap": values.encode_named(self.cap),
-        }
-
-
-@dataclass(frozen=True)
 class CaptureTradeRequest:
     """Arguments for `capture_trade`."""
 
@@ -369,24 +350,6 @@ class MayValueTradeClaim:
 
 
 @dataclass(frozen=True)
-class MayGrantAuthorityClaim:
-    """One admitted `MayGrantAuthority` claim, decoded by declared kind."""
-
-    PREDICATE: ClassVar[str] = "MayGrantAuthority"
-
-    actor: str
-    org: str
-
-    @classmethod
-    def from_named(cls, args: dict[str, object]) -> MayGrantAuthorityClaim:
-        values.named_fields("MayGrantAuthority", args, ("actor", "org"))
-        return cls(
-            actor=values.named_text("MayGrantAuthority.actor", args["actor"]),
-            org=values.named_text("MayGrantAuthority.org", args["org"]),
-        )
-
-
-@dataclass(frozen=True)
 class MaySetLimitClaim:
     """One admitted `MaySetLimit` claim, decoded by declared kind."""
 
@@ -401,6 +364,24 @@ class MaySetLimitClaim:
         return cls(
             actor=values.named_text("MaySetLimit.actor", args["actor"]),
             org=values.named_text("MaySetLimit.org", args["org"]),
+        )
+
+
+@dataclass(frozen=True)
+class MayGrantAuthorityClaim:
+    """One admitted `MayGrantAuthority` claim, decoded by declared kind."""
+
+    PREDICATE: ClassVar[str] = "MayGrantAuthority"
+
+    actor: str
+    org: str
+
+    @classmethod
+    def from_named(cls, args: dict[str, object]) -> MayGrantAuthorityClaim:
+        values.named_fields("MayGrantAuthority", args, ("actor", "org"))
+        return cls(
+            actor=values.named_text("MayGrantAuthority.actor", args["actor"]),
+            org=values.named_text("MayGrantAuthority.org", args["org"]),
         )
 
 

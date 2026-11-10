@@ -12,6 +12,7 @@ terms left out of the sum.
 
 import datetime as dt
 import subprocess
+from dataclasses import replace
 from decimal import Decimal
 
 import pytest
@@ -146,7 +147,7 @@ def test_the_cap_holds_in_every_hour_then_changes_then_caps_the_amendment(
 
     # The cap changed: the old one stays in the log, the new one governs.
     changed = ledger.submit(
-        models.ChangePositionLimitRequest(org=ORG, book=CAPPED, cap=Decimal("20")), actor="risk"
+        models.SetPositionLimitRequest(org=ORG, book=CAPPED, cap=Decimal("20")), actor="risk"
     )
     assert isinstance(changed, Committed), changed
     assert [c.predicate for c in changed.retracted_claims] == ["PositionLimit"]
@@ -155,14 +156,21 @@ def test_the_cap_holds_in_every_hour_then_changes_then_caps_the_amendment(
     assert isinstance(
         ledger.submit(_capture("L-002", "buy", "5", 10, 14), actor="alice"), Committed
     )
-    (standing,) = ledger.read(models.PositionLimitClaim)
+    # This book's cap only: the CLI test caps a book of its own on the
+    # same ledger, and the order is shuffled.
+    (standing,) = [
+        limit for limit in ledger.read(models.PositionLimitClaim) if limit.book == CAPPED
+    ]
     assert standing.cap == Decimal("20")
-    # A second set is refused: changing is the other act.
+    # Setting the cap it already has changes nothing: the retract and
+    # the admit cancel, and one cap still stands.
     again = ledger.submit(
-        models.SetPositionLimitRequest(org=ORG, book=CAPPED, cap=Decimal("30")), actor="risk"
+        models.SetPositionLimitRequest(org=ORG, book=CAPPED, cap=Decimal("20")), actor="risk"
     )
-    assert isinstance(again, Rejected)
-    assert again.rule == "limit_is_new"
+    assert isinstance(again, Committed), again
+    assert [
+        limit.cap for limit in ledger.read(models.PositionLimitClaim) if limit.book == CAPPED
+    ] == [Decimal("20")]
 
     # An amendment under the 20 MW cap, the amended trade left out.
     # Under the 20 MW cap, hours 10-11 hold 8 (L-001) - 5 (L-003) + 5
@@ -190,6 +198,26 @@ def test_the_cap_holds_in_every_hour_then_changes_then_caps_the_amendment(
     )
     fits = ledger.submit(amend("L-002/v2", "17"), actor="alice")
     assert isinstance(fits, Committed), fits
+
+    # The gate sums the terms in force on the proposal's own date, one
+    # version per trade (the organisation-keyed definition must name the
+    # version the generated selector would). Hours 10-11 now hold 20 MW
+    # from the day v2 takes effect and still 8 MW the day before, so the
+    # same hour refuses 1 MW more on the later date and 13 MW, not 12, on
+    # the earlier. Refusals only: nothing here moves the book.
+    later = replace(
+        _capture("L-006", "buy", "1", 10, 11), trade_date=TRADE_DATE + dt.timedelta(days=1)
+    )
+    refused_later = ledger.submit(later, actor="alice", explain_on_reject=True)
+    assert _refusal(refused_later).rule == "hour_within_limit"
+    assert "21 MW <= 20 MW does not hold" in why(
+        refused_later.explanation  # type: ignore[union-attr]
+    )
+    earlier = ledger.submit(
+        _capture("L-007", "buy", "13", 10, 11), actor="alice", explain_on_reject=True
+    )
+    assert _refusal(earlier).rule == "hour_within_limit"
+    assert "21 MW <= 20 MW does not hold" in why(earlier.explanation)  # type: ignore[union-attr]
 
 
 def test_the_window_is_bounded_and_whole_hours(ledger: GlasshouseClient) -> None:

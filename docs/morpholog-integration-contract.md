@@ -552,3 +552,52 @@ A book with no cap is uncapped: the outer quantifier ranges over nothing and the
 **Cost, stated.** The gate runs two keyed sums per hour of the window per cap: trivial for the demo's day-ahead blocks, about 8,800 sums for a calendar-year baseload. That is the price of a gate that is right in every hour; the invariant form (#606) is where upstream takes the work, and the compiled checks' statistics objects (section 27) are what keep each sum a seek.
 
 **Not covered, on purpose, and named for the next pass:** quarter-hour products (the same grid with `PT15M`), a cap on the Positions screen beside the net per hour (the read side of this rule), the breach raised when a cap is lowered under open trades, and a per-counterparty or per-market cap (another predicate, the same gate shape). Nothing to file upstream from this pass: the grid did what its note says, the one checker refusal (`book` matched by two requires) named its remedy.
+
+## 34. One audit order, the writer-role assertion gone, and the limit gate read by organisation: pin **v0.0.16** → **v0.0.18**, 10/11/2026, model change
+
+Two releases in one pass (v0.0.17 and v0.0.18, 56 merges). The brief was to take what they offer and see what could be simplified, so this section is mostly a list of things removed.
+
+**The pin.** `scripts/install-morpholog.sh` names v0.0.18 with the three published checksums (fetched, not transcribed). `check --verbose` says `invariant checks: compiled`, `invariant cases: all bound`; `check --strict` is clean after the respelling below. Client and views regenerated. Semantics version 5.
+
+**Removed: the writer-role assertion (v0.0.17, morpholog#632).** The audit tail's resume point is now the lowest audit order a writer still in flight holds under an advisory lock, read from the lock table. It needs no view of other sessions, so managed PostgreSQL needs no assertion of who writes, and `--writer-role` is gone from the binary. Gone with it here: the three `@override`s in `client.py` and the `writer_roles` constructor argument, `GLASSHOUSE_AUDIT_WRITER_ROLES` (the setting, its comma-or-JSON parser and its tests, both entries in `render.yaml`), the argument on `run_provision`, and `tests/test_config.py` whole. `client.py` is now binary discovery, the first-use check, `read` and `write_checkpoint`. A deployment that still sets the variable is unaffected: nothing reads it.
+
+**Removed: the tail read at the end of `provision`.** It existed to turn a missing assertion into a failed deploy. There is no configuration left for it to prove.
+
+**Removed: the telemetry switch.** Section 31's false green came from the old horizon: any open transaction in the database, a TimescaleDB background worker included, withheld every younger audit row. An idle transaction holds no audit order, so it no longer withholds anything. `TIMESCALEDB_TELEMETRY=off` is gone from compose, CI and the canary. The live test that proved the old failure (`test_a_tail_held_short_fails_the_seed_by_name`) is inverted into the test that pins the new behaviour: a transaction held open across a whole seed, and the seed projects everything and verifies. The seed keeps its completeness check (`project_everything`, `VerifyReport.caught_up`): a writer in flight still delays the tail, and a stuck one or an unresolved prepared transaction still holds it. The refusal now says that, and no longer lists `pg_stat_activity` rows that cannot be the cause.
+
+**The model change.** MODEL_HASH `sha256:cece3f72…` → `sha256:6abb3f16…` (16 predicates, 3 definitions, 19 invariants, 13 transformations). Four things, all in the limits rule of section 33:
+
+- *The gate reads one organisation's terms, not every organisation's.* `check -v` now lists body reads that load a predicate whole (morpholog#396), and it listed ours: `capture_trade reads TradeTerms whole: statement 8 hour_within_limit, through trade_terms_in_force_on`. The generated selector is keyed by trade, and the gate meets its trades as it runs, so the read was the whole predicate and any two captures on one ledger conflicted. `org_terms_in_force_on(org, as_of, trade, quantity, delivery_start, delivery_end)` is the same selection written by hand and keyed by the organisation, which the act knows before it runs. After: `body reads: 1 whole`, and that one is `establish_ledger`'s `ledger_is_new`, which runs once.
+- *The cap check is one definition.* `hour_is_within_cap(org, book, as_of, amended, signed_quantity, h, cap)` holds the two sums; `capture_trade` and `amend_trade` each call it under the same `forall cap ... forall h in hours`. The signed quantity is bound by a `let` first, because a definition's arguments are names, not expressions. The refusal reads as before (`21 MW <= 20 MW does not hold (h = …)`).
+- *One act sets or replaces a cap.* v0.0.17's `BindOnlyToRetract` hint fired on `change_position_limit` and failed `check --strict`. The pattern retract it points to, `retract PositionLimit(org: org, book: book, ..)`, is a no-op when nothing matches, which makes the second act unnecessary: `set_position_limit` retracts whatever stands and admits the new cap. `change_position_limit`, `limit_is_new` and the CLI's read-then-pick are gone; `set-limit` still reads the standing cap, only to print what stood, and now matches it by organisation as well as book.
+- *The comments were rewritten* for a reader who has not met Morpholog: a short key to the keywords, plain sentences, no issue numbers. Their stories are in this document. 411 lines became 306.
+
+**Measured: the keyed read is worth 7x on the classroom burst.** `scripts/classroom_load.py burst`, twenty organisations at once on the 11,003-claim fixture (restored fresh for every run, migrated by the burst's own `provision`), v0.0.18 both sides, three runs each. The control is the same programme with `org_terms_in_force_on` defined as a call to the generated selector, which `check -v` confirms reads `TradeTerms` whole.
+
+| limit gate reads terms | retries per commit | commits per second | gave up (of 520) | relation SIRead on claims present |
+|---|---|---|---|---|
+| through the generated selector (as merged in #98) | 2.88, 2.93, 3.35 | 9.4, 9.5, 9.9 | 4 to 8 | 0.81 to 0.83 |
+| keyed by organisation (this section) | 0.41, 0.42, 0.43 | 23.0, 23.9, 24.9 | 0 | 0.33 to 0.39 |
+
+Section 32's baseline (0.33 to 0.35 on v0.0.16) was taken before the limit gate existed. So #98 cost the workload about nine times its retries, nothing in our gates showed it, and this pass takes it back to within a quarter of the pre-limits figure. This is the embedder upstream's design history describes under "Naming the reads that load a predicate whole".
+
+**Adopted: `rehearse` in the rule-changes gate (v0.0.17, morpholog#521).** `evaluate` scores invariants only, and section 30 said so: "a tightened gate still needs its own test". `rehearse(pack=)` re-decides every recorded proposal through the ordinary kernel under the candidate. Over the 972e70fd fixture (format 17, still read): 32 replayed, 22 `same`, 10 `would_reject`, all by `may_grant_authority`, which is section 30's armed root refusing the grants an unestablished root made. That is pinned exactly, with zero `different_delta`, zero `would_error` (the exact-arithmetic check v0.0.17's notes ask every embedder to run) and zero `unreplayable`. A gate tightened by accident now fails a test by rule name.
+
+**`glasshouse verify` reads the new verdicts.** The ledger leg names `indeterminate` as what it is (a pre-order history that does not replay to the migration's baseline: not a pass, not evidence of an edit) and carries the first of a divergent replay's `conflicts`. The least-privilege report prints the executor role beside reader and writer.
+
+**Migration, rehearsed.** The 11,003-claim v0.0.16 fixture (6,001 audit rows): `migrate --check` reports 026 to 030 pending with an `activation_preflight` (estimated writer pause 186 ms, no refusals); `migrate` applied all five in 1.4 s; `audit verify` consistent over 6,004 rows (the history plus two `morpholog.baseline` chunks and one `morpholog.activate`), tree intact. The control rows reach the named tail with empty `asserted_claims` and `retracted_claims`, so the projector's fold passes them as it passes a grant: `project` applied all 6,525 rows of the migrated, burst-loaded ledger and `verify`'s ledger, tree, projections and payloads legs passed (the views leg was outside this rehearsal: the database still carried the control programme's views). A v0.0.16 database can therefore migrate in one step with this binary. The demo does not need to: the model changed, so it takes the model-change order and `seed --reset` re-initialises.
+
+**Surveyed and not adopted, each with its reason.**
+
+- `decided_at` (v0.0.18): no act here takes an instant from its caller. `trade_date` and `effective_from` are business dates a desk legitimately backdates (an import of last week's trades). The governed business date is glasshouse#44.
+- `morpholog serve` and presenters, the executor role: the first belongs with per-service credentials (glasshouse#85), the second with the outbox (glasshouse#81). Neither exists here yet.
+- `refresh snapshots`: makes as-of reads fast on a long record. Nothing reads as-of at scale until glasshouse#41; the demo's record is 38 rows.
+- As-of by timestamp on the settled order: `GlasshouseClient.read(as_of=)` already passes one through. #41 will use it and must run against the primary.
+- `generate local-days` / `business-days`: calendar claims, with #44.
+- `migrate --prepare`: for a database too large to pause for the whole migration. Ours pause for a second.
+- `deadlock_detected`: nothing to do. The import report prints the code it is given, and the load harness already retries on the client's `retriable`.
+- The invariant form of the cap (morpholog#606): not in either release ("the generated grid stays in transformation bodies"). The gate stays a gate.
+
+**Friction for upstream (recorded, not filed).** One item, small: a definition call takes names only, so `hour_is_within_cap(..., if(direction = #buy, quantity, 0 MW - quantity), ...)` is a parse error (`found '(' expected ':', ',', or ')'`) that does not say an argument must be a name. A `let` before the call is the answer; the message could say so.
+
+**Counts.** Pure 258 passed / 96 skipped, live 354 passed, coverage gate held.

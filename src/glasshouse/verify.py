@@ -54,6 +54,7 @@ from glasshouse.commit import (
 from glasshouse.commit.morpholog_client import MORPHOLOG_VERSION
 from glasshouse.commit.morpholog_client.envelopes import (
     ReplayConsistent,
+    ReplayIndeterminate,
     RoleRebindingsEvaluated,
     TreeIntact,
     ViewsIntact,
@@ -177,11 +178,28 @@ def _ledger_leg(report: LedgerVerifyReport) -> Leg:
             True,
             f"{replay.transitions} transition(s) replay to {replay.claims} claim(s)",
         )
+    if isinstance(replay, ReplayIndeterminate):
+        # A history written before the log had one order (a database
+        # migrated across v0.0.17) whose replay does not reach the
+        # baseline the migration recorded: two writers overlapping back
+        # then can lawfully cause it. Not evidence of an edit, and not a
+        # pass either; named as what it is.
+        return Leg(
+            "ledger",
+            False,
+            f"indeterminate, not divergent: the history from before the audit order does not "
+            f"replay to the migration's baseline ({len(replay.legacy_only_in_baseline)} claim(s) "
+            f"only in the baseline, {len(replay.legacy_only_in_replay)} only in the replay)",
+        )
+    # The conflicts are what to read first (a delete of a claim the
+    # history never held, say), so the first one is carried by name.
+    first = f"; first conflict: {replay.conflicts[0].detail}" if replay.conflicts else ""
     return Leg(
         "ledger",
         False,
         f"{len(replay.only_in_claims_table)} claim(s) only in the claims table, "
-        f"{len(replay.only_in_replay)} only in the replay",
+        f"{len(replay.only_in_replay)} only in the replay, "
+        f"{len(replay.conflicts)} conflict(s) in the log{first}",
     )
 
 
@@ -305,7 +323,7 @@ def _projection_leg(
     # prefix once read as a clean bill of health while the projections
     # held nothing at all (contract section 31). The ledger's count is
     # the replay `audit verify` ran over the table itself, which no
-    # resume horizon can shorten.
+    # writer in flight can shorten.
     lag = ""
     if ledger_transitions is not None:
         lag = f"; {replayed.transitions} of {ledger_transitions} transition(s) projected" + (
