@@ -25,7 +25,7 @@ def engine() -> sa.Engine:
 
 def test_position_hour_is_a_hypertable(engine: sa.Engine) -> None:
     with engine.connect() as connection:
-        name = connection.execute(
+        name: str | None = connection.execute(
             sa.text(
                 "SELECT hypertable_name FROM timescaledb_information.hypertables "
                 "WHERE hypertable_name = 'position_hour'"
@@ -33,7 +33,7 @@ def test_position_hour_is_a_hypertable(engine: sa.Engine) -> None:
         ).scalar_one_or_none()
         # Partitioned on the delivery hour - the column the period-windowed
         # /positions read prunes by.
-        dimension = connection.execute(
+        dimension: str | None = connection.execute(
             sa.text(
                 "SELECT column_name FROM timescaledb_information.dimensions "
                 "WHERE hypertable_name = 'position_hour'"
