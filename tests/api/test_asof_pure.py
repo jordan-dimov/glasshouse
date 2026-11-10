@@ -114,7 +114,7 @@ def test_a_window_bound_with_no_offset_is_utc_and_an_offset_is_converted() -> No
     # The live path compares in the database; this one in Python, where a
     # naive bound against a stored instant is a TypeError. Both now take
     # the bound through `as_utc` first.
-    naive = dt.datetime(2026, 7, 1, 1)  # noqa: DTZ001  the case under test
+    naive = dt.datetime(2026, 7, 1, 1)  # noqa: DTZ001 - under test
     offset = dt.datetime(2026, 7, 1, 4, tzinfo=dt.timezone(dt.timedelta(hours=2)))  # 02:00 UTC
     rows = asof.positions(
         PAST,

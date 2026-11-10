@@ -1,7 +1,7 @@
 """The provision command's deterministic legs: the report renders
 stably (with and without the least-privilege floor), the missing-bundle
-preflight refuses before any database work, and the CLI threads its
-flag and this deployment's writer-role assertion through.
+preflight refuses before any database work, the CLI threads its flag
+through, and a misfit programme or an index conflict fails the deploy.
 """
 
 import json

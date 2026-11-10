@@ -17,6 +17,7 @@ from glasshouse.projections.projector import (
     Amendment,
     BlotterRow,
     Capture,
+    PositionDelta,
     advance_row,
     open_row,
     terms_delta,
@@ -80,7 +81,9 @@ def supersedes(new_version: str, prior_version: str) -> envelopes.NamedClaim:
     )
 
 
-def _opened(fold_claims: list[envelopes.NamedClaim]) -> tuple[BlotterRow, tuple]:  # type: ignore[type-arg]
+def _opened(
+    fold_claims: list[envelopes.NamedClaim],
+) -> tuple[BlotterRow, tuple[PositionDelta, ...]]:
     (capture,) = fold_transition(fold_claims, []).captures
     return open_row(capture, T0, "tid-1", "alice")
 

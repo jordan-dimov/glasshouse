@@ -46,8 +46,7 @@ class NamedClaimModel(Protocol):
     PREDICATE: ClassVar[str]
 
     @classmethod
-    def from_named(cls, args: dict) -> Self:  # type: ignore[type-arg]
-        ...
+    def from_named(cls, args: dict[str, object]) -> Self: ...
 
 
 class GlasshouseClient(Morpholog):

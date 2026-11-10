@@ -9,6 +9,7 @@ import base64
 import datetime as dt
 from decimal import Decimal
 
+import httpx2 as httpx
 import pytest
 import sqlalchemy as sa
 from fastapi.testclient import TestClient
@@ -51,7 +52,7 @@ def ui(seeded: sa.Engine, monkeypatch: pytest.MonkeyPatch) -> TestClient:
     return TestClient(create_app())
 
 
-def _post(client: TestClient, path: str, csv: str, **form: str):  # type: ignore[no-untyped-def]
+def _post(client: TestClient, path: str, csv: str, **form: str) -> httpx.Response:
     data = {"org": ORG, "kind": "trades", "actor": "alice", **form}
     if path.endswith("preview"):
         return client.post(
