@@ -17,7 +17,6 @@ from __future__ import annotations
 
 import base64
 import binascii
-import datetime as dt
 import tempfile
 from pathlib import Path
 from typing import Annotated, Any
@@ -92,38 +91,34 @@ def unavailable_page(request: Request) -> Response:
     )
 
 
-def _utc_instant(raw: str | None) -> dt.datetime | None:
-    """A `datetime-local` value carries no offset; the filter fields are
-    labelled UTC, so the instant is *defined* as UTC here and nothing
-    naive passes this boundary (law 9). An aware value (a hand-crafted
-    query string) is converted, not refused."""
-    if not raw:
-        return None
-    parsed = dt.datetime.fromisoformat(raw)
-    if parsed.tzinfo is None:
-        return parsed.replace(tzinfo=dt.UTC)
-    return parsed.astimezone(dt.UTC)
-
-
 def _past(
     request: Request, client: GlasshouseClient, org: str, active: str, raw: str | None
 ) -> asof.Snapshot | Response | None:
     """The screen's as-of mode from its `as_of` query value: None for the
-    present, the snapshot for a past instant, or the 422 page for a value
-    that is not an instant or not yet history. Database-free on the error
+    present, the snapshot for a past instant, the 422 page for a value
+    that is not an instant or not yet history, or the 409 page for an
+    instant whose history can still change. Database-free on the 422
     path, like the filter check on the positions screen."""
+    context: dict[str, Any] = {"org": org, "active": active}
     try:
         at = asof.parse_instant(raw)
         return None if at is None else asof.snapshot(client, at)
     except ValueError as refused:
-        context: dict[str, Any] = {
-            "org": org,
-            "active": active,
+        context |= {
             "title": "Check the as-of time",
             "message": f"As-of viewing shows the book at a past moment: {refused}. "
             "The time must look like 2026-07-01T10:00 and is read as a UTC instant.",
         }
         return templates.TemplateResponse(request, "error.html", context, status_code=422)
+    except asof.NotSettledError as unsettled:
+        context |= {
+            "title": "That moment is not final yet",
+            "message": f"{str(unsettled).capitalize()}. Reload in a moment, or pick "
+            "an earlier time.",
+        }
+        return templates.TemplateResponse(
+            request, "error.html", context, status_code=409, headers={"Retry-After": "1"}
+        )
 
 
 def _chrome(engine: sa.Engine, org: str, active: str) -> dict[str, Any]:
@@ -188,7 +183,7 @@ def blotter(
     )
     context: dict[str, Any] = {
         "org": org,
-        "as_of": as_of or "",
+        "as_of": asof.canonical(past.at) if past else "",
         "book": book,
         "market": market,
         "trades": rows[:PAGE_SIZE],
@@ -703,7 +698,7 @@ def positions(
         return past
     book, market = book or None, market or None
     try:
-        start_at, end_at = _utc_instant(start), _utc_instant(end)
+        start_at, end_at = asof.parse_instant(start), asof.parse_instant(end)
     except ValueError:
         # Database-free on purpose (no chrome query): a malformed filter
         # is a 422 whatever state the read model is in.
@@ -720,7 +715,7 @@ def positions(
         "market": market,
         "start": start or "",
         "end": end or "",
-        "as_of": as_of or "",
+        "as_of": asof.canonical(past.at) if past else "",
         "positions": queries.list_positions(
             engine, org=org, book=book, market=market, start=start_at, end=end_at, past=past
         ),

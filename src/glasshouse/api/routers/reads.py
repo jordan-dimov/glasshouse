@@ -23,7 +23,7 @@ from typing import Annotated
 
 from fastapi import APIRouter, HTTPException, Query
 
-from glasshouse.api import queries
+from glasshouse.api import asof, queries
 from glasshouse.api.deps import EngineDep, PastDep
 from glasshouse.api.schemas import (
     BlotterTrade,
@@ -82,12 +82,24 @@ def list_positions(
     engine: EngineDep,
     book: str | None = None,
     market: str | None = None,
-    start: Annotated[datetime | None, Query(description="period_start >= start (UTC)")] = None,
-    end: Annotated[datetime | None, Query(description="period_start < end (UTC)")] = None,
+    start: Annotated[
+        datetime | None, Query(description="period_start >= start (no offset means UTC)")
+    ] = None,
+    end: Annotated[
+        datetime | None, Query(description="period_start < end (no offset means UTC)")
+    ] = None,
     past: PastDep = None,
 ) -> list[PositionHour]:
+    # A window bound with no offset is UTC, here and not in the database
+    # session: the live and the as-of path must read it as one instant.
     return queries.list_positions(
-        engine, org=org, book=book, market=market, start=start, end=end, past=past
+        engine,
+        org=org,
+        book=book,
+        market=market,
+        start=asof.as_utc(start),
+        end=asof.as_utc(end),
+        past=past,
     )
 
 

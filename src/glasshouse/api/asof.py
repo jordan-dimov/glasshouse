@@ -5,8 +5,10 @@ pure folds that fill them: the audit tail is replayed in memory up to the
 last transition placed in the audit order at or before the instant
 (`projections.replay(until=)`, the machinery `glasshouse verify` already
 uses), and the rows that replay yields are the rows the tables held then.
-One read story, two moments: there is no second set of queries to drift
-from the first, and no as-of variant of any table.
+One read story, two moments: no as-of variant of any table and no second
+computation of a position. What is written twice is the narrowing and
+ordering of rows (SQL for the tables, the functions below for a
+snapshot); a live test holds the two equal on a caught-up ledger.
 
 The price is a replay of the whole tail per request, through one call of
 the binary. That is right for a record of thousands of rows and wrong for
@@ -15,10 +17,17 @@ long record goes next, behind this same boundary.
 
 What "as of t" means is the substrate's definition, kept exactly: the
 state after every transition ordered at or before t, a prefix of the one
-audit order that splits no transaction. The tail withholds a row while
-an earlier writer is still in flight, so an instant within the last
-moments can gain a row on the next read; an instant in the future is
-refused, because its answer is not yet history.
+audit order that splits no transaction. Whether t can be answered yet is
+the substrate's decision too. While a writer that may be ordered at or
+before t is still open, the tail withholds its rows and the same question
+would answer differently once it commits; the substrate refuses such an
+instant, and so does this module (`NotSettledError`), by asking it first
+through its own as-of read. An answer given is therefore final. A future
+instant is refused before any of that, because it is not yet history.
+
+The replay runs today's folds over the history. It rebuilds the book as
+today's code reads that history, which is what the screens showed then
+only while the folds have not changed their meaning since.
 """
 
 from __future__ import annotations
@@ -29,13 +38,32 @@ from typing import Any
 
 import sqlalchemy as sa
 
-from glasshouse.commit import GlasshouseClient
+from glasshouse.commit import GlasshouseClient, MorphologError
 from glasshouse.projections.projector import replay
 from glasshouse.projections.tables import blotter_trade, position_hour, trade_valuation
 
 
 class NotYetHistoryError(ValueError):
     """The instant asked for is in the future."""
+
+
+class NotSettledError(Exception):
+    """The instant has passed but its history can still change: a writer
+    that may be ordered at or before it has not finished. Not the
+    caller's mistake, and not a failure: ask again shortly."""
+
+
+# The smallest predicate of the model (one claim per ledger): the read
+# that asks the substrate whether an instant is settled wants its verdict,
+# not its rows.
+_SETTLEMENT_PROBE = "MayEstablishOrganisations"
+
+# How the binary words its refusal of an unsettled instant. It has no
+# code of its own yet (asked upstream, contract section 34), so this
+# phrase is the one thing matched; a rewording turns the refusal into an
+# operational error (a 503), never into an answer, and the live test
+# `test_an_instant_a_writer_may_still_precede_is_refused` goes red.
+_NOT_SETTLED = "is not settled"
 
 
 @dataclass(frozen=True)
@@ -55,26 +83,59 @@ def _dicts(table: sa.Table, rows: set[tuple[object, ...]]) -> list[dict[str, Any
     return [dict(zip(names, row, strict=True)) for row in rows]
 
 
-def parse_instant(raw: str | None) -> dt.datetime | None:
-    """An as-of instant from a query string. A value with no offset is
-    defined as UTC (the field is labelled UTC everywhere it is shown), so
-    nothing naive passes this boundary (law 9). Empty means the present.
-    Raises `ValueError` on anything that is not an ISO 8601 instant."""
-    if not raw:
+def as_utc(value: dt.datetime | None) -> dt.datetime | None:
+    """An instant in UTC. A value with no offset is defined as UTC (every
+    time field is labelled UTC where it is shown), so nothing naive passes
+    the HTTP boundary (law 9) and no filter compares a naive time with a
+    stored instant."""
+    if value is None:
         return None
-    parsed = dt.datetime.fromisoformat(raw)
-    if parsed.tzinfo is None:
-        return parsed.replace(tzinfo=dt.UTC)
-    return parsed.astimezone(dt.UTC)
+    if value.tzinfo is None:
+        return value.replace(tzinfo=dt.UTC)
+    return value.astimezone(dt.UTC)
+
+
+def parse_instant(raw: str | None) -> dt.datetime | None:
+    """An instant from a query string, in UTC (`as_utc`). Empty means
+    none given. Raises `ValueError` on anything that is not an ISO 8601
+    instant."""
+    return as_utc(dt.datetime.fromisoformat(raw)) if raw else None
+
+
+def canonical(at: dt.datetime) -> str:
+    """The one spelling of an instant in links, forms and banners: UTC
+    wall time with no offset, which `parse_instant` reads back as the
+    same instant, however the caller first wrote it."""
+    return at.astimezone(dt.UTC).replace(tzinfo=None).isoformat()
+
+
+def settle(client: GlasshouseClient, at: dt.datetime) -> None:
+    """Ask the substrate whether the state as of `at` is final, by its
+    own as-of read. Returns when it is; raises `NotSettledError` when a
+    writer may still be placed at or before it. Any other failure of the
+    binary is operational and passes through."""
+    try:
+        client.claims_named(_SETTLEMENT_PROBE, as_of=at.isoformat())
+    except MorphologError as refused:
+        if _NOT_SETTLED in str(refused):
+            raise NotSettledError(
+                f"the book as of {canonical(at)} UTC is not final yet: a write placed "
+                "before that moment is still in progress"
+            ) from refused
+        raise
 
 
 def snapshot(
     client: GlasshouseClient, at: dt.datetime, *, now: dt.datetime | None = None
 ) -> Snapshot:
     """Replay the ledger up to `at` and hand back the rows the screens
-    read. `now` is injectable for tests; an instant after it is refused."""
+    read. `now` is injectable for tests; an instant after it is refused,
+    and so is one the substrate does not yet call settled. The order
+    matters: settlement first, then the tail, so the prefix replayed is
+    one that can no longer change."""
     if at > (now or dt.datetime.now(dt.UTC)):
         raise NotYetHistoryError(f"{at.isoformat()} is in the future; as-of reads answer the past")
+    settle(client, at)
     replayed = replay(client, until=at)
     return Snapshot(
         at=at,

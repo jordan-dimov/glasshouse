@@ -5,12 +5,14 @@ parsed as UTC, and the future refused before anything is replayed.
 
 import datetime as dt
 from decimal import Decimal
+from pathlib import Path
 from typing import Any
 
 import pytest
 
 from glasshouse.api import asof
-from glasshouse.commit import GlasshouseClient
+from glasshouse.commit import GlasshouseClient, MorphologError
+from tests.support import fake_binary
 
 T0 = dt.datetime(2026, 7, 1, tzinfo=dt.UTC)
 
@@ -106,3 +108,56 @@ def test_the_future_is_refused_before_anything_is_replayed() -> None:
     client = GlasshouseClient("model.morph", "postgres:///x", binary="/nonexistent/morpholog")
     with pytest.raises(asof.NotYetHistoryError, match="in the future"):
         asof.snapshot(client, T0 + dt.timedelta(seconds=1), now=T0)
+
+
+def test_a_window_bound_with_no_offset_is_utc_and_an_offset_is_converted() -> None:
+    # The live path compares in the database; this one in Python, where a
+    # naive bound against a stored instant is a TypeError. Both now take
+    # the bound through `as_utc` first.
+    naive = dt.datetime(2026, 7, 1, 1)  # noqa: DTZ001  the case under test
+    offset = dt.datetime(2026, 7, 1, 4, tzinfo=dt.timezone(dt.timedelta(hours=2)))  # 02:00 UTC
+    rows = asof.positions(
+        PAST,
+        org="acme",
+        book=None,
+        market=None,
+        start=asof.as_utc(naive),
+        end=asof.as_utc(offset),
+    )
+    assert [row["period_start"].hour for row in rows] == [1]
+    assert asof.as_utc(None) is None
+
+
+def test_an_instant_has_one_spelling() -> None:
+    at = asof.parse_instant("2026-07-01T12:00:00.25+02:00")
+    assert at is not None
+    assert asof.canonical(at) == "2026-07-01T10:00:00.250000"
+    assert asof.parse_instant(asof.canonical(at)) == at
+
+
+NOT_SETTLED = (
+    "Error: resolving --as-of timestamp\n\nCaused by:\n    the state as of "
+    "2026-07-01T00:00:00Z is not settled: a transaction that may be ordered at or "
+    "before it is still open, or the instant has not passed; retry, or give a transition id"
+)
+
+
+def test_an_unsettled_instant_is_refused_and_nothing_is_replayed(tmp_path: Path) -> None:
+    # The binary's own refusal (captured from v0.0.18 with an audit order
+    # held open) becomes ours; the last call it saw is the as-of read by
+    # timestamp, so the tail was never fetched.
+    binary = fake_binary(tmp_path, "", stderr=NOT_SETTLED, exit_code=1)
+    client = GlasshouseClient("model.morph", "postgres:///x", binary=str(binary))
+    with pytest.raises(asof.NotSettledError, match="not final yet"):
+        asof.snapshot(client, T0, now=T0 + dt.timedelta(hours=1))
+    argv = (tmp_path / "argv.txt").read_text().splitlines()
+    assert argv[:2] == ["inspect", "claims"]
+    assert argv[argv.index("--as-of") + 1] == "2026-07-01T00:00:00+00:00"
+
+
+def test_any_other_failure_of_the_settlement_read_stays_operational(tmp_path: Path) -> None:
+    # A dead database must never read as "not settled, try again".
+    binary = fake_binary(tmp_path, "", stderr="connection refused", exit_code=1)
+    client = GlasshouseClient("model.morph", "postgres:///x", binary=str(binary))
+    with pytest.raises(MorphologError, match="connection refused"):
+        asof.settle(client, T0)
