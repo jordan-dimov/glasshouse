@@ -21,6 +21,7 @@ from decimal import Decimal
 
 import sqlalchemy as sa
 
+from glasshouse.api import asof
 from glasshouse.api.schemas import (
     BlotterTrade,
     BookSummary,
@@ -75,7 +76,13 @@ def list_trades(
     market: str | None = None,
     limit: int | None = None,
     offset: int | None = None,
+    past: asof.Snapshot | None = None,
 ) -> list[BlotterTrade]:
+    """The blotter now, or with `past` as it stood then: the same rows
+    by the same filters and order, from the replay instead of the table."""
+    if past is not None:
+        rows = asof.trades(past, org=org, book=book, market=market, limit=limit, offset=offset)
+        return [BlotterTrade.model_validate(row) for row in rows]
     statement = sa.select(blotter_trade).where(blotter_trade.c.org == org)
     if book is not None:
         statement = statement.where(blotter_trade.c.book == book)
@@ -98,8 +105,7 @@ def list_trade_terms(engine: sa.Engine, *, org: str, trade: str) -> list[TradeTe
     the amendment trail. The version with the latest effective date is
     `current` and the rest `superseded` - by date, which is the rule the
     ledger's own selector and the blotter projection apply, never by
-    lineage order or wall clock. As-of viewing (which version governed a
-    past date) waits on #41."""
+    lineage order or wall clock."""
     statement = (
         sa.select(trade_terms_version)
         .where(trade_terms_version.c.org == org, trade_terms_version.c.trade == trade)
@@ -125,7 +131,11 @@ def list_positions(
     market: str | None = None,
     start: datetime | None = None,
     end: datetime | None = None,
+    past: asof.Snapshot | None = None,
 ) -> list[PositionHour]:
+    if past is not None:
+        rows = asof.positions(past, org=org, book=book, market=market, start=start, end=end)
+        return [PositionHour.model_validate(row) for row in rows]
     statement = sa.select(position_hour).where(position_hour.c.org == org)
     if book is not None:
         statement = statement.where(position_hour.c.book == book)
@@ -177,6 +187,7 @@ def list_valuations(
     book: str | None = None,
     market: str | None = None,
     latest: bool = False,
+    past: asof.Snapshot | None = None,
 ) -> list[TradeValuation]:
     """All admitted marks by default (valuation history is a lawful,
     visible thing); `latest=True` narrows to each trade's newest admitted
@@ -184,7 +195,11 @@ def list_valuations(
     then the total may span valuation times and curve versions (a
     corrected curve leaves the old mark newest until revaluation). The
     narrowings mirror the blotter's: book directly (a mark carries its
-    book), market via the trades that belong to it."""
+    book), market via the trades that belong to it. With `past`, the
+    marks admitted by that moment, by the same rules."""
+    if past is not None:
+        rows = asof.valuations(past, org=org, trade=trade, book=book, market=market, latest=latest)
+        return [TradeValuation.model_validate(row) for row in rows]
     if latest:
         statement = _latest_valuations(org)
         columns = statement.selected_columns
@@ -204,7 +219,13 @@ def list_valuations(
             )
         )
     if not latest:
-        statement = statement.order_by(trade_valuation.c.trade, trade_valuation.c.curve_version)
+        # The terms version breaks the tie an amendment makes (two marks
+        # of one trade against one curve), so the order is total.
+        statement = statement.order_by(
+            trade_valuation.c.trade,
+            trade_valuation.c.curve_version,
+            trade_valuation.c.terms_version,
+        )
     return [TradeValuation.model_validate(row) for row in _rows(engine, statement)]
 
 

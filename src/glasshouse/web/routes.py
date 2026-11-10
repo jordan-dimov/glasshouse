@@ -26,9 +26,9 @@ import sqlalchemy as sa
 from fastapi import APIRouter, File, Form, Query, Request, Response, UploadFile
 from fastapi.responses import RedirectResponse
 
+from glasshouse.api import asof, health, queries
 from glasshouse.api import audit as audit_queries
 from glasshouse.api import curves as curve_queries
-from glasshouse.api import health, queries
 from glasshouse.api.auth import authenticated_actor
 from glasshouse.api.curves import (
     CurveIntegrityError,
@@ -42,7 +42,7 @@ from glasshouse.api.deps import (
     StoreDep,
 )
 from glasshouse.api.schemas import CurveVersion
-from glasshouse.commit import MorphologError, MorphologRequestError
+from glasshouse.commit import GlasshouseClient, MorphologError, MorphologRequestError
 from glasshouse.config import get_settings
 from glasshouse.imports import (
     ImportFormatError,
@@ -105,6 +105,27 @@ def _utc_instant(raw: str | None) -> dt.datetime | None:
     return parsed.astimezone(dt.UTC)
 
 
+def _past(
+    request: Request, client: GlasshouseClient, org: str, active: str, raw: str | None
+) -> asof.Snapshot | Response | None:
+    """The screen's as-of mode from its `as_of` query value: None for the
+    present, the snapshot for a past instant, or the 422 page for a value
+    that is not an instant or not yet history. Database-free on the error
+    path, like the filter check on the positions screen."""
+    try:
+        at = asof.parse_instant(raw)
+        return None if at is None else asof.snapshot(client, at)
+    except ValueError as refused:
+        context: dict[str, Any] = {
+            "org": org,
+            "active": active,
+            "title": "Check the as-of time",
+            "message": f"As-of viewing shows the book at a past moment: {refused}. "
+            "The time must look like 2026-07-01T10:00 and is read as a UTC instant.",
+        }
+        return templates.TemplateResponse(request, "error.html", context, status_code=422)
+
+
 def _chrome(engine: sa.Engine, org: str, active: str) -> dict[str, Any]:
     # The selector always includes the requested org, so a directly
     # addressed organisation with no projected activity stays visible
@@ -147,21 +168,27 @@ def home(
 def blotter(
     request: Request,
     engine: EngineDep,
+    client: ClientDep,
     org: str | None = None,
     book: str | None = None,
     market: str | None = None,
     offset: Annotated[int, Query(ge=0)] = 0,
+    as_of: str | None = None,
 ) -> Response:
     if not org:
         return RedirectResponse("/ui", status_code=303)
+    past = _past(request, client, org, "blotter", as_of)
+    if isinstance(past, Response):
+        return past
     book, market = book or None, market or None
     # Ask for one row beyond the page to learn whether a next page
     # exists; the 51st row is never rendered.
     rows = queries.list_trades(
-        engine, org=org, book=book, market=market, limit=PAGE_SIZE + 1, offset=offset
+        engine, org=org, book=book, market=market, limit=PAGE_SIZE + 1, offset=offset, past=past
     )
     context: dict[str, Any] = {
         "org": org,
+        "as_of": as_of or "",
         "book": book,
         "market": market,
         "trades": rows[:PAGE_SIZE],
@@ -661,14 +688,19 @@ def checkpoint_download(
 def positions(
     request: Request,
     engine: EngineDep,
+    client: ClientDep,
     org: str | None = None,
     book: str | None = None,
     market: str | None = None,
     start: str | None = None,
     end: str | None = None,
+    as_of: str | None = None,
 ) -> Response:
     if not org:
         return RedirectResponse("/ui", status_code=303)
+    past = _past(request, client, org, "positions", as_of)
+    if isinstance(past, Response):
+        return past
     book, market = book or None, market or None
     try:
         start_at, end_at = _utc_instant(start), _utc_instant(end)
@@ -688,13 +720,14 @@ def positions(
         "market": market,
         "start": start or "",
         "end": end or "",
+        "as_of": as_of or "",
         "positions": queries.list_positions(
-            engine, org=org, book=book, market=market, start=start_at, end=end_at
+            engine, org=org, book=book, market=market, start=start_at, end=end_at, past=past
         ),
         # The one filter bar governs both sections: the marks narrow by
         # the same book and market as the positions above them.
         "valuations": queries.list_valuations(
-            engine, org=org, book=book, market=market, latest=True
+            engine, org=org, book=book, market=market, latest=True, past=past
         ),
     }
     return templates.TemplateResponse(request, "positions.html", context)

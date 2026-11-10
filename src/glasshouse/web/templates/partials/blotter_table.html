@@ -46,7 +46,7 @@
 {{ empty_state("No trades match this view.") }}
 {% endif %}
 <nav class="pager" aria-label="Blotter pages">
-  {% set filter_query = ("&book=" ~ (book | urlencode) if book else "") ~ ("&market=" ~ (market | urlencode) if market else "") %}
+  {% set filter_query = ("&book=" ~ (book | urlencode) if book else "") ~ ("&market=" ~ (market | urlencode) if market else "") ~ ("&as_of=" ~ (as_of | urlencode) if as_of else "") %}
   {% if offset > 0 %}
   <a href="/ui/blotter?org={{ org | urlencode }}{{ filter_query }}&offset={{ prev_offset }}"
      hx-get="/ui/blotter?org={{ org | urlencode }}{{ filter_query }}&offset={{ prev_offset }}"

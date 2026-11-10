@@ -27,6 +27,12 @@ uv run uvicorn glasshouse.api.app:app --reload
 
 The screens are under <http://localhost:8000/ui> and the API's OpenAPI page is at <http://localhost:8000/docs>.
 
+If you already run a PostgreSQL on port 5432, the compose database cannot bind it. Change the left-hand side of the `ports` entry in `docker-compose.yml` (for example `"5433:5432"`) and set `GLASSHOUSE_DATABASE_URL=postgresql://glasshouse:glasshouse@localhost:5433/glasshouse`.
+
+## Viewing the past
+
+`/trades`, `/positions` and `/valuations` take `as_of`, an ISO 8601 instant (no offset means UTC), and answer as the book stood then. The Blotter and Positions screens have the same control in the top bar. The answer is computed by replaying the ledger's history up to that instant through the same code that maintains the live tables, so the two cannot disagree. A future instant is refused. The other screens show current data and say so.
+
 ## Checks
 
 ```bash
