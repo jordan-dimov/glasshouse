@@ -166,10 +166,31 @@ def test_the_ledger_leg_counts_both_divergence_buckets(tmp_path: Path) -> None:
         "status": "divergent",
         "only_in_claims_table": [{"predicate": "TradeCaptured", "args": []}],
         "only_in_replay": [],
+        "conflicts": [{"transition_id": "t-9", "detail": "deletes a claim never held"}],
     }
     leg = _ledger_leg(_verify_report(tmp_path, divergent, INTACT_TREE))
     assert not leg.ok
     assert "1 claim(s) only in the claims table, 0 only in the replay" in leg.detail
+    # The conflicts are what to read first (v0.0.17), so the first is named.
+    assert "1 conflict(s) in the log; first conflict: deletes a claim never held" in leg.detail
+
+
+def test_an_indeterminate_legacy_replay_fails_without_being_called_divergent(
+    tmp_path: Path,
+) -> None:
+    # A database migrated across v0.0.17 whose pre-order history does not
+    # replay to the migration's baseline: uncertainty, not evidence of an
+    # edit. The leg does not pass, and says which of the two it is.
+    indeterminate = {
+        "status": "indeterminate",
+        "transitions": 8,
+        "claims": 12,
+        "legacy_only_in_baseline": [],
+        "legacy_only_in_replay": [],
+    }
+    leg = _ledger_leg(_verify_report(tmp_path, indeterminate, INTACT_TREE))
+    assert not leg.ok
+    assert leg.detail.startswith("indeterminate, not divergent")
 
 
 def test_the_tree_leg_passes_when_the_history_tree_is_intact(tmp_path: Path) -> None:

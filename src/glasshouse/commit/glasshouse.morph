@@ -1,256 +1,199 @@
--- Glasshouse v0: the needle. One trade, one official curve, one MTM
--- that is only admissible against an official curve, one correction
--- that supersedes. This file is the rule model the commit layer runs;
--- everything else in Glasshouse (API, projections, imports, screens)
--- is machinery around what these rules admit.
+-- Glasshouse: the rules of the ledger.
 --
--- Three Glasshouse laws are structural here, not conventions:
+-- This file says which facts the ledger may hold and how they may
+-- change. Every write is checked against it. A write that breaks a rule
+-- is refused, and the refusal names the rule.
 --
---   * The organisation is the tenancy boundary. Every predicate leads
---     with its org; isolation is in the shape of the facts, not in a
---     WHERE clause someone remembers to add.
---   * Authority is governed capability claims. Who may capture, who
---     may publish curves, who may admit valuations - each is a claim
---     in the ledger, granted by a transition, auditable and as-of
---     queryable like everything else. The app maps identity to an
---     actor string and nothing more.
---   * Supersede, never overwrite. A curve correction registers a new
---     version alongside the old, links the lineage, and moves the
---     official pointer. The old figure, and any valuation that relied
---     on it, stays on the record. This is machine-enforced, not
---     conventional: the record predicates are `append only` (a
---     retract is a static authoring error), and the official pointer
---     is a declared `current pointer` with its supersession lineage.
+-- How to read it:
+--   predicate       the shape of a fact (a "claim")
+--   invariant       a rule that every claim must satisfy, always
+--   define          a named condition, reused below
+--   transformation  an act: the only way claims are added or removed
+--   require         a gate: the act is refused unless this holds
+--   admit, retract  add a claim, remove a claim
+--   actor           whoever is making the proposal
 --
--- Claim-shape law (identity uniqueness, the singleton pointer, no-fork
--- lineage, effective dating, append-only records) is declared on the
--- predicates as disciplines; morpholog generates and enforces the
--- invariants (and, for effective dating, the in-force selector) and
--- `inspect guarantees` traces each back to its clause. Only
--- referential and value law remains authored by hand below.
+-- Three habits run through the file:
+--   * Every business fact starts with its organisation. Tenants are
+--     separated by the shape of the facts, not by a filter.
+--   * Permissions are claims too. They are granted by an act, so every
+--     grant is on the record.
+--   * Nothing is overwritten. A correction adds a new version and links
+--     it to the old one. The old one stays.
 --
--- Bulk curve content never enters the ledger: a curve version carries
--- the hash of its price array, and the array itself lives in the app
--- schema keyed by the registered identity (the read-side law: every
--- app table is a projection or a hash-anchored payload).
---
--- Delivery periods are UTC instants (Timestamp), never local civil
--- time: DST days fall out of timezone arithmetic in the compute zone
--- and are never special-cased here.
---
--- Patterns that read only some of a wide claim's fields name them
--- (`TradeTerms(quantity: qty, ..)`) rather than counting underscores to
--- the right position. This is parse-time sugar - a named pattern and
--- its positional twin share a canonical hash, so the rules identity
--- pinned as MODEL_HASH is unaffected - and it buys the thing counting
--- cannot: reordering a predicate's fields can no longer silently bind
--- the wrong one. Where a hole is the point rather than an omission, it
--- is named too, so the reader sees the coordinate deliberately left
--- free instead of inferring it from a gap.
+-- Times are UTC instants. Daylight saving is handled outside the ledger.
+-- A curve's prices are stored outside too. The ledger holds their hash.
 
 program glasshouse
 
--- The vocabulary. `TradeCaptured` is the trade's immutable identity
--- (direction and counterparty included: those are what the trade IS);
--- its economic terms live in `TradeTerms`, versioned the way the curve
--- is versioned rather than ever edited. Each version carries the
--- business date it takes effect from, and `effective by (trade) on
--- (effective_from)` makes morpholog write the selector every temporal
--- programme used to hand-roll: `trade_terms_in_force_on(trade, as_of,
--- ..)` names the version whose date is the latest not after `as_of`.
--- An amendment is a new version alongside the old with its lineage
--- linked in `TradeTermsSupersedes`; the old terms, and any valuation
--- computed under them, stay on the record. `CurveRegistered` is a
--- curve version's identity including the hash anchoring its payload;
--- `OfficialCurve` is the current pointer naming the version in force
--- for a market and as-of date, superseded along the `CurveSupersedes`
--- lineage. `TradeValued` records one mark-to-market result, pinned to
--- the exact curve version AND the exact terms version it was computed
--- against, so neither a curve correction nor an amendment ever
--- silently re-writes a number anyone saw.
---
--- The capability predicates carry no discipline on purpose: they are
--- only ever admitted in v0, and revocation, when it arrives, is a
--- governed retraction that `append only` would forbid statically.
--- `MayGrantAuthority` is the root of them in one organisation: who may
--- hand out the others. `MayEstablishOrganisations` is the ledger's own
--- root: who may bring an organisation into being. Without them any actor
--- could grant itself any capability, and the authority law would rest
--- on the application never exposing a grant. Every actor that can hand
--- out authority is restricted to the database login that may assert it
--- (Morpholog's "restrict the actors that hand out authority, first").
---
--- Units are contractual labels on exact decimals: a quantity is
--- `Decimal[MW]`, an MTM is `Decimal[EUR]`, and mixing them is
--- structurally uncommittable. The price is deliberately a bare
--- Decimal: EUR/MWh is a ratio - a field name and a formula in the
--- compute zone, never a unit (compound symbols are not units here).
+-- Who may do what. Each is granted by an act further down.
 predicate MayCaptureTrade(actor: Subject, org: Subject, book: Subject)
 predicate MayRegisterCurve(actor: Subject, org: Subject, market: Subject)
 predicate MayValueTrade(actor: Subject, org: Subject, book: Subject)
-predicate MayGrantAuthority(actor: Subject, org: Subject)
--- Who may set a book's position limit in an organisation: risk, not the
--- desk. A limit is a governed claim like any grant.
 predicate MaySetLimit(actor: Subject, org: Subject)
+-- Who may hand out the permissions above, in one organisation.
+predicate MayGrantAuthority(actor: Subject, org: Subject)
+-- Who may create organisations. One holder: the ledger's root.
 predicate MayEstablishOrganisations(actor: Subject)
--- Morpholog's reserved assertion policy: once an actor is restricted, a
--- proposal naming it is refused before evaluation unless the database
--- login making it holds the matching authority. The runtime recognises
--- the names and shapes; we govern them through our own transformations.
+
+-- Morpholog reads these two itself. Once an actor is restricted, only
+-- the named database login may act as it. Anyone else is refused before
+-- the rules run.
 predicate ActorAssertionRestricted(actor: Subject)
 predicate ActorAssertionAuthority(actor: Subject, login_role: Subject)
+
+-- A trade's identity. It never changes. Direction and counterparty are
+-- part of what the trade is.
 predicate TradeCaptured(org: Subject, book: Subject, trade: Subject, counterparty: Subject, market: Subject, direction: Subject)
     unique by (trade)
     append only
+
+-- A trade's economic terms, one claim per version. An amendment adds a
+-- version. `effective by` gives us `trade_terms_in_force_on`: the
+-- version in force for a trade on a date. `partial` allows dates with
+-- no version (before the trade date).
+-- The price is EUR/MWh. That is a ratio, so it carries no unit here.
 predicate TradeTerms(org: Subject, trade: Subject, version: Subject, quantity: Decimal[MW], price: Decimal, delivery_start: Timestamp, delivery_end: Timestamp, effective_from: Date)
     unique by (version)
     effective by (trade) on (effective_from) partial
     append only
+
+-- Which terms version replaced which. A version is replaced at most once.
 predicate TradeTermsSupersedes(new_version: Subject, prior_version: Subject)
     unique by (prior_version)
     append only
+
+-- One version of a price curve for a market and date. The prices live
+-- outside the ledger. `payload_hash` pins them.
 predicate CurveRegistered(org: Subject, market: Subject, as_of: Date, version: Subject, payload_hash: Subject)
     unique by (version)
     append only
+
+-- The curve version to use for a market and date. Exactly one at a time.
+-- A correction moves the pointer and records what it replaced.
 predicate OfficialCurve(org: Subject, market: Subject, as_of: Date, version: Subject)
     current pointer by (org, market, as_of)
     superseded via CurveSupersedes
 predicate CurveSupersedes(new_version: Subject, prior_version: Subject)
     append only
+
+-- One mark-to-market result. It names the exact curve version and terms
+-- version it was computed from, so a later correction never changes a
+-- number someone already saw.
 predicate TradeValued(org: Subject, book: Subject, trade: Subject, curve_version: Subject, terms_version: Subject, mtm: Decimal[EUR])
     unique by (trade, curve_version, terms_version)
     append only
--- A book's cap on its net position (bought less sold) in any one
--- delivery hour. One standing cap per book: a change retracts the
--- standing cap and admits the new one in one act, so the audit log
--- keeps every cap that ever stood and the claims table holds the one
--- that does (law 2). Deliberately not append only: a cap is the current
--- rule for a book, like the official-curve pointer, not a record of a
--- trade. The cap is enforced at capture and amendment (below); lowering
--- it under open trades raises a breach to manage, never unwinds them.
+
+-- A book's cap on its net position (bought less sold) in any one hour.
+-- One cap per book. Not append only: a new cap replaces the old one, and
+-- the audit log keeps every cap that ever stood.
 predicate PositionLimit(org: Subject, book: Subject, cap: Decimal[MW])
     unique by (org, book)
 
--- The referential and value rules that must always hold, by any path.
--- (Uniqueness, the official-pointer singleton and no-fork lineage are
--- generated from the discipline clauses above.)
+-- Rules that hold for every claim, whichever act wrote it.
+-- (Uniqueness, the single official pointer and the version chains are
+-- generated from the clauses on the predicates above.)
+--
+-- A note for editors: a rule is re-checked for the claims its pattern
+-- names. Name the claim's unique key (`trade`, `version`) even when the
+-- rule does not use it. Then a write re-checks one claim, not every
+-- claim that shares a value, and concurrent writers do not collide.
 
--- A trade is bought or sold; nothing else has a position sign. The
--- trade is named so the case is one capture (section 29's case-width
--- hint), and the `or` sits last in the consequent, where it compiles.
 invariant direction_is_buy_or_sell:
     TradeCaptured(trade: trade, direction: direction, ..)
     implies (direction = #buy or direction = #sell)
 
--- A cap is a positive figure; the singleton per book is generated from
--- `unique by`. The keys are named so the case is one book.
 invariant position_limit_is_positive:
     PositionLimit(org: org, book: book, cap: cap) implies cap > 0 MW
 
--- Terms belong to a captured trade, in the same organisation.
 invariant terms_belong_to_captured_trade:
     TradeTerms(org: org, trade: trade, ..) implies TradeCaptured(org: org, trade: trade, ..)
 
--- A trade for nothing, or for negative power, is not a trade. The terms
--- version is named for the same reason as in delivery_period_is_ordered
--- below: the case of a single-pattern rule is what its pattern binds,
--- and a quantity is shared by many trades.
 invariant quantity_is_positive:
     TradeTerms(trade: trade, version: version, quantity: qty, ..) implies qty > 0 MW
 
--- A delivery period is a real interval on the timeline. The terms
--- version is named so the rule's case is one row: a case-bound check is
--- keyed on the variables the pattern binds, and a delivery window is
--- shared by every trade on the same product, so binding only the two
--- instants put every such trade in one case and the check read them all
--- under one lock (contract sections 27 and 28, morpholog#396). Naming
--- the trade narrowed the case to one trade's versions; naming `version`,
--- the predicate's `unique by` key, narrows it to the one row a proposal
--- asserts (`check --strict` requires it from v0.0.14, section 29).
 invariant delivery_period_is_ordered:
     TradeTerms(trade: trade, version: version, delivery_start: delivery_start, delivery_end: delivery_end, ..)
     implies delivery_start strictly_before delivery_end
 
--- The official pointer can never name a version that was not
--- registered for exactly that org, market and as-of date.
+-- The official pointer names a version registered for that same
+-- organisation, market and date.
 invariant official_curve_is_registered:
     OfficialCurve(org, market, as_of, version)
     implies CurveRegistered(org: org, market: market, as_of: as_of, version: version, ..)
 
--- A valuation belongs to a captured trade, in the same org and book.
 invariant valued_trade_was_captured:
     TradeValued(org: org, book: book, trade: trade, ..)
     implies TradeCaptured(org: org, book: book, trade: trade, ..)
 
--- A valuation's curve version exists in the same organisation. (That
--- it was *official at admission time* is the gate's job, checked when
--- the valuation is admitted and not retroactively disturbed by later
--- corrections - a valuation is a record of what was computed, not a
--- promise the curve stays current.)
 invariant valuation_curve_is_registered:
     TradeValued(org: org, curve_version: version, ..)
     implies CurveRegistered(org: org, version: version, ..)
 
--- A valuation's terms version is a registered version of that trade,
--- in the same organisation.
 invariant valuation_terms_version_is_registered:
     TradeValued(org: org, trade: trade, terms_version: version, ..)
     implies TradeTerms(org: org, trade: trade, version: version, ..)
 
--- Lineage never crosses trades: a version amends a version of the
--- same trade.
+-- A version replaces a version of the same trade.
 invariant terms_lineage_stays_within_the_trade:
     TradeTermsSupersedes(new_version, prior_version)
     and TradeTerms(org: org, trade: trade, version: new_version, ..)
     implies TradeTerms(org: org, trade: trade, version: prior_version, ..)
 
--- That a mark's terms version was *in force on the curve's date at
--- admission time* is the gate's job, exactly as officialness is for
--- the curve: a valuation is a record of what was computed, and an
--- amendment effective on a date already marked supersedes the mark
--- by re-marking, never by making the old record unlawful. (A record
--- invariant saying "every mark names the terms in force on its
--- curve's date" was tried and refused every intra-day amendment of a
--- marked trade; it is the analogue of "every mark names the official
--- curve", which this model deliberately does not have. The
--- effective-dated predicate is therefore declared `partial`: where no
--- version is in force the selector matches nothing, and the gate is
--- what refuses a mark there.)
+-- Deliberately not rules: "a mark uses the official curve" and "a mark
+-- uses the terms in force". Both are checked once, when the mark is
+-- admitted (see admit_valuation). A mark records what was computed
+-- then. A later correction or amendment must not make it unlawful.
 
--- The only ways state may change.
+-- Named conditions.
 
--- Every gate is named, so a refusal, the rejection log and coverage
--- carry a stable rule rather than the rendered expression (which any
--- rewording changes), and the explanation a desk reads is keyed by it.
+-- The terms in force on a date, for every trade of one organisation.
+-- It picks the same version as the generated `trade_terms_in_force_on`.
+-- The difference is the key. The generated one is looked up by trade.
+-- The limit check finds its trades as it runs, so through the generated
+-- one it would read every organisation's terms, and two organisations
+-- capturing at the same moment would collide. This one is looked up by
+-- organisation, which the act knows from the start.
+define org_terms_in_force_on(org, as_of, trade, quantity, delivery_start, delivery_end):
+    TradeTerms(org: org, trade: trade, quantity: quantity, delivery_start: delivery_start, delivery_end: delivery_end, effective_from: from, ..)
+    and from on_or_before as_of
+    and not (exists later: TradeTerms(org: org, trade: trade, effective_from: later, ..) and later after from and later on_or_before as_of)
 
--- Establish the ledger's root, once, from the provisioning path: its
--- actor may establish organisations, and is restricted in the same act
--- to the login that established it, so no other credential can assert
--- it. This is the trust boundary, stated plainly: the root is whoever
--- provisions first, and it is only as distinct as the credentials are.
--- Where every service shares one login (the demo, until glasshouse#85),
--- every service can still assert it; with per-service credentials,
--- none but the provisioner can.
+-- Would the book stay within its cap in hour `h`? Adds up what the
+-- book has bought and sold for that hour, under the terms in force on
+-- `as_of`, then adds the proposed quantity (negative for a sale). The
+-- trade named `amended` is left out: an amendment replaces its own
+-- earlier quantity. A new trade is not in the book yet, so naming it
+-- changes nothing.
+define hour_is_within_cap(org, book, as_of, amended, signed_quantity, h, cap):
+    abs(sum(q | org_terms_in_force_on(org, as_of, t, q, s, e)
+                and TradeCaptured(org: org, book: book, trade: t, direction: #buy, ..)
+                and t != amended and s at_or_before h and h strictly_before e)
+        - sum(q | org_terms_in_force_on(org, as_of, t, q, s, e)
+                and TradeCaptured(org: org, book: book, trade: t, direction: #sell, ..)
+                and t != amended and s at_or_before h and h strictly_before e)
+        + signed_quantity) <= cap
+
+-- The acts. Every gate has a name, and a refusal reports that name.
+
+-- Runs once, when the database is provisioned. The caller becomes the
+-- root: it may create organisations, and only its own database login
+-- may act as it from then on.
 transformation establish_ledger(login_role):
     require ledger_is_new: not MayEstablishOrganisations(..)
     admit MayEstablishOrganisations(actor)
     admit ActorAssertionRestricted(actor)
     admit ActorAssertionAuthority(actor, login_role)
 
--- Establish an organisation: the ledger root holds the grant authority
--- for it, and nobody can establish it again while anyone does.
+-- Create an organisation. The root can grant permissions in it.
 transformation establish_organisation(org):
     require may_establish_organisations: MayEstablishOrganisations(actor)
     require organisation_is_new: not MayGrantAuthority(org: org, ..)
     admit MayGrantAuthority(actor, org)
 
--- Authority grants are gated on the grant authority for the
--- organisation. Maker-checker on grants is a v1 two-step pattern,
--- deliberately deferred - each grant is already a governed,
--- attributable, as-of-queryable transition.
--- A delegate grant authority is restricted to the login that will act
--- as it, in the same act that empowers it: an unrestricted actor able to
--- grant would make every restriction below it decoration.
+-- Let someone else grant permissions in an organisation. They are tied
+-- to one database login in the same act. Otherwise anyone could claim
+-- to be them and grant themselves anything.
 transformation grant_grant_authority(principal, org, login_role):
     require may_grant_authority: MayGrantAuthority(actor, org)
     admit MayGrantAuthority(principal, org)
@@ -273,44 +216,23 @@ transformation grant_limit_authority(principal, org):
     require may_grant_authority: MayGrantAuthority(actor, org)
     admit MaySetLimit(principal, org)
 
--- Set a book's position limit, once; a book with no limit is uncapped
--- and the hour gate below is vacuous for it. Changing a standing cap is
--- the other act, which keeps the one it replaces in the log.
+-- Set a book's cap, or replace the one it has. The retract removes the
+-- standing cap if there is one and does nothing if there is none.
+-- A book with no cap is uncapped. Lowering a cap does not undo trades
+-- already in the book. It only limits the next one.
 transformation set_position_limit(org, book, cap):
     require may_set_limit: MaySetLimit(actor, org)
-    require limit_is_new: not PositionLimit(org: org, book: book, ..)
+    retract PositionLimit(org: org, book: book, ..)
     admit PositionLimit(org, book, cap)
 
-transformation change_position_limit(org, book, cap):
-    require may_set_limit: MaySetLimit(actor, org)
-    bind PositionLimit(org, book, standing)
-    retract PositionLimit(org, book, standing)
-    admit PositionLimit(org, book, cap)
-
--- Capture a trade: identity and the first version of its terms in one
--- transition, effective from the trade date. The gate ties the actor's
--- capability to this org and this book; the trade id is fixed once
--- captured (a change of terms is an amendment, never an overwrite).
--- The version id is the caller's, like a curve version's.
--- The position limit holds in every delivery hour the trade touches
--- (example 23 of the substrate's gallery is the shape; morpholog#563
--- forced the grid). The window is bounded first, as the grid requires
--- and as the product requires: nothing here delivers for longer than a
--- leap year. The grid is the start of every hour the window meets; a
--- window that is whole hours meets exactly as many hours as its length
--- holds, so the alignment gate refuses a trade starting at half past
--- (the compute zone's own rule, now the ledger's). Then, for each cap
--- the book has (none: uncapped, the gate is vacuous) and each hour, the
--- book's net position as its terms stand in force on this trade's
--- trade date, plus this trade signed by its direction, must sit within
--- the cap either way round. The refusal names the hour in its witness.
--- The window is forward first: an inverted window has an empty grid,
--- which the alignment gate would refuse with a number no desk can read;
--- the record invariant delivery_period_is_ordered still holds by any
--- path.
--- A gate, not an invariant, on purpose: a pre-trade limit is checked
--- when the trade is captured, and lowering a cap later does not unwind
--- trades (the invariant form of the same cap is morpholog#606).
+-- Capture a trade: its identity and its first terms, in force from the
+-- trade date.
+-- The delivery window must run forwards, last at most a year (8784
+-- hours, a leap year) and be whole hours. `hours` is the start of every
+-- hour the window touches. A whole-hour window touches exactly as many
+-- hours as it is long, so a trade starting at half past is refused.
+-- Then the cap is checked in each of those hours. With no cap set, that
+-- check passes.
 transformation capture_trade(org, book, trade, counterparty, market, direction, version, quantity, price, delivery_start, delivery_end, trade_date):
     require may_capture_trade: MayCaptureTrade(actor, org, book)
     require trade_is_new: not TradeCaptured(trade: trade, ..)
@@ -319,23 +241,16 @@ transformation capture_trade(org, book, trade, counterparty, market, direction, 
     require delivery_is_at_most_a_year: delivery_end - delivery_start no_longer_than duration(PT8784H)
     let hours = periods(delivery_start, delivery_end, duration(PT1H))
     require delivery_is_whole_hours: (delivery_end - delivery_start) / duration(PT1H) = sum(1 | h in hours)
+    let signed = if(direction = #buy, quantity, 0 MW - quantity)
     require hour_within_limit: (forall cap in PositionLimit(org, book, cap): forall h in hours:
-        abs(sum(q | trade_terms_in_force_on(trade: t, as_of: trade_date, quantity: q, delivery_start: s, delivery_end: e, ..)
-                    and TradeCaptured(org: org, book: book, trade: t, direction: #buy, ..)
-                    and s at_or_before h and h strictly_before e)
-            - sum(q | trade_terms_in_force_on(trade: t, as_of: trade_date, quantity: q, delivery_start: s, delivery_end: e, ..)
-                    and TradeCaptured(org: org, book: book, trade: t, direction: #sell, ..)
-                    and s at_or_before h and h strictly_before e)
-            + if(direction = #buy, quantity, 0 MW - quantity)) <= cap)
+        hour_is_within_cap(org, book, trade_date, trade, signed, h, cap))
     admit TradeCaptured(org, book, trade, counterparty, market, direction)
     admit TradeTerms(org, trade, version, quantity, price, delivery_start, delivery_end, trade_date)
 
--- Amend the economic terms the honest way: a new version alongside the
--- old, lineage linked, effective strictly after the version it amends,
--- so the chain, the timeline and the log agree on which terms are
--- current. Direction and counterparty are identity and stay on
--- `TradeCaptured`. The capture capability for the trade's book is the
--- amendment capability: whoever may book a trade may re-book its terms.
+-- Amend a trade's terms. The new version sits beside the old one and
+-- takes effect on a later date. Only the latest version can be amended.
+-- Whoever may capture in the book may amend in it. The window and the
+-- cap are checked as at capture.
 transformation amend_trade(org, trade, prior_version, new_version, quantity, price, delivery_start, delivery_end, effective_from):
     bind trade_is_captured: TradeCaptured(org, book, trade, _, _, direction)
     require may_amend_trade: MayCaptureTrade(actor, org, book)
@@ -347,34 +262,24 @@ transformation amend_trade(org, trade, prior_version, new_version, quantity, pri
     require delivery_is_at_most_a_year: delivery_end - delivery_start no_longer_than duration(PT8784H)
     let hours = periods(delivery_start, delivery_end, duration(PT1H))
     require delivery_is_whole_hours: (delivery_end - delivery_start) / duration(PT1H) = sum(1 | h in hours)
+    let signed = if(direction = #buy, quantity, 0 MW - quantity)
     require hour_within_limit: (forall cap in PositionLimit(org, book, cap): forall h in hours:
-        abs(sum(q | trade_terms_in_force_on(trade: t, as_of: effective_from, quantity: q, delivery_start: s, delivery_end: e, ..)
-                    and TradeCaptured(org: org, book: book, trade: t, direction: #buy, ..)
-                    and t != trade and s at_or_before h and h strictly_before e)
-            - sum(q | trade_terms_in_force_on(trade: t, as_of: effective_from, quantity: q, delivery_start: s, delivery_end: e, ..)
-                    and TradeCaptured(org: org, book: book, trade: t, direction: #sell, ..)
-                    and t != trade and s at_or_before h and h strictly_before e)
-            + if(direction = #buy, quantity, 0 MW - quantity)) <= cap)
+        hour_is_within_cap(org, book, effective_from, trade, signed, h, cap))
     admit TradeTerms(org, trade, new_version, quantity, price, delivery_start, delivery_end, effective_from)
     admit TradeTermsSupersedes(new_version, prior_version)
 
--- Register a curve version and make it official in one move. This is
--- the first-registration path: if a curve is already official for
--- this org, market and as-of date, the honest move is a correction,
--- which keeps lineage - so this gate refuses rather than quietly
--- replacing.
+-- Register the first curve for a market and date, and make it official.
+-- If one is already official, this is refused: use correct_curve.
 transformation register_curve(org, market, as_of, version, payload_hash):
     require may_register_curve: MayRegisterCurve(actor, org, market)
     require curve_version_is_new: not CurveRegistered(version: version, ..)
-    require no_official_curve_yet: not OfficialCurve(org: org, market: market, as_of: as_of, version: _)
+    require no_official_curve_yet: not OfficialCurve(org: org, market: market, as_of: as_of, ..)
     admit CurveRegistered(org, market, as_of, version, payload_hash)
     admit OfficialCurve(org, market, as_of, version)
 
--- Correct an official curve the honest way: the prior version stays
--- on the record, the corrected version is registered alongside it,
--- lineage is linked, and the official pointer moves. Valuations
--- admitted under the prior version are untouched; the correction
--- governs what may be valued next.
+-- Correct the official curve. The new version is registered, linked to
+-- the one it replaces, and becomes official. The old version and every
+-- mark made against it stay on the record.
 transformation correct_curve(org, market, as_of, prior_version, new_version, payload_hash):
     require may_register_curve: MayRegisterCurve(actor, org, market)
     require prior_curve_is_official: OfficialCurve(org, market, as_of, prior_version)
@@ -385,22 +290,13 @@ transformation correct_curve(org, market, as_of, prior_version, new_version, pay
     retract OfficialCurve(org, market, as_of, prior_version)
     admit OfficialCurve(org, market, as_of, new_version)
 
--- Admit a mark-to-market result. The number is computed outside (the
--- compute zone values the trade against the curve payload); the
--- ledger governs that the result is *admissible*: the actor holds the
--- valuation capability for this book, the trade exists here, and -
--- the rule this product is built around - the curve version used is
--- the one officially in force for the trade's market, at admission
--- time, and the terms version used is the one in force on that
--- curve's business date. An MTM against a stale or unofficial curve,
--- or against terms that were not in force, is structurally
--- uncommittable, not merely discouraged. The three claim patterns
--- share one `require` because bindings flow only within a
--- conjunction: the curve's `as_of` binds in the pointer and feeds the
--- selector, called by the names of its parameters (the keys, `as_of`,
--- then every payload field; morpholog#594, from v0.0.16) so the four
--- payload holes it does not read are `..` rather than counted
--- underscores. The IR stays positional: the hash did not move.
+-- Record a mark-to-market. The number is computed outside the ledger.
+-- The ledger checks what it was computed from: the curve version must
+-- be the official one for the trade's market right now, and the terms
+-- version must be the one in force on that curve's date. A mark against
+-- a stale curve or the wrong terms cannot be recorded.
+-- The three patterns share one `require` because a name bound in one
+-- pattern (`market`, `as_of`) is only visible within the same `require`.
 transformation admit_valuation(org, book, trade, curve_version, terms_version, mtm):
     require may_value_trade: MayValueTrade(actor, org, book)
     require valued_against_official_curve_and_terms_in_force: TradeCaptured(org: org, book: book, trade: trade, market: market, ..)

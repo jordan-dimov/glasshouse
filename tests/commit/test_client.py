@@ -104,63 +104,25 @@ CHECKPOINT = json.dumps(
 )
 
 
-@pytest.mark.parametrize("call", ["audit", "audit_named"])
-def test_the_configured_writer_roles_reach_every_audit_tail(tmp_path: Path, call: str) -> None:
-    # The assertion is deployment configuration, so a call site that says
-    # nothing about writer roles still makes it: on managed PostgreSQL a
-    # tail without it refuses, and forgetting it at one call site would
-    # pass every self-hosted test.
-    binary = fake_binary(tmp_path, "")
+def test_both_checkpoint_paths_name_the_subcommand_and_carry_covering(tmp_path: Path) -> None:
+    # `write_checkpoint` builds its own argv (it keeps the binary's exact
+    # bytes as the anchor), so the subcommand and `--covering` (v0.0.16)
+    # are pinned here beside the generated method's: a regrouping like
+    # v0.0.8's `morpholog audit` family must fail a pure test, not the
+    # first anchor a deployment writes.
     client = GlasshouseClient(
-        "model.morph", "postgres:///x", binary=str(binary), writer_roles=["app_user", "importer"]
+        "model.morph", "postgres:///x", binary=str(fake_binary(tmp_path, CHECKPOINT))
     )
-    assert getattr(client, call)() == []
-    argv = (tmp_path / "argv.txt").read_text().splitlines()
-    assert [argv[i + 1] for i, a in enumerate(argv) if a == "--writer-role"] == [
-        "app_user",
-        "importer",
-    ]
-
-
-def test_the_configured_writer_roles_reach_both_checkpoint_paths(tmp_path: Path) -> None:
-    # `audit_checkpoint` shares the audit tail's resume horizon, and
-    # `write_checkpoint` builds its own argv - both carry the assertion,
-    # and both must name the same subcommand the binary now answers to.
-    #
-    # The subcommand assertion is not incidental. Our overrides carry the
-    # deployment's writer-role assertion, so when upstream v0.0.8 gathered
-    # the family under `morpholog audit`, the renamed base left our
-    # `checkpoint` override overriding nothing: a dead method, the flag
-    # silently unsent, and mypy content. Pinning the argv here is what
-    # makes that a failing pure test rather than a managed-PostgreSQL
-    # surprise.
-    client = GlasshouseClient(
-        "model.morph",
-        "postgres:///x",
-        binary=str(fake_binary(tmp_path, CHECKPOINT)),
-        writer_roles=["app_user"],
-    )
-    client.audit_checkpoint()
-    argv = (tmp_path / "argv.txt").read_text().splitlines()
-    assert argv[:2] == ["audit", "checkpoint"]
-    assert argv[argv.index("--writer-role") + 1] == "app_user"
+    client.audit_checkpoint(covering="t-close")
+    generated = (tmp_path / "argv.txt").read_text().splitlines()
 
     anchor = tmp_path / "anchor.json"
-    client.write_checkpoint(anchor)
-    argv = (tmp_path / "argv.txt").read_text().splitlines()
-    assert argv[:2] == ["audit", "checkpoint"]
-    assert argv[argv.index("--writer-role") + 1] == "app_user"
-    assert json.loads(anchor.read_text())["tree_size"] == 3
-
-    # Both paths carry `--covering` (v0.0.16): the anchor writer builds
-    # its own argv, so the flag is pinned here beside the role.
-    client.audit_checkpoint(covering="t-close")
-    argv = (tmp_path / "argv.txt").read_text().splitlines()
-    assert argv[argv.index("--covering") + 1] == "t-close"
     client.write_checkpoint(anchor, covering="t-close")
-    argv = (tmp_path / "argv.txt").read_text().splitlines()
-    assert argv[argv.index("--covering") + 1] == "t-close"
-    assert argv[argv.index("--writer-role") + 1] == "app_user"
+    ours = (tmp_path / "argv.txt").read_text().splitlines()
+    assert ours == generated
+    assert ours[:2] == ["audit", "checkpoint"]
+    assert ours[ours.index("--covering") + 1] == "t-close"
+    assert json.loads(anchor.read_text())["tree_size"] == 3
 
 
 def test_the_first_call_checks_the_binary_against_the_package_stamps(tmp_path: Path) -> None:
@@ -186,34 +148,6 @@ def test_a_matching_binary_passes_the_check_and_serves_the_call(tmp_path: Path) 
     client = GlasshouseClient("model.morph", "postgres:///x", binary=str(binary))
     assert client.audit() == []
     assert (tmp_path / "argv.txt").read_text().splitlines()[:1] == ["inspect"]
-
-
-def test_without_configured_roles_the_horizon_stays_the_blessed_default(tmp_path: Path) -> None:
-    # A self-hosted database computes the horizon over every session and
-    # is sound without help: no flag must appear, and an explicit
-    # per-call assertion still wins.
-    binary = fake_binary(tmp_path, "")
-    client = GlasshouseClient("model.morph", "postgres:///x", binary=str(binary))
-    client.audit()
-    assert "--writer-role" not in (tmp_path / "argv.txt").read_text().splitlines()
-    client.audit(writer_roles=["one_off"])
-    argv = (tmp_path / "argv.txt").read_text().splitlines()
-    assert argv[argv.index("--writer-role") + 1] == "one_off"
-
-
-def test_an_explicit_empty_assertion_turns_the_configured_one_off(tmp_path: Path) -> None:
-    # None means "this deployment's assertion"; an empty list keeps the
-    # generated meaning, no flag at all. Without the distinction a caller
-    # could not ask for the all-sessions horizon on a configured client -
-    # and would silently get the configured one back instead.
-    client = GlasshouseClient(
-        "model.morph",
-        "postgres:///x",
-        binary=str(fake_binary(tmp_path, "")),
-        writer_roles=["app_user"],
-    )
-    client.audit(writer_roles=[])
-    assert "--writer-role" not in (tmp_path / "argv.txt").read_text().splitlines()
 
 
 def test_binary_discovery_honours_the_glasshouse_env_var(

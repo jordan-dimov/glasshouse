@@ -28,7 +28,6 @@ from dataclasses import dataclass
 from decimal import Decimal
 
 import sqlalchemy as sa
-from sqlalchemy.exc import SQLAlchemyError
 
 from alembic import command
 from glasshouse.commit import (
@@ -123,11 +122,12 @@ class SeedError(Exception):
 
 
 # How long the seed waits for the audit tail to deliver every transition
-# it committed before refusing. The tail withholds rows while any session
-# in the database holds a transaction older than them (the binary's
-# slow-writer horizon: withheld, never lost), and a TimescaleDB
-# background worker in a freshly created database has been seen holding
-# one across a whole seed (contract section 31).
+# it committed before refusing. The tail withholds rows at or above the
+# lowest audit order a writer still in flight holds (withheld, never
+# lost), so a proposal in flight beside the seed delays it by a moment
+# and only a stuck writer or an unresolved prepared transaction holds it
+# for long. Until v0.0.17 any open transaction in the database did, a
+# TimescaleDB background worker included (contract section 31).
 PROJECTION_PATIENCE_SECONDS = 30.0
 
 
@@ -209,7 +209,7 @@ def seed_demo(
     mark per trade, projections rebuilt over every one of them. Refuses
     a ledger with any history - idempotent by refusal, never additive by
     accident. History is counted by the ledger's own replay, not the
-    audit tail, which a held-open transaction can make look empty."""
+    audit tail, which a writer in flight can hold short."""
     client.init(skip_if_exists=True)
     if ledger_transitions(client):
         raise SeedError("the ledger already has transitions; use seed --reset")
@@ -368,7 +368,7 @@ def establish_ledger_root(
 
 def ledger_transitions(client: GlasshouseClient) -> int:
     """How many transitions the ledger holds, from `audit verify`'s replay
-    over the audit table itself: the count no resume horizon shortens."""
+    over the audit table itself: the count no writer in flight shortens."""
     replay = client.audit_verify().replay
     if not isinstance(replay, ReplayConsistent):
         raise SeedError("the ledger's replay diverges from its claims; run glasshouse verify")
@@ -394,39 +394,11 @@ def project_everything(
             raise SeedError(
                 f"seeded, but the audit tail delivered {applied} of {expected} transition(s) "
                 f"within {patience:g} s, so the projections would not be complete. The tail "
-                "withholds every row younger than the oldest open transaction in this "
-                "database. Potential horizon blockers, oldest first (the oldest is the "
-                f"likely one): {_tail_holders(engine)}"
+                "withholds rows at or above the lowest audit order a writer still in flight "
+                "holds: look for a stuck proposal (pg_locks, locktype advisory) or an "
+                "unresolved prepared transaction (pg_prepared_xacts)"
             )
         time.sleep(1.0)
-
-
-def _tail_holders(engine: sa.Engine) -> str:
-    """The open transactions that may hold the tail's horizon back,
-    oldest first, as an operator can act on them. Potential, not proven:
-    this applies the binary's eligibility (this database, not this
-    session, not autovacuum) but not its watermark comparison, so a
-    younger transaction listed here may be innocent. Best effort: a role
-    that cannot see other sessions gets a pointer instead."""
-    try:
-        with engine.connect().execution_options(isolation_level="AUTOCOMMIT") as connection:
-            rows = connection.execute(
-                sa.text(
-                    "SELECT pid, coalesce(nullif(application_name, ''), backend_type) AS who,"
-                    " xact_start FROM pg_stat_activity"
-                    " WHERE datname = current_database() AND pid <> pg_backend_pid()"
-                    " AND xact_start IS NOT NULL"
-                    " AND backend_type IS DISTINCT FROM 'autovacuum worker'"
-                    " ORDER BY xact_start LIMIT 5"
-                )
-            ).all()
-    except SQLAlchemyError:
-        rows = []
-    if not rows:
-        return "none visible to this role now; see pg_stat_activity"
-    return "; ".join(
-        f"pid {pid} ({who}) open since {since.isoformat()}" for pid, who, since in rows
-    )
 
 
 def _committed(outcome: object) -> Committed:
@@ -453,12 +425,8 @@ def run_seed(
     engine = sa.create_engine(engine_url(database_url))
     try:
         # The guard takes a session-level advisory lock on an AUTOCOMMIT
-        # connection: a plain connection would sit "idle in transaction"
-        # for the whole seed, and the blessed audit tail's slow-writer
-        # horizon would (correctly) treat that open transaction as a
-        # writer that started before every commit - making the projector
-        # see an empty tail. Session locks outlive statements, so
-        # AUTOCOMMIT loses nothing.
+        # connection: session locks outlive statements, so nothing is
+        # lost, and no transaction sits idle for the whole seed.
         with engine.connect().execution_options(isolation_level="AUTOCOMMIT") as guard:
             locked = guard.execute(
                 sa.text("select pg_try_advisory_lock(:key)"), {"key": SEED_LOCK_KEY}
@@ -484,15 +452,7 @@ def run_seed(
                         guard.execute(
                             sa.text("select pg_advisory_unlock(hashtext('glasshouse.projector'))")
                         )
-                # Writer roles configured, not passed per call: the seed
-                # tails the audit twice (the emptiness refusal below, and
-                # `verify`'s projection leg), and on managed PostgreSQL
-                # both refuse without the assertion.
-                client = GlasshouseClient(
-                    str(MODEL_FILE),
-                    database_url,
-                    writer_roles=get_settings().audit_writer_roles,
-                )
+                client = GlasshouseClient(str(MODEL_FILE), database_url)
                 store = CurveStore(engine)
                 report = seed_demo(client, store, engine, patience=patience)
                 verification = verify(client, engine, store)
