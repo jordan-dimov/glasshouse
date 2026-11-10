@@ -6,19 +6,29 @@ the engine pool is built on startup and disposed on shutdown rather than
 leaked at import. Logging is configured for the running process at the
 same point. `/readyz` answers the deployment hook's real question through
 `health.checks` - the same call the Overview screen's health tile
-renders, so the probe and the screen can never disagree.
+renders, so the probe and the screen can never disagree. With
+`GLASSHOUSE_MCP_TOKEN` set, the agent's door (`glasshouse.agents`) is
+served at `/mcp` behind that token; without it the path does not exist.
 """
 
 from collections.abc import AsyncIterator
-from contextlib import asynccontextmanager
+from contextlib import AsyncExitStack, asynccontextmanager
 
 from fastapi import FastAPI, Request, Response
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
+from mcp.server import MCPServer
+from mcp.server.transport_security import TransportSecuritySettings
 
 from glasshouse import __version__
+from glasshouse.agents import Desk, build_server
 from glasshouse.api import health
-from glasshouse.api.auth import DEMO_USERNAME, DemoAuthMiddleware
+from glasshouse.api.auth import (
+    AGENT_PATH,
+    DEMO_USERNAME,
+    AgentDoorMiddleware,
+    DemoAuthMiddleware,
+)
 from glasshouse.api.deps import build_client, build_engine
 from glasshouse.api.queries import ReadUnavailableError
 from glasshouse.api.routers import audit, curves, explain, reads
@@ -44,7 +54,12 @@ def create_app() -> FastAPI:
         # whatever happens after: a client build that failed would
         # otherwise leak the pool on a half-completed startup.
         projector: RunningProjector | None = None
+        stack = AsyncExitStack()
         try:
+            if agents is not None:
+                # A mounted app's own lifespan never runs: the session
+                # manager is entered here, and left before the engine goes.
+                await stack.enter_async_context(agents.session_manager.run())
             app.state.engine = engine
             app.state.client = build_client(settings)
             app.state.store = CurveStore(engine)
@@ -73,8 +88,23 @@ def create_app() -> FastAPI:
                     thread.join(timeout=30)
                     if thread.is_alive():
                         log.error("api.projector_still_alive_at_dispose", waited_seconds=35)
+            await stack.aclose()
             engine.dispose()
             log.info("api.shutdown")
+
+    # The agent's door exists only when its token is configured. The
+    # server is built now and asks for the client and engine on each
+    # call, because those are made by the lifespan below.
+    agents: MCPServer | None = None
+    if settings.mcp_token is not None:
+        agents = build_server(
+            lambda: Desk(
+                client=app.state.client,
+                engine=app.state.engine,
+                actor=settings.mcp_actor,
+                org=settings.demo_org,
+            )
+        )
 
     app = FastAPI(
         title="Glasshouse",
@@ -89,6 +119,20 @@ def create_app() -> FastAPI:
     app.include_router(audit.router)
     app.include_router(web.router)
     app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
+    if agents is not None and settings.mcp_token is not None:
+        # The agent's door, behind its own bearer token. Stateless and
+        # answering in JSON: each call stands alone, so nothing is kept
+        # in this process between them and a restart loses no session.
+        # The Host check the SDK applies by default guards a local server
+        # with no credential against DNS rebinding; here every request
+        # must carry the token, which a rebinding page does not have.
+        door = agents.streamable_http_app(
+            streamable_http_path=AGENT_PATH,
+            stateless_http=True,
+            json_response=True,
+            transport_security=TransportSecuritySettings(enable_dns_rebinding_protection=False),
+        )
+        app.add_middleware(AgentDoorMiddleware, door=door, token=settings.mcp_token)
 
     if settings.demo_password is not None:
         # The shared demo login: one gate in front of everything except
@@ -96,7 +140,10 @@ def create_app() -> FastAPI:
         # before routing and the 503 faces below see only authenticated
         # traffic.
         app.add_middleware(
-            DemoAuthMiddleware, username=DEMO_USERNAME, password=settings.demo_password
+            DemoAuthMiddleware,
+            username=DEMO_USERNAME,
+            password=settings.demo_password,
+            agent_door=agents is not None,
         )
 
     @app.exception_handler(ReadUnavailableError)

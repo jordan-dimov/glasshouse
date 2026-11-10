@@ -43,17 +43,17 @@ router = APIRouter(tags=["explain"])
 log = get_logger("glasshouse.api")
 
 
-def _compared(compared: envelopes.Compared | None) -> Compared | None:
+def wire_compared(compared: envelopes.Compared | None) -> Compared | None:
     if compared is None:
         return None
     return Compared(op=compared.op, left=wire_text(compared.left), right=wire_text(compared.right))
 
 
-def _witness(witness: list[envelopes.WitnessBinding]) -> list[WitnessBinding]:
+def wire_witness(witness: list[envelopes.WitnessBinding]) -> list[WitnessBinding]:
     return [WitnessBinding(var=binding.var, value=wire_text(binding.value)) for binding in witness]
 
 
-def _flatten(rejection: object) -> Rejection | None:
+def flatten_rejection(rejection: object) -> Rejection | None:
     """The generated envelope's frozen dataclasses into the wire models."""
     match rejection:
         case None:
@@ -73,15 +73,15 @@ def _flatten(rejection: object) -> Rejection | None:
                     )
                     for claim in rejection.directly_missing_claims
                 ],
-                compared=_compared(rejection.compared),
-                witness=_witness(rejection.witness),
+                compared=wire_compared(rejection.compared),
+                witness=wire_witness(rejection.witness),
             )
         case envelopes.InvariantRejection():
             return InvariantRejection(
                 name=rejection.name,
                 rule=rejection.rule,
-                compared=_compared(rejection.compared),
-                witness=_witness(rejection.witness),
+                compared=wire_compared(rejection.compared),
+                witness=wire_witness(rejection.witness),
             )
         case envelopes.ErrorRejection():
             return ErrorRejection(message=rejection.message)
@@ -104,4 +104,6 @@ def explain(
         # source) but never reflect it - it can carry the database URL.
         log.warning("api.explain_failed", transformation=body.transformation, error=str(exc))
         raise HTTPException(status_code=502, detail="explain could not be evaluated") from exc
-    return ExplainResponse(admissible=result.admissible, rejection=_flatten(result.rejection))
+    return ExplainResponse(
+        admissible=result.admissible, rejection=flatten_rejection(result.rejection)
+    )

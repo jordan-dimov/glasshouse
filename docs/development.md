@@ -64,6 +64,7 @@ Run as `uv run python -m glasshouse.cli <command>`; every command has `--help`.
 | `project` | Bring the read tables up to date with the ledger. `--follow` runs it as a worker. |
 | `verify` | Check that the operational database still agrees with the ledger (six independent checks). The exit code says whether it does. |
 | `checkpoint` | Record a tamper-evidence checkpoint over the audit log. |
+| `mcp` | Serve the book to an AI agent over MCP, on standard input and output. `--actor` names who the agent acts as. See [mcp.md](mcp.md). |
 | `evidence-export` | Write the audit history to a file a third party can verify. |
 | `evidence-verify` | Verify such a file offline, with no database. |
 | `apply-views` | Apply the SQL inspection views on their own (`provision` already does). |
@@ -82,5 +83,7 @@ Configuration is environment-only, prefixed `GLASSHOUSE_`:
 - `GLASSHOUSE_MORPHOLOG_BIN`: path to the morpholog binary.
 - `GLASSHOUSE_ENVIRONMENT`: `dev`, `demo` or `production`.
 - `GLASSHOUSE_DEMO_PASSWORD`: unset means no login, for local development. Set, it puts the shared demo login (HTTP Basic, username `demo`) in front of everything but the health probes, and in the demo environment browser writes refuse to run without it.
+- `GLASSHOUSE_MCP_TOKEN`: unset means agents cannot connect over HTTP at all. Set (12 characters or more), the MCP server is served at `/mcp` to callers who send it as a bearer token. See [mcp.md](mcp.md).
+- `GLASSHOUSE_MCP_ACTOR`: the actor a caller with that token acts as (default `agent`).
 
 Operational logs go to stderr, leaving stdout as the command line's data channel (an import report, a projector count). `dev` renders a readable console line; `demo` and `production` render JSON lines for a log aggregator. The operational log is separate from the audit history in the ledger.

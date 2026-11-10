@@ -62,6 +62,10 @@ _ALEMBIC_INI = ALEMBIC_INI
 ORG = "acme-energy"
 MARKET = "de-power"
 BOOKS = ("spec-de", "hedge-de")
+# The actor an MCP client acts as by default, and the one book it may
+# trade in (`GLASSHOUSE_MCP_ACTOR`, `glasshouse mcp --actor`).
+AGENT = "agent"
+AGENT_BOOK = "spec-de"
 # The per-hour position cap of each book, in MW.
 LIMITS = {"spec-de": Decimal("25"), "hedge-de": Decimal("20")}
 # Two versions, deliberately non-overlapping ids (neither is a substring
@@ -236,6 +240,10 @@ def seed_demo(
         *(models.GrantValuationAuthorityRequest(principal="demo", org=ORG, book=b) for b in BOOKS),
         models.GrantLimitAuthorityRequest(principal="risk-manager", org=ORG),
         models.GrantLimitAuthorityRequest(principal="demo", org=ORG),
+        # The agent (`glasshouse.agents`): capture authority in the
+        # speculative book and nothing else, so its cap binds it and the
+        # hedge book refuses it, both by the rules as written.
+        models.GrantCaptureAuthorityRequest(principal=AGENT, org=ORG, book=AGENT_BOOK),
     )
     for grant in grants:
         _committed(client.submit(grant, actor="bootstrap"))

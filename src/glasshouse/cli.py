@@ -27,6 +27,7 @@ import typer
 from pydantic import ValidationError
 from typer.main import get_command
 
+from glasshouse.agents import Desk, build_server
 from glasshouse.commit import (
     MODEL_FILE,
     VIEWS_SCHEMA,
@@ -240,6 +241,28 @@ def set_limit_command(
     print(
         f"position limit for {book} in {org}: {cap_mw} MW{was}; transition {outcome.transition_id}"
     )
+
+
+@app.command(
+    "mcp",
+    help="Serve the book to an AI agent over the Model Context Protocol, on stdin and stdout. "
+    "The agent acts as one actor in one organisation, with the authority the ledger grants "
+    "that actor and no more.",
+)
+def mcp_command(
+    actor: Annotated[str, typer.Option(help="the actor the agent acts as")] = "agent",
+    org: Annotated[str, typer.Option(help="the organisation it works in")] = "",
+    database_url: DatabaseUrl = "",
+) -> None:
+    settings = get_settings()
+    db = _db(database_url)
+    engine = sa.create_engine(engine_url(db))
+    desk = Desk(client=_client(db), engine=engine, actor=actor, org=org or settings.demo_org)
+    try:
+        # stdout is the protocol's channel; our logs already go to stderr.
+        build_server(lambda: desk).run("stdio")
+    finally:
+        engine.dispose()
 
 
 @app.command("verify", help="Prove the operational database still agrees with the governed ledger.")
