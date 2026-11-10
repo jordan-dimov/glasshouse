@@ -18,6 +18,7 @@ from __future__ import annotations
 
 from datetime import datetime
 from decimal import Decimal
+from typing import Any
 
 import sqlalchemy as sa
 
@@ -46,7 +47,7 @@ class ReadUnavailableError(Exception):
     """The projection tables (a cache of the ledger) cannot answer."""
 
 
-def _rows(engine: sa.Engine, statement: sa.Select) -> list[dict]:  # type: ignore[type-arg]
+def _rows(engine: sa.Engine, statement: sa.Select[Any]) -> list[dict[str, Any]]:
     try:
         with engine.connect() as connection:
             return [dict(row) for row in connection.execute(statement).mappings()]
@@ -151,7 +152,7 @@ def list_positions(
     return [PositionHour.model_validate(row) for row in _rows(engine, statement)]
 
 
-def _latest_valuations(org: str) -> sa.Select:  # type: ignore[type-arg]
+def _latest_valuations(org: str) -> sa.Select[Any]:
     # One row per trade: the latest admitted mark. `trade_valuation`
     # deliberately keeps the mark against every curve version a trade was
     # struck against (both survive a correction, law 2), so "current MtM"

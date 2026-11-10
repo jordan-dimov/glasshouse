@@ -6,6 +6,7 @@ which is the replay and the projector agreeing row for row.
 """
 
 import datetime as dt
+from typing import Any
 
 import pytest
 import sqlalchemy as sa
@@ -58,11 +59,11 @@ def app(moments: dict[str, dt.datetime], monkeypatch: pytest.MonkeyPatch) -> Tes
 
 def _get(
     client: TestClient, path: str, at: dt.datetime | None = None, /, **params: str
-) -> list[dict]:  # type: ignore[type-arg]  # type: ignore[type-arg]
+) -> list[dict[str, Any]]:
     query = {"org": ORG, **params} | ({"as_of": at.isoformat()} if at else {})
     response = client.get(path, params=query)
     assert response.status_code == 200, response.text
-    rows: list[dict] = response.json()  # type: ignore[type-arg]
+    rows: list[dict[str, Any]] = response.json()
     return rows
 
 

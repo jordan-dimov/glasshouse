@@ -10,6 +10,7 @@ import hashlib
 import re
 from pathlib import Path
 
+import httpx2 as httpx
 import pytest
 from fastapi.testclient import TestClient
 
@@ -138,9 +139,11 @@ def test_a_malformed_time_window_is_a_422_not_a_503() -> None:
     assert "UTC" in response.text
 
 
-def _preview(client, **overrides: object):  # type: ignore[no-untyped-def]
+def _preview(
+    client: TestClient, data: bytes = b"book,trade\n1,2\n", **overrides: object
+) -> httpx.Response:
     form = {"org": "acme-energy", "kind": "trades", "actor": "alice"}
-    files = {"file": ("trades.csv", overrides.pop("data", b"book,trade\n1,2\n"), "text/csv")}
+    files = {"file": ("trades.csv", data, "text/csv")}
     form.update({k: str(v) for k, v in overrides.items()})
     return client.post("/ui/imports/preview", data=form, files=files)
 
@@ -260,7 +263,9 @@ ONE_RECEIPT = (
 )
 
 
-def _commit_three_rows(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, binary: Path):  # type: ignore[no-untyped-def]
+def _commit_three_rows(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, binary: Path
+) -> httpx.Response:
     monkeypatch.setenv("GLASSHOUSE_MORPHOLOG_BIN", str(binary))
     with TestClient(create_app()) as client:
         return client.post(

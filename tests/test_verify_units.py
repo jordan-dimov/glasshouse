@@ -3,6 +3,7 @@ upstream verdicts; the live consistent/divergent paths are proven in
 tests/test_verify_integration.py."""
 
 import json
+from collections.abc import Mapping
 from pathlib import Path
 
 import pytest
@@ -17,6 +18,7 @@ from glasshouse.commit import (
     views_model_hash,
 )
 from glasshouse.commit.morpholog_client import MORPHOLOG_VERSION
+from glasshouse.commit.morpholog_client.envelopes import VerifyReport as VerifyReportEnvelope
 from glasshouse.commit.morpholog_client.envelopes import (
     ViewsIntact,
     ViewsNotSealed,
@@ -51,7 +53,9 @@ def client_with(
     )
 
 
-def _verify_report(tmp_path: Path, replay: dict, tree: dict):  # type: ignore[type-arg, no-untyped-def]
+def _verify_report(
+    tmp_path: Path, replay: Mapping[str, object], tree: Mapping[str, object]
+) -> VerifyReportEnvelope:
     """The typed `verify` envelope, via a fake binary playing it back."""
     report = {
         "passes": replay["status"] == "consistent" and tree["status"] == "intact",

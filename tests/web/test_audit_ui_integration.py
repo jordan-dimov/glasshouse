@@ -5,6 +5,8 @@ pack plus a downloaded anchor verifying with no database access.
 Self-provisioned module slate.
 """
 
+from pathlib import Path
+
 import pytest
 import sqlalchemy as sa
 from fastapi.testclient import TestClient
@@ -85,7 +87,7 @@ def test_the_verify_panel_renders_six_green_legs(ui: TestClient) -> None:
     assert fragment.headers["vary"] == "HX-Request-Type"
 
 
-def test_the_evidence_loop_closes_offline(ui: TestClient, tmp_path) -> None:  # type: ignore[no-untyped-def]
+def test_the_evidence_loop_closes_offline(ui: TestClient, tmp_path: Path) -> None:
     with ui as client:
         anchor = client.post("/ui/audit/checkpoint")
         pack = client.get("/ui/audit/evidence-pack")
