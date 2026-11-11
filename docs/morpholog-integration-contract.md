@@ -654,6 +654,6 @@ Section 32's baseline (0.33 to 0.35 on v0.0.16) was taken before the limit gate 
 | commits per second, main | 22.4 | 21.8 | 22.2 | 22.1 |
 | commits per second, with instructions | 19.5 | 20.3 | 17.3 | 19.0 |
 
-No give-ups on either side. The retry rate is within the run-to-run spread of either side (about 7 percent higher on the means). The workload is about 14 percent slower: every capture now evaluates a second gate per hour. What this does NOT measure: the classroom's organisations have no caps and no instructions, so it is the price of the gate on the ordinary path, not contention between instructions and trades in one capped book. Those now queue behind each other by design (both read `InstructionOpen` and the trades of that book), and the harness has no workload for it yet.
+Every run on both sides committed all 540 decisions and ended at the same 12,483 claims, so no proposal gave up. The retry rate is within the run-to-run spread of either side (about 7 percent higher on the means). The workload is about 14 percent slower: every capture now evaluates a second gate per hour. What this does NOT measure: the classroom's organisations have no caps and no instructions, so it is the price of the gate on the ordinary path, not contention between instructions and trades in one capped book. Those now queue behind each other by design (both read `InstructionOpen` and the trades of that book), and the harness has no workload for it yet.
 
 **Counts.** Pure 314 passed, live 451 passed, coverage gate held.
