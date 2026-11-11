@@ -4,11 +4,15 @@ The technical companion to the [README](../README.md): setup, tests, the command
 
 ## Reading order
 
-1. [DESIGN.md](../DESIGN.md): the founding design document. What Glasshouse is, who adopts it, the architecture, the readiness ladder.
-2. [SCOPE.md](../SCOPE.md): what Glasshouse is not, stated plainly.
-3. [The rule file](../src/glasshouse/commit/glasshouse.morph): every fact the ledger may hold and every way it may change.
-4. [The Morpholog integration contract](morpholog-integration-contract.md): the working record of how Glasshouse uses the engine underneath, one section per upgrade or rule change.
-5. [Upgrading Morpholog](operations/upgrading-morpholog.md): the database runbook.
+1. [The coverage table](coverage.md): what a full ETRM does and where Glasshouse stands on each function, with the issue for everything planned.
+2. [DESIGN.md](../DESIGN.md): the founding design document. What Glasshouse is, who adopts it, the architecture, the readiness ladder.
+3. [SCOPE.md](../SCOPE.md): what Glasshouse is not, stated plainly.
+4. [The rule file](../src/glasshouse/commit/glasshouse.morph): every fact the ledger may hold and every way it may change.
+5. [Agents over MCP](mcp.md): how an AI agent connects, with two walk-throughs.
+6. [The Morpholog integration contract](morpholog-integration-contract.md): the working record of how Glasshouse uses the engine underneath, one section per upgrade or rule change.
+7. [Upgrading Morpholog](operations/upgrading-morpholog.md): the database runbook.
+
+This page has two halves. The first is how to run and change Glasshouse: setup, checks, the command line, the API, configuration, provisioning and upgrading. The second is how it behaves: currencies, instructions, refusals and viewing the past.
 
 ## Setup
 
@@ -28,31 +32,6 @@ uv run uvicorn glasshouse.api.app:app --reload
 The screens are under <http://localhost:8000/ui> and the API's OpenAPI page is at <http://localhost:8000/docs>.
 
 If you already run a PostgreSQL on port 5432, the compose database cannot bind it. Change the left-hand side of the `ports` entry in `docker-compose.yml` (for example `"5433:5432"`) and set `GLASSHOUSE_DATABASE_URL=postgresql://glasshouse:glasshouse@localhost:5433/glasshouse`.
-
-## Viewing the past
-
-`/trades`, `/positions` and `/valuations` take `as_of`, an ISO 8601 instant (no offset means UTC), and answer as the book stood then. The Trades and Positions screens have the same control in the top bar, and changing the time keeps the filters you had. The other screens show current data and say so.
-
-The answer is computed by replaying the ledger's history up to that instant through the same code that maintains the live tables. Three things follow:
-
-- An answer, once given, does not change. A moment is refused with a 409 while a write that started before it is still in progress, because that write's rows could still land before it. Morpholog makes that call, not a timer here. Ask again shortly. A future moment is a 422.
-- Read at the present, it matches the live tables whenever the projector has caught up with the ledger. If the projector is behind, the as-of read is the more recent of the two.
-- It shows the past as today's code reads it. If the way positions are computed ever changes, an old moment will be recomputed the new way.
-
-Each as-of request replays the whole history, and the work grows with the number of delivery hours as well as the number of transitions. That is fine for the demo book and has not been measured on a large one.
-
-## Instructions
-
-An instruction is an intention to buy or sell that has not happened yet, such as an order sent to market. From the moment it is placed it holds room under its book's position limit, so a trade or another instruction cannot take that room. `/instructions?org=...` lists them; the Positions screen shows what is held; agents place and cancel them through MCP ([mcp.md](mcp.md)).
-
-- Open buys count towards the bought side of the limit and open sells towards the sold side. They are never set against each other.
-- A trade refused because instructions hold the room is refused by `room_not_held_by_instructions`, not by `hour_within_limit`, and its figures are the quantity instructed and the room the trades leave.
-- An instruction holds its room until it is cancelled, or until its lapse is recorded after `valid_until`. Time passing does not free the room by itself.
-- It is not approved by anyone and not connected to fills yet.
-
-## Refusals
-
-`/refusals?org=...` returns the most recent proposals the rules refused for an organisation, with the rule and the figures. The Audit screen shows the same list. It is not the audit history and it is not complete: the engine writes a refusal at most once, after the proposal is rolled back, so one can be missing. Each answer says so and says how many it reaches back (`limit`, 20 unless asked, 200 at most).
 
 ## Checks
 
@@ -82,31 +61,24 @@ Run as `uv run python -m glasshouse.cli <command>`; every command has `--help`.
 | `evidence-verify` | Verify such a file offline, with no database. |
 | `apply-views` | Apply the SQL inspection views on their own (`provision` already does). |
 
-## Currencies
+## The API
 
-A market is declared once, with the currency it is priced in (`declare_market` in the rule file). That declaration is the only place a currency comes from. A trade's price and a curve's prices are per MWh in their market's currency, and a valuation states its currency, which the ledger checks against the market's. A trade or a curve in a market that has not been declared is refused.
+Interactive documentation is served at `/docs` on a running server. Every read takes `org`, because every answer is about one organisation.
 
-Every price and valuation is returned with a `currency` field, by the API, the MCP tools and the screens. Nothing is added across currencies: the overview gives one total per currency. There is no conversion and no exchange rate.
+| Address | What it returns |
+|---|---|
+| `GET /orgs`, `/overview` | The organisations, and one organisation's books, values per currency and system state. |
+| `GET /trades`, `/trades/{trade}/terms` | Trades as they stand, and every version of one trade. |
+| `GET /positions` | Net MW per book, market and delivery hour. |
+| `GET /valuations` | Each valuation, naming the curve and trade version it used. |
+| `GET /markets`, `/curves`, `/curves/diff` | Markets, curve versions, and what changed between two versions. |
+| `GET /instructions` | Open orders and what each holds under its book's limit. |
+| `GET /audit` | Every accepted change, newest first. |
+| `GET /refusals` | Recent refused proposals. Not complete; see below. |
+| `POST /explain` | Whether a change would be accepted, and why not. Records nothing. |
+| `/mcp` | The same book for AI agents, when a token is configured. See [mcp.md](mcp.md). |
 
-The list of currencies is closed and lives in the rule file: EUR, GBP, NOK, SEK, DKK, PLN and RON, the currencies European power markets are priced in. Adding one is a change to the rule file.
-
-The CSV files have no currency column. A row takes the currency of the market it names.
-
-## Upgrading
-
-Pull, then run `glasshouse provision`. It applies any schema change and is safe to run every time.
-
-A change to the rule file is different. If it changes the shape of a fact the ledger already holds, an existing ledger no longer fits the rules and `provision` refuses it by name. Two such changes have been made so far, and each was made as a clean break because no ledger was being kept anywhere: the only one was the demo's, which is re-seeded every night.
-
-- **Currencies (November 2026).** A valuation gained a `currency` field and every market must now be declared with its currency. A database from before this has no upgrade path. Re-seed it: `uv run python -m glasshouse.cli seed --reset`.
-
-That will not be acceptable once someone keeps a ledger. From the first kept ledger onwards, a change to the shape of a recorded fact needs an upgrade path that keeps the old record readable, and a change without one should not be merged.
-
-## Provisioning
-
-`glasshouse provision` is the whole sequence and is idempotent; the deployed service runs it as its pre-deploy step. By hand the order is: the Alembic migration (the app schema), `morpholog init` then `morpholog migrate` (the ledger's schema), `morpholog check --strict --database-url` (the rules fit the claims the ledger holds), `morpholog provision indexes` (the indexes and planner statistics the ledger's reads use; `init` does not build them), then `glasshouse apply-views`.
-
-`glasshouse verify`'s `views` check fails until the views step has run, by design: the inspection views are part of what it checks.
+`/trades`, `/positions` and `/valuations` also take `as_of`. There is no JSON address that records a trade yet: trades arrive by import, by the command line or through an agent.
 
 ## Configuration and logs
 
@@ -120,3 +92,56 @@ Configuration is environment-only, prefixed `GLASSHOUSE_`:
 - `GLASSHOUSE_MCP_ACTOR`: the actor a caller with that token acts as (default `agent`).
 
 Operational logs go to stderr, leaving stdout as the command line's data channel (an import report, a projector count). `dev` renders a readable console line; `demo` and `production` render JSON lines for a log aggregator. The operational log is separate from the audit history in the ledger.
+
+## Provisioning
+
+`glasshouse provision` is the whole sequence and is idempotent; the deployed service runs it as its pre-deploy step. By hand the order is: the Alembic migration (the app schema), `morpholog init` then `morpholog migrate` (the ledger's schema), `morpholog check --strict --database-url` (the rules fit the claims the ledger holds), `morpholog provision indexes` (the indexes and planner statistics the ledger's reads use; `init` does not build them), then `glasshouse apply-views`.
+
+`glasshouse verify`'s `views` check fails until the views step has run, by design: the inspection views are part of what it checks.
+
+## Upgrading
+
+Pull, then run `glasshouse provision`. It applies any schema change and is safe to run every time.
+
+A change to the rule file is different. If it changes the shape of a fact the ledger already holds, an existing ledger no longer fits the rules and `provision` refuses it by name. One such change has been made so far, as a clean break, because no ledger was being kept anywhere: the only one was the demo's, which is re-seeded every night.
+
+- **Currencies (November 2026).** A valuation gained a `currency` field and every market must now be declared with its currency. A database from before this has no upgrade path. Re-seed it: `uv run python -m glasshouse.cli seed --reset`.
+
+- **Instructions (November 2026).** New facts only; nothing existing changed shape, so an older database still fits. But the right to place instructions is granted by the seed, so re-seed to try them.
+
+A clean break will not be acceptable once someone keeps a ledger. From the first kept ledger onwards, a change to the shape of a recorded fact needs an upgrade path that keeps the old record readable, and a change without one should not be merged.
+
+## Currencies
+
+A market is declared once, with the currency it is priced in (`declare_market` in the rule file). That declaration is the only place a currency comes from. A trade's price and a curve's prices are per MWh in their market's currency, and a valuation states its currency, which the ledger checks against the market's. A trade or a curve in a market that has not been declared is refused.
+
+Every price and valuation is returned with a `currency` field, by the API, the MCP tools and the screens. Nothing is added across currencies: the overview gives one total per currency. There is no conversion and no exchange rate.
+
+The list of currencies is closed and lives in the rule file: EUR, GBP, NOK, SEK, DKK, PLN and RON, the currencies European power markets are priced in. Adding one is a change to the rule file.
+
+The CSV files have no currency column. A row takes the currency of the market it names.
+
+## Instructions
+
+An instruction is an intention to buy or sell that has not happened yet, such as an order sent to market. From the moment it is placed it holds room under its book's position limit, so a trade or another instruction cannot take that room. `/instructions?org=...` lists them; the Positions screen shows what is held; agents place and cancel them through MCP ([mcp.md](mcp.md)).
+
+- Open buys count towards the bought side of the limit and open sells towards the sold side. They are never set against each other.
+- A trade refused because instructions hold the room is refused by `room_not_held_by_instructions`, not by `hour_within_limit`, and its figures are the quantity instructed and the room the trades leave.
+- An instruction holds its room until it is cancelled, or until its lapse is recorded after `valid_until`. Time passing does not free the room by itself.
+- It is not approved by anyone and not connected to fills yet.
+
+## Refusals
+
+`/refusals?org=...` returns the most recent proposals the rules refused for an organisation, with the rule and the figures. The Audit screen shows the same list. It is not the audit history and it is not complete: the engine writes a refusal at most once, after the proposal is rolled back, so one can be missing. Each answer says so and says how many it reaches back (`limit`, 20 unless asked, 200 at most).
+
+## Viewing the past
+
+`/trades`, `/positions` and `/valuations` take `as_of`, an ISO 8601 instant (no offset means UTC), and answer as the book stood then. The Trades and Positions screens have the same control in the top bar, and changing the time keeps the filters you had. The other screens show current data and say so.
+
+The answer is computed by replaying the ledger's history up to that instant through the same code that maintains the live tables. Three things follow:
+
+- An answer, once given, does not change. A moment is refused with a 409 while a write that started before it is still in progress, because that write's rows could still land before it. Morpholog makes that call, not a timer here. Ask again shortly. A future moment is a 422.
+- Read at the present, it matches the live tables whenever the projector has caught up with the ledger. If the projector is behind, the as-of read is the more recent of the two.
+- It shows the past as today's code reads it. If the way positions are computed ever changes, an old moment will be recomputed the new way.
+
+Each as-of request replays the whole history, and the work grows with the number of delivery hours as well as the number of transitions. That is fine for the demo book and has not been measured on a large one.
