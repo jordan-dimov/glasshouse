@@ -11,6 +11,10 @@ Glasshouse is the **book of record** for European power trading operations. So t
 - **A multi-commodity ETRM (initially).** European power first; product packs may extend it later.
 - **Advice.** Of any kind.
 
+## What it does and will do
+
+[docs/coverage.md](docs/coverage.md) lists each function of a full ETRM and says whether Glasshouse has it, is building it, plans it, or will not do it.
+
 ## Production readiness
 
 Adopters should know where they stand. The readiness ladder (DESIGN.md section 9) runs from L0 (local evaluation) to L5 (supported enterprise deployment); the hosted demo is L0 and says so on screen. The designed adoption path is L2: run Glasshouse as a **shadow book** alongside your spreadsheets or incumbent, reconciled daily, until it has earned the right to be the book of record.
