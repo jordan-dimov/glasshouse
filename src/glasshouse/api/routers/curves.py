@@ -9,10 +9,10 @@ from __future__ import annotations
 from fastapi import APIRouter, HTTPException
 
 from glasshouse.api import curves as curve_queries
-from glasshouse.api.deps import ClientDep, StoreDep
-from glasshouse.api.schemas import CurveDiff, CurveVersion
+from glasshouse.api.deps import UNAVAILABLE, ClientDep, StoreDep
+from glasshouse.api.schemas import CurveDiff, CurveVersion, Problem
 
-router = APIRouter(tags=["curves"])
+router = APIRouter(tags=["curves"], responses=UNAVAILABLE)
 
 
 @router.get("/markets")
@@ -30,7 +30,17 @@ def list_curves(
     return curve_queries.list_curve_versions(client, store, org=org, market=market)
 
 
-@router.get("/curves/diff")
+@router.get(
+    "/curves/diff",
+    responses={
+        404: {"model": Problem, "description": "A version is not registered for that market."},
+        409: {
+            "model": Problem,
+            "description": "Stored prices are missing: the database disagrees with the ledger.",
+        },
+        422: {"model": Problem, "description": "The two versions are for different days."},
+    },
+)
 def diff_curves(
     org: str,
     market: str,

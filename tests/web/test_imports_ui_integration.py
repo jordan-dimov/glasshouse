@@ -19,9 +19,9 @@ from glasshouse.commit import MODEL_FILE, Committed, GlasshouseClient
 from glasshouse.compute.curves import HourlyCurve
 from glasshouse.compute.marking import correct_curve_version
 from glasshouse.compute.store import CurveStore
-from glasshouse.seed import CURVE_V1, CURVE_V2, ORG, seed_demo
+from glasshouse.seed import CURVE_V1, CURVE_V2, ORG
 from glasshouse.web.routes import SAMPLE_TRADES
-from tests.support import BINARY, DB, needs_live_stack, provision
+from tests.support import BINARY, DB, needs_live_stack, seeded_ledger
 
 pytestmark = needs_live_stack
 
@@ -40,9 +40,7 @@ CURVES_CSV = (
 
 @pytest.fixture(scope="module")
 def seeded() -> sa.Engine:
-    engine = provision()
-    client = GlasshouseClient(str(MODEL_FILE), DB, binary=str(BINARY))
-    seed_demo(client, CurveStore(engine), engine)
+    _, engine = seeded_ledger()
     return engine
 
 

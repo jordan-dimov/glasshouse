@@ -18,10 +18,10 @@ from fastapi import APIRouter, Query
 
 from glasshouse.api import audit as audit_queries
 from glasshouse.api import instructions, refusals
-from glasshouse.api.deps import ClientDep
+from glasshouse.api.deps import UNAVAILABLE, ClientDep
 from glasshouse.api.schemas import AuditEntry, InstructionRow, RefusalLog
 
-router = APIRouter(tags=["audit"])
+router = APIRouter(tags=["audit"], responses=UNAVAILABLE)
 
 
 @router.get("/audit")

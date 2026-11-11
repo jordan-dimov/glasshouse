@@ -30,6 +30,7 @@ from glasshouse.api.schemas import (
     GateRejection,
     InvariantRejection,
     MissingClaim,
+    Problem,
     Rejection,
     WitnessBinding,
 )
@@ -89,7 +90,16 @@ def flatten_rejection(rejection: object) -> Rejection | None:
             raise HTTPException(status_code=502, detail="unknown rejection shape")
 
 
-@router.post("/explain")
+@router.post(
+    "/explain",
+    responses={
+        502: {
+            "model": Problem,
+            "description": "The rules engine could not evaluate the question (an unknown act, "
+            "arguments it cannot read, or it is unreachable).",
+        }
+    },
+)
 def explain(
     body: ExplainRequest,
     actor: Annotated[str, Header(alias="X-Actor")],

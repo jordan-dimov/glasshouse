@@ -24,16 +24,22 @@ from typing import Annotated
 from fastapi import APIRouter, HTTPException, Query
 
 from glasshouse.api import asof, queries
-from glasshouse.api.deps import EngineDep, PastDep
+from glasshouse.api.deps import AS_OF_ERRORS, UNAVAILABLE, EngineDep, PastDep
 from glasshouse.api.schemas import (
     BlotterTrade,
+    BookScope,
     OverviewSummary,
     PositionHour,
+    Problem,
     TradeTermsVersion,
     TradeValuation,
 )
 
-router = APIRouter(tags=["reads"])
+router = APIRouter(tags=["reads"], responses=UNAVAILABLE)
+
+# The three filters most reads share, declared once (a query parameter
+# model): the organisation, and a book or market to narrow to.
+type ScopeDep = Annotated[BookScope, Query()]
 
 
 @router.get("/orgs")
@@ -49,22 +55,29 @@ def overview(org: str, engine: EngineDep) -> OverviewSummary:
     return queries.overview(engine, org=org)
 
 
-@router.get("/trades")
+@router.get("/trades", responses=AS_OF_ERRORS)
 def list_trades(
-    org: str,
+    scope: ScopeDep,
     engine: EngineDep,
-    book: str | None = None,
-    market: str | None = None,
     limit: Annotated[int | None, Query(ge=1, le=500)] = None,
     offset: Annotated[int | None, Query(ge=0)] = None,
     past: PastDep = None,
 ) -> list[BlotterTrade]:
     return queries.list_trades(
-        engine, org=org, book=book, market=market, limit=limit, offset=offset, past=past
+        engine,
+        org=scope.org,
+        book=scope.book,
+        market=scope.market,
+        limit=limit,
+        offset=offset,
+        past=past,
     )
 
 
-@router.get("/trades/{trade:path}/terms")
+@router.get(
+    "/trades/{trade:path}/terms",
+    responses={404: {"model": Problem, "description": "No such trade in the organisation."}},
+)
 def list_trade_terms(trade: str, org: str, engine: EngineDep) -> list[TradeTermsVersion]:
     """The amendment trail of one trade: every terms version as
     admitted, with its lineage and which one is current. A trade id is
@@ -76,12 +89,10 @@ def list_trade_terms(trade: str, org: str, engine: EngineDep) -> list[TradeTerms
         raise HTTPException(status_code=404, detail=str(unknown)) from unknown
 
 
-@router.get("/positions")
+@router.get("/positions", responses=AS_OF_ERRORS)
 def list_positions(
-    org: str,
+    scope: ScopeDep,
     engine: EngineDep,
-    book: str | None = None,
-    market: str | None = None,
     start: Annotated[
         datetime | None, Query(description="period_start >= start (no offset means UTC)")
     ] = None,
@@ -94,22 +105,20 @@ def list_positions(
     # session: the live and the as-of path must read it as one instant.
     return queries.list_positions(
         engine,
-        org=org,
-        book=book,
-        market=market,
+        org=scope.org,
+        book=scope.book,
+        market=scope.market,
         start=asof.as_utc(start),
         end=asof.as_utc(end),
         past=past,
     )
 
 
-@router.get("/valuations")
+@router.get("/valuations", responses=AS_OF_ERRORS)
 def list_valuations(
-    org: str,
+    scope: ScopeDep,
     engine: EngineDep,
     trade: str | None = None,
-    book: str | None = None,
-    market: str | None = None,
     latest: Annotated[
         bool,
         Query(
@@ -120,5 +129,11 @@ def list_valuations(
     past: PastDep = None,
 ) -> list[TradeValuation]:
     return queries.list_valuations(
-        engine, org=org, trade=trade, book=book, market=market, latest=latest, past=past
+        engine,
+        org=scope.org,
+        trade=trade,
+        book=scope.book,
+        market=scope.market,
+        latest=latest,
+        past=past,
     )

@@ -170,6 +170,9 @@ ignore_errors = true
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-q"
+# One warning that is not ours to fix: the anyio pytest plugin (it comes
+# with the MCP SDK) imports a name the newer pytest has renamed.
+filterwarnings = ["ignore:_pytest.python.CallSpec2 has been renamed:pytest.PytestRemovedIn10Warning"]
 
 # Coverage is opt-in locally (`uv run pytest --cov`) and enforced in
 # CI's integration job, where the full suite runs. The generated client
