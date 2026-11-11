@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% from "_macros.html" import num, num_cell, choice, empty_state %}
+{% from "_macros.html" import num, num_cell, choice, badge, empty_state %}
 {% block title %}Positions - {{ org }} - Glasshouse{% endblock %}
 {% block content %}
 <div class="page-header">
@@ -73,6 +73,7 @@
           <th scope="col">Delivery to (UTC)</th>
           <th scope="col">Valid until (UTC)</th>
           <th scope="col">Placed by</th>
+          <th scope="col">Approval</th>
         </tr>
       </thead>
       <tbody>
@@ -89,12 +90,13 @@
           <td>{{ row.delivery_end | utc }}</td>
           <td>{{ row.valid_until | utc }}</td>
           <td>{{ row.proposer }}</td>
+          <td>{% if row.approval == "approved" %}approved by {{ row.approved_by }}{% elif row.approval == "awaiting" %}{{ badge("quarantined", "awaiting approval") }}{% else %}not required{% endif %}</td>
         </tr>
         {% endfor %}
       </tbody>
     </table>
   </div>
-  <p class="tile__note">An instruction is an intention that has not happened yet, such as an order sent to market. It holds room under its book's limit until it is cancelled, or until its time has run out and that is recorded. It is not approved by anyone and not connected to fills yet.</p>
+  <p class="tile__note">An instruction is an intention that has not happened yet, such as an order sent to market. It holds room under its book's limit until it is cancelled, or until its time has run out and that is recorded. Where a book requires approval, a second person must approve it, and never the one who placed it. It is not connected to fills yet.</p>
 </section>
 {% endif %}
 

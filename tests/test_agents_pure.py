@@ -37,6 +37,8 @@ TOOLS = {
     "place_instruction",
     "cancel_instruction",
     "list_instructions",
+    "approve_instruction",
+    "reject_instruction",
     "audit_history",
     "recent_refusals",
 }
@@ -77,7 +79,7 @@ def said(result: CallToolResult) -> str:
     return block.text
 
 
-def test_the_tools_are_the_eleven_and_none_takes_an_actor_or_an_organisation() -> None:
+def test_the_tools_are_the_thirteen_and_none_takes_an_actor_or_an_organisation() -> None:
     async def listed() -> dict[str, dict[str, Any]]:
         async with Client(build_server(desk)) as client:
             return {tool.name: tool.input_schema for tool in (await client.list_tools()).tools}
@@ -269,3 +271,47 @@ def test_a_trivial_token_fails_at_boot() -> None:
     # Left empty in a hosting dashboard: not set, door shut, no crash.
     assert Settings(mcp_token="  ").mcp_token is None
     assert Settings().mcp_actor == "agent"
+
+
+def test_each_token_is_one_actor_and_a_bad_set_fails_at_boot() -> None:
+    settings = Settings(
+        mcp_token="the-first-token-x",
+        mcp_tokens={"risk-manager": "the-second-token", "alice": "the-third-token-"},
+    )
+    assert settings.agent_tokens() == {
+        "the-first-token-x": "agent",
+        "the-second-token": "risk-manager",
+        "the-third-token-": "alice",
+    }
+    assert Settings().agent_tokens() == {}  # no token, no door
+    with pytest.raises(ValidationError, match="at least 12"):
+        Settings(mcp_tokens={"alice": "short"})
+    with pytest.raises(ValidationError, match="blank"):
+        Settings(mcp_tokens={" ": "a-long-enough-token"})
+    # One token for two actors could not say which of them called.
+    with pytest.raises(ValidationError, match="same token"):
+        Settings(mcp_tokens={"alice": "a-long-enough-token", "bob": "a-long-enough-token"})
+    clash = Settings(mcp_token="a-long-enough-token", mcp_tokens={"bob": "a-long-enough-token"})
+    with pytest.raises(ValueError, match="also the token of another actor"):
+        clash.agent_tokens()
+
+
+def test_the_door_opens_to_every_configured_token_and_only_those(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("GLASSHOUSE_MCP_TOKENS", json.dumps({"risk-manager": "the-second-token"}))
+    with _app(monkeypatch, token=TOKEN, password=PASSWORD) as client:
+        first = _knock(client, bearer=TOKEN)
+        second = _knock(client, bearer="the-second-token")
+        neither = _knock(client, bearer="the-second-toke")
+    assert first.status_code == second.status_code == 200
+    assert neither.status_code == 401
+
+
+def test_tokens_alone_open_the_door_without_the_single_token(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("GLASSHOUSE_MCP_TOKENS", json.dumps({"risk-manager": "the-second-token"}))
+    with _app(monkeypatch, token=None, password=None) as client:
+        assert _knock(client, bearer="the-second-token").status_code == 200
+        assert _knock(client, bearer=TOKEN).status_code == 401

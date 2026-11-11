@@ -657,3 +657,22 @@ Section 32's baseline (0.33 to 0.35 on v0.0.16) was taken before the limit gate 
 Every run on both sides committed all 540 decisions and ended at the same 12,483 claims, so no proposal gave up. The retry rate is within the run-to-run spread of either side (about 7 percent higher on the means). The workload is about 14 percent slower: every capture now evaluates a second gate per hour. What this does NOT measure: the classroom's organisations have no caps and no instructions, so it is the price of the gate on the ordinary path, not contention between instructions and trades in one capped book. Those now queue behind each other by design (both read `InstructionOpen` and the trades of that book), and the harness has no workload for it yet.
 
 **Counts.** Pure 314 passed, live 451 passed, coverage gate held.
+
+## 37. Approval of instructions, and an actor per caller: 11/11/2026, model change, no re-pin
+
+**Why.** A second pair of eyes is the first control a desk asks for, and it means nothing while every caller of the hosted MCP server is one actor. Slice 2 of the instructions work (glasshouse#113).
+
+**The model.** MODEL_HASH `sha256:89917eea…` → `sha256:1d543745…` (24 predicates, 4 definitions, 31 invariants, 22 transformations; `check -v` unchanged in kind: `compiled`, `all bound`, `1 whole`). Additive.
+
+- `MayApprove(actor, org, book)` and `grant_approve_authority`.
+- `ApprovalRequired(org, book)` and `require_approval`. No `unique by`: the strict check refuses a uniqueness discipline that keys every field (claims are a set already) and says to gate the act with `require not ...`, which `approval_not_already_required` does.
+- `InstructionApproved(org, instruction, approver)`, `unique by (instruction)`.
+- `approve_instruction` and `reject_instruction`: both `bind` the open instruction and its placement, then `require may_approve`, then `require approver_is_not_proposer: actor != proposer`. The actor compares directly with a bound subject in a gate; nothing was needed upstream.
+
+**What approval is and is not.** It is a recorded fact with two rules behind it. It is not enforced on the market: nothing in the ledger can stop an order being sent, so the read side reports `approval` (`not required`, `awaiting`, `approved`) and a client must look. An approval cannot go stale: an instruction is immutable and has held its room since it was placed. Slice 3 is where an unapproved instruction that fills becomes a recorded breach of process.
+
+**Identity (our side, not the substrate's).** `GLASSHOUSE_MCP_TOKENS` maps actor to token; the door (`api/auth.py`) compares every configured token in constant time and serves the request as the matching actor through a context variable the tools read (`agent_caller`). It propagates from the ASGI middleware to a tool in the SDK's stateless mode; a live test places and approves over HTTP with three tokens and reads three names back from the audit tail, so a change in that propagation fails loudly, and a tool reached with no caller set raises rather than fall back to a default actor. What it cannot prove is stated in `docs/mcp.md` and is glasshouse#85: a process with the database address asserts any actor.
+
+**Seed.** `spec-de` requires approval; `risk-manager` and the demo login may approve in all three books (66 transitions).
+
+**Counts.** Pure 331 passed, live 470 passed, coverage gate held.

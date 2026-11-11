@@ -545,6 +545,25 @@ def test_the_needle_lifecycle(morpholog: GlasshouseClient) -> None:
 
     for name, valid_for in (("I-keep", 3600), ("I-brief", 1.5)):
         assert isinstance(morpholog.submit(instruct(name, valid_for), actor="alice"), Committed)
+    # A second pair of eyes: the book requires approval, bob may give it,
+    # and alice, who placed the instruction, may not approve her own even
+    # with the right to.
+    for second_pair in (
+        models.RequireApprovalRequest(org=ORG, book=BOOK),
+        models.GrantApproveAuthorityRequest(principal="bob", org=ORG, book=BOOK),
+        models.GrantApproveAuthorityRequest(principal="alice", org=ORG, book=BOOK),
+    ):
+        assert isinstance(morpholog.submit(second_pair, actor="bootstrap"), Committed)
+    approve = models.ApproveInstructionRequest(org=ORG, instruction="I-keep")
+    own = morpholog.submit(approve, actor="alice")
+    assert isinstance(own, Rejected)
+    assert own.rule == "approver_is_not_proposer"
+    assert isinstance(morpholog.submit(approve, actor="bob"), Committed)
+    assert isinstance(morpholog.submit(instruct("I-no", 3600), actor="alice"), Committed)
+    turned_down = morpholog.submit(
+        models.RejectInstructionRequest(org=ORG, instruction="I-no"), actor="bob"
+    )
+    assert isinstance(turned_down, Committed)
     cancelled = morpholog.submit(
         models.CancelInstructionRequest(org=ORG, instruction="I-keep"), actor="alice"
     )
@@ -558,6 +577,7 @@ def test_the_needle_lifecycle(morpholog: GlasshouseClient) -> None:
     assert morpholog.read(models.InstructionOpenClaim) == []
     assert {e.instruction: e.outcome for e in morpholog.read(models.InstructionEndedClaim)} == {
         "I-keep": "cancelled",
+        "I-no": "rejected",
         "I-brief": "lapsed",
     }
 
@@ -566,6 +586,6 @@ def test_the_needle_lifecycle(morpholog: GlasshouseClient) -> None:
     # no invariant's condition has gone unexercised by committed history.
     report = morpholog.coverage()
     in_programme = [t for t in report.transformations if not t.not_in_programme]
-    assert len(in_programme) == 18
+    assert len(in_programme) == 22
     assert all(t.transitions > 0 for t in in_programme)
     assert not [i.invariant for i in report.invariants if i.verdict == "never_fired"]

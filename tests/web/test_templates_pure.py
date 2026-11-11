@@ -782,6 +782,7 @@ def test_room_left_allows_for_what_open_instructions_hold() -> None:
             valid_until=T0,
             proposer="agent",
             status="open",
+            approval="not required",
         )
 
     caps = {"spec": Decimal("25")}

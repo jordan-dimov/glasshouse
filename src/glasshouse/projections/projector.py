@@ -96,6 +96,9 @@ IGNORED = frozenset(
         # projection (yet). `InstructionOpen` is retracted when an
         # instruction ends, which is lawful: it is not a projected fact.
         "MayInstruct",
+        "MayApprove",
+        "ApprovalRequired",
+        "InstructionApproved",
         "Instruction",
         "InstructionOpen",
         "InstructionEnded",

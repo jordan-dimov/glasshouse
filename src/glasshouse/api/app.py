@@ -28,6 +28,7 @@ from glasshouse.api.auth import (
     DEMO_USERNAME,
     AgentDoorMiddleware,
     DemoAuthMiddleware,
+    agent_caller,
 )
 from glasshouse.api.deps import build_client, build_engine
 from glasshouse.api.queries import ReadUnavailableError
@@ -96,15 +97,24 @@ def create_app() -> FastAPI:
     # server is built now and asks for the client and engine on each
     # call, because those are made by the lifespan below.
     agents: MCPServer | None = None
-    if settings.mcp_token is not None:
-        agents = build_server(
-            lambda: Desk(
-                client=app.state.client,
-                engine=app.state.engine,
-                actor=settings.mcp_actor,
-                org=settings.demo_org,
-            )
+    agent_tokens = settings.agent_tokens()
+
+    def desk_of_the_caller() -> Desk:
+        # The actor is whoever the door authenticated this request as. A
+        # tool reached with no caller set is a wiring fault, and it fails
+        # closed: there is no default actor to fall back to.
+        actor = agent_caller.get()
+        if actor is None:
+            raise RuntimeError("an agent tool ran outside an authenticated request")
+        return Desk(
+            client=app.state.client,
+            engine=app.state.engine,
+            actor=actor,
+            org=settings.demo_org,
         )
+
+    if agent_tokens:
+        agents = build_server(desk_of_the_caller)
 
     app = FastAPI(
         title="Glasshouse",
@@ -119,7 +129,7 @@ def create_app() -> FastAPI:
     app.include_router(audit.router)
     app.include_router(web.router)
     app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
-    if agents is not None and settings.mcp_token is not None:
+    if agents is not None:
         # The agent's door, behind its own bearer token. Stateless and
         # answering in JSON: each call stands alone, so nothing is kept
         # in this process between them and a restart loses no session.
@@ -132,7 +142,7 @@ def create_app() -> FastAPI:
             json_response=True,
             transport_security=TransportSecuritySettings(enable_dns_rebinding_protection=False),
         )
-        app.add_middleware(AgentDoorMiddleware, door=door, token=settings.mcp_token)
+        app.add_middleware(AgentDoorMiddleware, door=door, tokens=agent_tokens)
 
     if settings.demo_password is not None:
         # The shared demo login: one gate in front of everything except

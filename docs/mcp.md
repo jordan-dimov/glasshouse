@@ -16,7 +16,9 @@ An agent gets no special treatment. Its trade is a proposal like anyone's, and t
 | `propose_trade` | Proposes one trade. The answer is accepted or refused. |
 | `place_instruction` | Records an intention to buy or sell that has not happened yet, and holds room for it under the book's limit. |
 | `cancel_instruction` | Cancels an instruction. Its room is free again at once. |
-| `list_instructions` | Instructions, how much each still holds, and whether each is open, overdue or ended. |
+| `approve_instruction` | Approves an instruction as a second person. Refused if you placed it yourself. |
+| `reject_instruction` | Turns an instruction down. It ends and its room is free again. |
+| `list_instructions` | Instructions, how much each still holds, whether each is open, overdue or ended, and whether it is approved. |
 | `audit_history` | The accepted changes, newest first, with who made each. |
 | `recent_refusals` | Recent refused proposals, with the rule and the figures. |
 
@@ -50,7 +52,17 @@ A hosted Glasshouse serves the same tools at `/mcp`, but only if its operator ha
 claude mcp add --transport http glasshouse https://your-host/mcp --header "Authorization: Bearer YOUR-TOKEN"
 ```
 
-Whoever holds the token acts as one actor (`agent`, or the name in `GLASSHOUSE_MCP_ACTOR`). The token is a shared secret, not a sign-in: there is no OAuth here, so clients that only connect through an OAuth sign-in screen cannot use it yet.
+Whoever holds the token acts as one actor (`agent`, or the name in `GLASSHOUSE_MCP_ACTOR`).
+
+An operator can give out more tokens, each for its own named actor, with `GLASSHOUSE_MCP_TOKENS`: a JSON object of actor and token, such as `{"risk-manager": "a-long-secret", "alice": "another-long-secret"}`. Each caller is then one name in the record, and the rules can tell who placed an instruction from who approved it.
+
+What a token does not prove:
+
+- that the person holding it is who the name says;
+- that two tokens are held by two different people;
+- anything about someone who has the server's database address, who can still act as anyone.
+
+A token is a shared secret, not a sign-in. There is no OAuth here, so clients that only connect through an OAuth sign-in screen cannot use it yet.
 
 ## Walk through: the agent meets the limit
 
@@ -134,12 +146,33 @@ Three things to know:
 - **An instruction holds its room until it ends.** It ends when it is cancelled. Once its `valid_until` time has passed it is shown as overdue, and it still holds its room until someone cancels it or records that it lapsed.
 - **Booking the trade that results is still `propose_trade`.** Cancel the instruction first, or its room stays held on top of the trade.
 
+## Walk through: a second person approves
+
+A book can require approval. In the demo book, `spec-de` does. An instruction placed there shows `"approval": "awaiting"` in `list_instructions` until a different person approves it.
+
+Two rules decide who may approve:
+
+- they must hold the right to approve in that book (`may_approve`);
+- they must not be the one who placed the instruction (`approver_is_not_proposer`).
+
+With three tokens (for `demo`, who may both instruct and approve, for `risk-manager`, who may approve, and for `agent`, who may only instruct):
+
+1. **`demo` places an instruction.** Accepted. It holds its room at once and awaits approval.
+2. **`demo` tries to approve it.** Refused by `approver_is_not_proposer`.
+3. **`agent` tries to approve it.** Refused by `may_approve`: it was never given that right.
+4. **`risk-manager` approves it.** Accepted. `list_instructions` now shows `"approval": "approved"` and `"approved_by": "risk-manager"`.
+
+The audit history holds two changes for that instruction under two different names. `reject_instruction` works under the same two rules, and ends the instruction.
+
+Things to know:
+
+- **An approval does not go out of date.** An instruction cannot be changed after it is placed, and it has held its room since then. To change the size or price, cancel it and place a new one, which needs a new approval.
+- **Approval is recorded, not enforced on the market.** Glasshouse cannot stop an order leaving the building. A client must read `approval` and not act on an instruction that is awaiting it.
+- **A refused approval is not in the audit history.** Like every refusal, it is in the separate best-effort list (`recent_refusals`).
+
 ### What an instruction is not, yet
 
-- **Not approved by anyone.** There is no rule yet about who may approve an instruction, or that the person who placed it cannot approve it.
-- **Not connected to fills.** When the market reports that an order filled, nothing links that to the instruction. You cancel the instruction and book the trade yourself.
-
-Both are planned as the next two steps.
+- **Not connected to fills.** When the market reports that an order filled, nothing links that to the instruction. You cancel the instruction and book the trade yourself. This is the next step.
 
 ## What is recorded
 
@@ -159,7 +192,8 @@ Each of these is enforced by the rules in the ledger, not by the MCP server. The
 ## Limits of this first version
 
 - One trade type: a fixed-price power trade. No amendments yet.
-- Instructions cannot be approved or filled yet (see above).
+- Instructions cannot be filled yet (see above).
+- A token per actor, not a sign-in per person.
 - No tools yet for curves, valuations or the list of organisations.
 - A trade takes the currency of its market. You do not state one, and a trade in a market that has not been declared is refused.
 - One token and one actor per hosted Glasshouse. Everyone holding the token shares one name and one limit, so a class should run local copies.

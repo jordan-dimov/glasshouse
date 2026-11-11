@@ -60,6 +60,12 @@ RULES_IN_PLAIN_WORDS = {
         "the book's position limit in that hour."
     ),
     "may_instruct": "This name is not allowed to place or cancel instructions in that book.",
+    "may_approve": "This name is not allowed to approve instructions in that book.",
+    "approver_is_not_proposer": (
+        "The person who placed an instruction cannot approve or reject it themselves."
+    ),
+    "instruction_not_yet_approved": "This instruction has already been approved.",
+    "approval_not_already_required": "That book already requires approval.",
     "instruction_is_new": "An instruction with this id already exists.",
     "instruction_is_still_valid": "The instruction's valid-until time has already passed.",
     "instruction_has_lapsed": "The instruction is still valid, so it has not lapsed.",

@@ -32,6 +32,7 @@ predicate MayRegisterCurve(actor: Subject, org: Subject, market: Subject)
 predicate MayValueTrade(actor: Subject, org: Subject, book: Subject)
 predicate MaySetLimit(actor: Subject, org: Subject)
 predicate MayInstruct(actor: Subject, org: Subject, book: Subject)
+predicate MayApprove(actor: Subject, org: Subject, book: Subject)
 -- Who may hand out the permissions above, in one organisation.
 predicate MayGrantAuthority(actor: Subject, org: Subject)
 -- Who may create organisations. One holder: the ledger's root.
@@ -118,6 +119,19 @@ predicate Instruction(org: Subject, book: Subject, instruction: Subject, propose
 predicate InstructionOpen(org: Subject, book: Subject, instruction: Subject, direction: Subject, remaining: Decimal[MW], delivery_start: Timestamp, delivery_end: Timestamp, valid_until: Timestamp)
     unique by (instruction)
 
+-- A book whose instructions need a second person. Declared once per
+-- book. In such a book an instruction should not be acted on until it
+-- is approved. The ledger cannot stop an order leaving the building: it
+-- records whether approval was given, and by whom.
+predicate ApprovalRequired(org: Subject, book: Subject)
+    append only
+
+-- An instruction's approval. Given once, by someone other than whoever
+-- placed it.
+predicate InstructionApproved(org: Subject, instruction: Subject, approver: Subject)
+    unique by (instruction)
+    append only
+
 -- How an instruction ended. Recorded once.
 predicate InstructionEnded(org: Subject, instruction: Subject, outcome: Subject)
     unique by (instruction)
@@ -159,6 +173,10 @@ invariant open_quantity_is_positive:
 
 invariant open_instruction_was_placed:
     InstructionOpen(org: org, instruction: instruction, ..)
+    implies Instruction(org: org, instruction: instruction, ..)
+
+invariant approved_instruction_was_placed:
+    InstructionApproved(org: org, instruction: instruction, ..)
     implies Instruction(org: org, instruction: instruction, ..)
 
 invariant instruction_ends_one_of_four_ways:
@@ -302,6 +320,16 @@ transformation grant_instruct_authority(principal, org, book):
     require may_grant_authority: MayGrantAuthority(actor, org)
     admit MayInstruct(principal, org, book)
 
+transformation grant_approve_authority(principal, org, book):
+    require may_grant_authority: MayGrantAuthority(actor, org)
+    admit MayApprove(principal, org, book)
+
+-- Say that a book's instructions need approval from now on.
+transformation require_approval(org, book):
+    require may_grant_authority: MayGrantAuthority(actor, org)
+    require approval_not_already_required: not ApprovalRequired(org: org, book: book)
+    admit ApprovalRequired(org, book)
+
 transformation grant_limit_authority(principal, org):
     require may_grant_authority: MayGrantAuthority(actor, org)
     admit MaySetLimit(principal, org)
@@ -376,8 +404,9 @@ transformation amend_trade(org, trade, prior_version, new_version, quantity, pri
 -- Place an instruction: an intention to buy or sell that has not
 -- happened yet. From this moment it holds room under the book's limit,
 -- so a trade or another instruction cannot take that room. The window
--- is checked as for a trade. It is not yet approved by anyone and not
--- yet connected to fills: those rules come later.
+-- is checked as for a trade. Approval, where a book requires it, is a
+-- separate act by a different person (approve_instruction). It is not
+-- yet connected to fills: that rule comes later.
 transformation place_instruction(org, book, instruction, market, direction, quantity, limit_price, delivery_start, delivery_end, placed_on, valid_until):
     require may_instruct: MayInstruct(actor, org, book)
     require market_has_a_currency: MarketCurrency(org: org, market: market, ..)
@@ -402,6 +431,30 @@ transformation cancel_instruction(org, instruction):
     require may_instruct: MayInstruct(actor, org, book)
     retract InstructionOpen(org: org, instruction: instruction, ..)
     admit InstructionEnded(org, instruction, #cancelled)
+
+-- Approve an open instruction. The approver must hold the right in the
+-- instruction's book and must not be the person who placed it: a second
+-- pair of eyes is a different pair. An instruction cannot change after
+-- it is placed, and it has held its room since then, so an approval
+-- never goes out of date.
+transformation approve_instruction(org, instruction):
+    bind instruction_is_open: InstructionOpen(org: org, book: book, instruction: instruction, ..)
+    bind instruction_was_placed: Instruction(org: org, instruction: instruction, proposer: proposer, ..)
+    require may_approve: MayApprove(actor, org, book)
+    require approver_is_not_proposer: actor != proposer
+    require instruction_not_yet_approved: not InstructionApproved(instruction: instruction, ..)
+    admit InstructionApproved(org, instruction, actor)
+
+-- Turn an open instruction down. It ends, and its room is free again.
+-- The same two conditions as approving: the right, and a different
+-- person. (Whoever placed it withdraws it with cancel_instruction.)
+transformation reject_instruction(org, instruction):
+    bind instruction_is_open: InstructionOpen(org: org, book: book, instruction: instruction, ..)
+    bind instruction_was_placed: Instruction(org: org, instruction: instruction, proposer: proposer, ..)
+    require may_approve: MayApprove(actor, org, book)
+    require approver_is_not_proposer: actor != proposer
+    retract InstructionOpen(org: org, instruction: instruction, ..)
+    admit InstructionEnded(org, instruction, #rejected)
 
 -- Record that an instruction ran out of time, and free the room it
 -- held. Refused while the instruction is still valid. Until this is

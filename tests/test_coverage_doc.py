@@ -26,9 +26,9 @@ def test_every_row_has_one_of_the_four_states() -> None:
     table = rows()
     assert len(table) > 40
     assert {state for _, state, _ in table} <= set(STATES)
-    # All four are in use: a page with nothing left out, or nothing
-    # planned, would not be the honest page.
-    assert {"Has", "Building", "Planned", "Will not do"} <= {state for _, state, _ in table}
+    # A page with nothing left out, or nothing planned, would not be the
+    # honest page. ("Building" comes and goes with the work in hand.)
+    assert {"Has", "Planned", "Will not do"} <= {state for _, state, _ in table}
 
 
 def test_planned_and_building_rows_name_their_issue() -> None:

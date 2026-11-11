@@ -90,6 +90,7 @@ Configuration is environment-only, prefixed `GLASSHOUSE_`:
 - `GLASSHOUSE_DEMO_PASSWORD`: unset means no login, for local development. Set, it puts the shared demo login (HTTP Basic, username `demo`) in front of everything but the health probes, and in the demo environment browser writes refuse to run without it.
 - `GLASSHOUSE_MCP_TOKEN`: unset means agents cannot connect over HTTP at all. Set (12 characters or more), the MCP server is served at `/mcp` to callers who send it as a bearer token. See [mcp.md](mcp.md).
 - `GLASSHOUSE_MCP_ACTOR`: the actor a caller with that token acts as (default `agent`).
+- `GLASSHOUSE_MCP_TOKENS`: more callers, each its own named actor, as a JSON object of actor and token: `{"risk-manager": "a-long-secret"}`. Each token must be 12 characters or more and belong to one actor only. A token does not prove who holds it.
 
 Operational logs go to stderr, leaving stdout as the command line's data channel (an import report, a projector count). `dev` renders a readable console line; `demo` and `production` render JSON lines for a log aggregator. The operational log is separate from the audit history in the ledger.
 
@@ -128,7 +129,8 @@ An instruction is an intention to buy or sell that has not happened yet, such as
 - Open buys count towards the bought side of the limit and open sells towards the sold side. They are never set against each other.
 - A trade refused because instructions hold the room is refused by `room_not_held_by_instructions`, not by `hour_within_limit`, and its figures are the quantity instructed and the room the trades leave.
 - An instruction holds its room until it is cancelled, or until its lapse is recorded after `valid_until`. Time passing does not free the room by itself.
-- It is not approved by anyone and not connected to fills yet.
+- A book can require approval (`require_approval`). An instruction there is approved or rejected by someone who holds `MayApprove` in the book and did not place it. The approval is recorded; it is not enforced on the market.
+- It is not connected to fills yet.
 
 ## Refusals
 

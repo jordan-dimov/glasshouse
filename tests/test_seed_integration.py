@@ -41,14 +41,14 @@ def test_seed_reset_seeds_verifies_and_repeats(capsys: pytest.CaptureFixture[str
     # The close is checkpointed covering its last transition, so the
     # seeded ledger's history tree has a head to prove (one checkpoint,
     # over every audit row the story wrote).
-    assert "2 position limit(s); checkpoint over 59 audit row(s); verify" in out
+    assert "2 position limit(s); checkpoint over 66 audit row(s); verify" in out
 
     engine = sa.create_engine(engine_url(DB))
     with engine.connect() as connection:
         checkpoints = connection.execute(
             sa.text("select count(*), max(tree_size) from morpholog.audit_checkpoints")
         ).one()
-        assert tuple(checkpoints) == (1, 59)
+        assert tuple(checkpoints) == (1, 66)
         trades = connection.execute(sa.select(blotter_trade)).all()
         assert len(trades) == 8
         assert {t.book for t in trades} == {"spec-de", "hedge-de", "spec-gb"}
