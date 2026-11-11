@@ -15,19 +15,17 @@ from mcp import Client
 
 from glasshouse.agents import Desk, build_server
 from glasshouse.api.app import create_app
-from glasshouse.commit import MODEL_FILE, GlasshouseClient
-from glasshouse.compute.store import CurveStore, engine_url
-from glasshouse.seed import AGENT, CURVE_V1, CURVE_V2, GB_BOOK, GB_CURVE, GB_MARKET, ORG, seed_demo
-from tests.support import BINARY, DB, needs_live_stack, provision
+from glasshouse.commit import GlasshouseClient
+from glasshouse.compute.store import engine_url
+from glasshouse.seed import AGENT, CURVE_V1, CURVE_V2, GB_BOOK, GB_CURVE, GB_MARKET, ORG
+from tests.support import BINARY, DB, needs_live_stack, seeded_ledger
 
 pytestmark = needs_live_stack
 
 
 @pytest.fixture(scope="module")
 def seeded() -> GlasshouseClient:
-    engine = provision()
-    client = GlasshouseClient(str(MODEL_FILE), DB, binary=str(BINARY))
-    seed_demo(client, CurveStore(engine), engine)
+    client, engine = seeded_ledger()
     engine.dispose()
     return client
 

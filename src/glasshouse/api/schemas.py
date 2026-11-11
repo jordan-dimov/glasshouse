@@ -346,3 +346,19 @@ class InstructionRow(BaseModel):
     valid_until: datetime
     proposer: str  # who placed it
     status: str  # open, overdue (past valid_until, still holding), cancelled, lapsed, ...
+
+
+class Problem(BaseModel):
+    """The body of an error answer: one sentence saying what was wrong."""
+
+    detail: str
+
+
+class BookScope(BaseModel):
+    """What a read is about: one organisation (always: it is the tenancy
+    boundary), narrowed to a book or a market when given. One declaration
+    for every read that takes these three, so they are described once."""
+
+    org: str = Field(description="the organisation the answer is about")
+    book: str | None = Field(default=None, description="only this book")
+    market: str | None = Field(default=None, description="only this market")

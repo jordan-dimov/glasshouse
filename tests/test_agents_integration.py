@@ -20,10 +20,9 @@ from mcp.types import CallToolResult
 
 from glasshouse.agents import Desk, build_server
 from glasshouse.api.app import create_app
-from glasshouse.commit import MODEL_FILE, GlasshouseClient
-from glasshouse.compute.store import CurveStore, engine_url
-from glasshouse.seed import AGENT, ORG, seed_demo
-from tests.support import BINARY, DB, needs_live_stack, provision
+from glasshouse.compute.store import engine_url
+from glasshouse.seed import AGENT, ORG
+from tests.support import BINARY, DB, needs_live_stack, seeded_ledger
 
 pytestmark = needs_live_stack
 
@@ -50,9 +49,7 @@ def trade(name: str, *, book: str = "spec-de", quantity: str = "2") -> dict[str,
 def desk() -> Any:
     """A freshly seeded ledger and the agent's desk on it. Module-scoped:
     the tests below read one story, each from its own trades."""
-    engine = provision()
-    client = GlasshouseClient(str(MODEL_FILE), DB, binary=str(BINARY))
-    seed_demo(client, CurveStore(engine), engine)
+    client, engine = seeded_ledger()
     engine.dispose()
     reads = sa.create_engine(engine_url(DB))
     yield Desk(client=client, engine=reads, actor=AGENT, org=ORG)

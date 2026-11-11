@@ -13,10 +13,8 @@ import sqlalchemy as sa
 from fastapi.testclient import TestClient
 
 from glasshouse.api.app import create_app
-from glasshouse.commit import MODEL_FILE, GlasshouseClient
-from glasshouse.compute.store import CurveStore, engine_url
-from glasshouse.seed import seed_demo
-from tests.support import BINARY, DB, needs_live_stack, provision
+from glasshouse.compute.store import engine_url
+from tests.support import BINARY, DB, needs_live_stack, seeded_ledger
 
 pytestmark = needs_live_stack
 
@@ -28,9 +26,7 @@ def moments() -> dict[str, dt.datetime]:
     """The instants this module reads at, each the placing of the last
     transition before an event: `before_capture`, `before_correction`,
     `before_amendment`, and `end`, the placing of the last row."""
-    engine = provision()
-    client = GlasshouseClient(str(MODEL_FILE), DB, binary=str(BINARY))
-    seed_demo(client, CurveStore(engine), engine)
+    client, engine = seeded_ledger()
     engine.dispose()
     tail = client.audit_named()
     placed = [row.ordering.ordered_at for row in tail if row.ordering is not None]

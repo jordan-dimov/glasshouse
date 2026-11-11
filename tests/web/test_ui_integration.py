@@ -10,10 +10,7 @@ import sqlalchemy as sa
 from fastapi.testclient import TestClient
 
 from glasshouse.api.app import create_app
-from glasshouse.commit import MODEL_FILE, GlasshouseClient
-from glasshouse.compute.store import CurveStore
-from glasshouse.seed import seed_demo
-from tests.support import BINARY, DB, needs_live_stack, provision
+from tests.support import BINARY, DB, needs_live_stack, seeded_ledger
 
 pytestmark = needs_live_stack
 
@@ -22,9 +19,7 @@ ORG = "acme-energy"
 
 @pytest.fixture(scope="module")
 def seeded() -> sa.Engine:
-    engine = provision()
-    client = GlasshouseClient(str(MODEL_FILE), DB, binary=str(BINARY))
-    seed_demo(client, CurveStore(engine), engine)
+    _, engine = seeded_ledger()
     return engine
 
 

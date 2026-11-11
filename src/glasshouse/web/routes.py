@@ -19,6 +19,7 @@ import base64
 import binascii
 import datetime as dt
 import tempfile
+from collections.abc import Generator
 from decimal import Decimal
 from pathlib import Path
 from typing import Annotated, Any
@@ -26,7 +27,8 @@ from urllib.parse import quote
 
 import sqlalchemy as sa
 from fastapi import APIRouter, File, Form, Query, Request, Response, UploadFile
-from fastapi.responses import RedirectResponse
+from fastapi.responses import RedirectResponse, StreamingResponse
+from pydantic import BaseModel
 
 from glasshouse.api import asof, health, instructions, queries, refusals
 from glasshouse.api import audit as audit_queries
@@ -70,6 +72,7 @@ log = get_logger("glasshouse.web")
 router = APIRouter(include_in_schema=False)
 
 PAGE_SIZE = 50
+DOWNLOAD_PIECE = 64 * 1024
 
 
 def wants_fragment(request: Request) -> bool:
@@ -460,6 +463,47 @@ def _checked_import_form(kind: str, actor: str) -> str | None:
     return None
 
 
+class ImportIdentity(BaseModel):
+    """The two form fields every import step carries: which organisation,
+    and who is importing. One form model, so the three steps declare
+    them once and cannot drift apart."""
+
+    org: str
+    actor: str = ""
+
+
+type IdentityForm = Annotated[ImportIdentity, Form()]
+
+
+def _import_identity(
+    request: Request, who: ImportIdentity, kind: str
+) -> tuple[str, str] | Response:
+    """Who is importing into which organisation, or the page that says
+    why not. The three import steps (preview, the sample, commit) all
+    decide this the same way, here:
+
+    1. the write fence (production never; a hosted demo only with its
+       login configured);
+    2. with the demo login active, BOTH halves of a write's identity
+       come from authenticated context - the actor from the login, the
+       organisation from configuration - never from the form (the gate
+       is the identity authority); the typed fields remain only for
+       ungated dev, where the organisation stays the explicit L0
+       parameter;
+    3. the form itself: a known kind and a named actor."""
+    org, actor = who.org, who.actor
+    fence = _write_fence(request, org)
+    if fence:
+        return fence
+    if authenticated_actor(request):
+        actor = authenticated_actor(request) or actor
+        org = get_settings().demo_org
+    problem = _checked_import_form(kind, actor)
+    if problem:
+        return _import_refusal(request, org, 422, "Check the form", problem)
+    return org, actor
+
+
 def _write_fence(request: Request, org: str) -> Response | None:
     # The write-path fence matrix: production never accepts browser
     # writes (a demo login is not production identity); a HOSTED demo
@@ -518,27 +562,16 @@ def imports_home(
 @router.post("/ui/imports/preview")
 def imports_preview(
     request: Request,
-    org: Annotated[str, Form()],
+    who: IdentityForm,
     kind: Annotated[str, Form()],
     file: Annotated[UploadFile, File()],
     engine: EngineDep,
     client: ClientDep,
-    actor: Annotated[str, Form()] = "",
 ) -> Response:
-    fence = _write_fence(request, org)
-    if fence:
-        return fence
-    # When the demo login is active, BOTH halves of a write's identity
-    # derive from authenticated context - the actor from the login, the
-    # org from configuration - never from the request body (the gate is
-    # the identity authority); the typed field remains only for ungated
-    # dev, where org stays the explicit L0 parameter.
-    if authenticated_actor(request):
-        actor = authenticated_actor(request) or actor
-        org = get_settings().demo_org
-    problem = _checked_import_form(kind, actor)
-    if problem:
-        return _import_refusal(request, org, 422, "Check the form", problem)
+    identity = _import_identity(request, who, kind)
+    if isinstance(identity, Response):
+        return identity
+    org, actor = identity
     try:
         text = _read_upload(file)
     except _UploadRefusedError as refused:
@@ -578,22 +611,16 @@ def imports_sample_file() -> Response:
 @router.post("/ui/imports/sample")
 def imports_sample_preview(
     request: Request,
-    org: Annotated[str, Form()],
+    who: IdentityForm,
     engine: EngineDep,
     client: ClientDep,
-    actor: Annotated[str, Form()] = "",
 ) -> Response:
     """Preview the built-in sample exactly as an uploaded file would be:
     the same fence, the same identity rule, the same preview."""
-    fence = _write_fence(request, org)
-    if fence:
-        return fence
-    if authenticated_actor(request):
-        actor = authenticated_actor(request) or actor
-        org = get_settings().demo_org
-    problem = _checked_import_form("trades", actor)
-    if problem:
-        return _import_refusal(request, org, 422, "Check the form", problem)
+    identity = _import_identity(request, who, "trades")
+    if isinstance(identity, Response):
+        return identity
+    org, actor = identity
     return _preview_page(
         request, engine, client, org, "trades", actor, SAMPLE_TRADES, SAMPLE_FILENAME
     )
@@ -633,23 +660,17 @@ def _preview_page(
 @router.post("/ui/imports/commit")
 def imports_commit(
     request: Request,
-    org: Annotated[str, Form()],
+    who: IdentityForm,
     kind: Annotated[str, Form()],
     text_b64: Annotated[str, Form()],
     engine: EngineDep,
     client: ClientDep,
     store: StoreDep,
-    actor: Annotated[str, Form()] = "",
 ) -> Response:
-    fence = _write_fence(request, org)
-    if fence:
-        return fence
-    if authenticated_actor(request):
-        actor = authenticated_actor(request) or actor
-        org = get_settings().demo_org
-    problem = _checked_import_form(kind, actor)
-    if problem:
-        return _import_refusal(request, org, 422, "Check the form", problem)
+    identity = _import_identity(request, who, kind)
+    if isinstance(identity, Response):
+        return identity
+    org, actor = identity
     # The commit endpoint is directly reachable, so it enforces the same
     # cap as the upload - on the encoded length, before any decoding
     # (base64 inflates by 4/3, so this bound is exact for capped text).
@@ -830,18 +851,35 @@ def audit_verify(
     )
 
 
+def _stream_then_discard(scratch: tempfile.TemporaryDirectory[str], path: Path) -> Generator[bytes]:
+    """A file's bytes in pieces, and its scratch directory removed when
+    the last piece has gone (or the client went away): a download of any
+    size is never held whole in this process's memory."""
+    try:
+        with path.open("rb") as handle:
+            while piece := handle.read(DOWNLOAD_PIECE):
+                yield piece
+    finally:
+        scratch.cleanup()
+
+
 @router.get("/ui/audit/evidence-pack")
 def evidence_pack_download(
     client: ClientDep,
 ) -> Response:
     # The binary's exact pack bytes, straight to the operator's machine:
     # a pack is only evidence if it leaves the database's blast radius.
-    with tempfile.TemporaryDirectory() as scratch:
-        path = Path(scratch) / "pack.ndjson"
+    # Streamed from the file the binary wrote: the pack grows with the
+    # whole history, and a long record must not be read into memory.
+    scratch = tempfile.TemporaryDirectory()
+    path = Path(scratch.name) / "pack.ndjson"
+    try:
         client.audit_export(str(path))
-        payload = path.read_bytes()
-    return Response(
-        content=payload,
+    except BaseException:
+        scratch.cleanup()
+        raise
+    return StreamingResponse(
+        _stream_then_discard(scratch, path),
         media_type="application/x-ndjson",
         headers={"Content-Disposition": 'attachment; filename="glasshouse-evidence-pack.ndjson"'},
     )

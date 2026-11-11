@@ -141,7 +141,34 @@ def _window(raw: str | None, name: str) -> dt.datetime | None:
         raise ToolError(f"{name}: {refused}") from refused
 
 
-def _capture(desk: Desk, fields: dict[str, str]) -> models.CaptureTradeRequest:
+def _capture(
+    desk: Desk,
+    book: str,
+    trade: str,
+    counterparty: str,
+    market: str,
+    direction: str,
+    quantity: str,
+    price: str,
+    delivery_start: str,
+    delivery_end: str,
+    trade_date: str,
+) -> models.CaptureTradeRequest:
+    """A trade tool's arguments as the one typed request a CSV row also
+    becomes. `explain_trade` and `propose_trade` both come through here,
+    so asking and proposing can never read a trade differently."""
+    fields = {
+        "book": book,
+        "trade": trade,
+        "counterparty": counterparty,
+        "market": market,
+        "direction": direction,
+        "quantity": quantity,
+        "price": price,
+        "delivery_start": delivery_start,
+        "delivery_end": delivery_end,
+        "trade_date": trade_date,
+    }
     try:
         return capture_request(fields, desk.org)
     except ValueError as malformed:
@@ -149,6 +176,20 @@ def _capture(desk: Desk, fields: dict[str, str]) -> models.CaptureTradeRequest:
         # down honestly (a quantity that is not a decimal, a time with no
         # offset), so nothing was put to them.
         raise ToolError(f"the trade could not be read: {malformed}") from malformed
+
+
+def _outcome(at: Desk, outcome: envelopes.Committed | envelopes.Rejected) -> ProposalOutcome:
+    """The rules' answer to a proposal, as the data a tool returns: a
+    refusal with its rule and figures, or the place in the audit history."""
+    if isinstance(outcome, envelopes.Rejected):
+        explained = outcome.explanation
+        return ProposalOutcome(
+            accepted=False,
+            actor=at.actor,
+            summary=why(explained) or outcome.reason,
+            refusal=flatten_rejection(explained.rejection if explained else None),
+        )
+    return ProposalOutcome(accepted=True, actor=at.actor, transition_id=outcome.transition_id)
 
 
 def build_server(desk: Callable[[], Desk]) -> MCPServer:
@@ -247,18 +288,16 @@ def build_server(desk: Callable[[], Desk]) -> MCPServer:
         at = desk()
         request = _capture(
             at,
-            {
-                "book": book,
-                "trade": trade,
-                "counterparty": counterparty,
-                "market": market,
-                "direction": direction,
-                "quantity": quantity,
-                "price": price,
-                "delivery_start": delivery_start,
-                "delivery_end": delivery_end,
-                "trade_date": trade_date,
-            },
+            book,
+            trade,
+            counterparty,
+            market,
+            direction,
+            quantity,
+            price,
+            delivery_start,
+            delivery_end,
+            trade_date,
         )
         result = at.client.explain(request.TRANSFORMATION, at.actor, request.to_args_named())
         return WouldBe(
@@ -299,44 +338,25 @@ def build_server(desk: Callable[[], Desk]) -> MCPServer:
         at = desk()
         request = _capture(
             at,
-            {
-                "book": book,
-                "trade": trade,
-                "counterparty": counterparty,
-                "market": market,
-                "direction": direction,
-                "quantity": quantity,
-                "price": price,
-                "delivery_start": delivery_start,
-                "delivery_end": delivery_end,
-                "trade_date": trade_date,
-            },
+            book,
+            trade,
+            counterparty,
+            market,
+            direction,
+            quantity,
+            price,
+            delivery_start,
+            delivery_end,
+            trade_date,
         )
         outcome = at.client.submit(request, actor=at.actor, explain_on_reject=True)
-        if isinstance(outcome, envelopes.Rejected):
-            explained = outcome.explanation
-            return ProposalOutcome(
-                accepted=False,
-                actor=at.actor,
-                summary=why(explained) or outcome.reason,
-                refusal=flatten_rejection(explained.rejection if explained else None),
-            )
-        # The read tools answer from the projections: bring them up to
-        # this transition before returning, so the agent's next read sees
-        # its own trade whichever process runs the projector.
-        catch_up(at.client, at.engine)
-        return ProposalOutcome(accepted=True, actor=at.actor, transition_id=outcome.transition_id)
-
-    def _outcome(at: Desk, outcome: envelopes.Committed | envelopes.Rejected) -> ProposalOutcome:
-        if isinstance(outcome, envelopes.Rejected):
-            explained = outcome.explanation
-            return ProposalOutcome(
-                accepted=False,
-                actor=at.actor,
-                summary=why(explained) or outcome.reason,
-                refusal=flatten_rejection(explained.rejection if explained else None),
-            )
-        return ProposalOutcome(accepted=True, actor=at.actor, transition_id=outcome.transition_id)
+        if isinstance(outcome, envelopes.Committed):
+            # The read tools answer from the projections: bring them up
+            # to this transition before returning, so the agent's next
+            # read sees its own trade whichever process runs the
+            # projector.
+            catch_up(at.client, at.engine)
+        return _outcome(at, outcome)
 
     @server.tool()
     def place_instruction(

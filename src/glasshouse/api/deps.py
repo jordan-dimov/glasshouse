@@ -13,12 +13,13 @@ they have just monkeypatched, no module-level singletons to reset.
 
 from __future__ import annotations
 
-from typing import Annotated
+from typing import Annotated, Any
 
 import sqlalchemy as sa
 from fastapi import Depends, HTTPException, Query, Request
 
 from glasshouse.api import asof
+from glasshouse.api.schemas import Problem
 from glasshouse.commit import MODEL_FILE, GlasshouseClient
 from glasshouse.compute.store import CurveStore, engine_url
 from glasshouse.config import Settings
@@ -101,3 +102,23 @@ def get_past(
 
 
 type PastDep = Annotated[asof.Snapshot | None, Depends(get_past)]
+
+# The error answers a caller can get, declared so the API documentation
+# shows them beside each address instead of only the 200.
+UNAVAILABLE: dict[int | str, dict[str, Any]] = {
+    503: {
+        "model": Problem,
+        "description": "The database or the rules engine cannot answer right now. Try again.",
+    }
+}
+AS_OF_ERRORS: dict[int | str, dict[str, Any]] = {
+    409: {
+        "model": Problem,
+        "description": "The moment asked for is not final yet: a write that started before it "
+        "is still in progress. Ask again shortly (see Retry-After).",
+    },
+    422: {
+        "model": Problem,
+        "description": "`as_of` is not a moment in time, or it is in the future.",
+    },
+}

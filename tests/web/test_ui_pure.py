@@ -8,6 +8,7 @@ import base64
 import datetime as dt
 import hashlib
 import re
+import tempfile
 from pathlib import Path
 
 import httpx2 as httpx
@@ -17,6 +18,7 @@ from fastapi.testclient import TestClient
 from glasshouse.api.app import create_app
 from glasshouse.api.asof import parse_instant
 from glasshouse.web import STATIC_DIR
+from glasshouse.web.routes import DOWNLOAD_PIECE, _stream_then_discard
 from tests.support import fake_binary
 
 DEAD_DB = "postgresql://127.0.0.1:1/nowhere"
@@ -358,3 +360,26 @@ def test_datetime_local_values_are_defined_as_utc() -> None:
     assert parse_instant("") is None
     with pytest.raises(ValueError, match="Invalid isoformat"):
         parse_instant("yesterday-ish")
+
+
+def test_a_download_is_sent_in_pieces_and_its_scratch_removed() -> None:
+    # The evidence export grows with the whole history: it is streamed
+    # from the file the binary wrote, never read whole into memory, and
+    # the scratch directory goes when the last piece has, or when the
+    # client stops reading early.
+    def scratch_with(size: int) -> tuple[tempfile.TemporaryDirectory[str], Path]:
+        scratch = tempfile.TemporaryDirectory()
+        path = Path(scratch.name) / "pack.ndjson"
+        path.write_bytes(b"x" * size)
+        return scratch, path
+
+    scratch, path = scratch_with(DOWNLOAD_PIECE * 2 + 5)
+    pieces = list(_stream_then_discard(scratch, path))
+    assert [len(piece) for piece in pieces] == [DOWNLOAD_PIECE, DOWNLOAD_PIECE, 5]
+    assert not Path(scratch.name).exists()
+
+    scratch, path = scratch_with(DOWNLOAD_PIECE * 3)
+    stream = _stream_then_discard(scratch, path)
+    next(stream)
+    stream.close()  # the client went away after the first piece
+    assert not Path(scratch.name).exists()
