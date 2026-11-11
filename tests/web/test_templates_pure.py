@@ -806,6 +806,11 @@ def test_room_left_allows_for_what_open_instructions_hold() -> None:
         Decimal("40"),
         Decimal("-5"),
     )
+    # With a delivery window, an instruction's hours outside it are left
+    # out: the summary is about the hours the screen is showing.
+    window = {"start": T0, "end": T0 + dt.timedelta(hours=1)}
+    (line,) = limit_summary(positions[:1], caps, [held("sell", 1, "40")], **window)
+    assert (line["peak_hour"], line["held_mw"], line["room_mw"]) == (T0, Decimal("0"), Decimal("5"))
     # An instruction over several hours holds room in each, and in an
     # hour with no booked position at all.
     (line,) = limit_summary([], caps, [held("buy", 5, "3", hours=2)])

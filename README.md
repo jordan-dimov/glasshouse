@@ -34,7 +34,7 @@ Early. It handles one product, fixed-price power, from end to end: CSV imports, 
 
 One limit to know about. The history holds every change that was accepted. Refusals are kept in a separate, shorter list that is not guaranteed complete.
 
-It is ready to evaluate, not yet to run a desk on. [SCOPE.md](SCOPE.md) says plainly what it is not.
+It is ready to evaluate, not yet to run a desk on. [The coverage table](docs/coverage.md) lists what a full ETRM does and where Glasshouse stands on each function. [SCOPE.md](SCOPE.md) says plainly what it is not.
 
 ## Where it is going
 
@@ -45,7 +45,7 @@ None of this exists yet. It is the road ahead.
 - **More of the lifecycle.** Counterparty confirmations, settlement, and products such as power purchase agreements and battery storage.
 - **More for software that trades.** Agents can read the book and propose a trade today. Next: amendments, prices and valuations as tools, and a sign-in of their own for each agent.
 
-[DESIGN.md](DESIGN.md) has the full plan and the reasoning.
+[The coverage table](docs/coverage.md) has every planned function with its issue. [DESIGN.md](DESIGN.md) has the full plan and the reasoning.
 
 ## Run it locally
 

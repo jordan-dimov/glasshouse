@@ -228,6 +228,9 @@ def limit_summary(
     positions: list[PositionHour],
     caps: dict[str, Decimal],
     held: list[InstructionRow] | None = None,
+    *,
+    start: dt.datetime | None = None,
+    end: dt.datetime | None = None,
 ) -> list[dict[str, Any]]:
     """Each book against its cap, in one line a reader can take in: the
     hour with the least room, the position there, what open instructions
@@ -240,7 +243,11 @@ def limit_summary(
     the larger of (position + open buys) and (open sells - position).
     With no instructions that is simply how far the position is from
     flat. A book with no cap has no room to report. Pure, from rows
-    already read."""
+    already read.
+
+    `start` and `end` are the delivery window the positions were read
+    for. An instruction's hours outside it are left out, so the summary
+    is about the same hours as the rows beside it."""
     net: dict[tuple[str, dt.datetime], Decimal] = {
         (position.book, position.period_start): position.net_mw for position in positions
     }
@@ -250,8 +257,9 @@ def limit_summary(
         side = bought if instruction.direction == "buy" else sold
         hour = instruction.delivery_start
         while hour < instruction.delivery_end:
-            key = (instruction.book, hour)
-            side[key] = side.get(key, Decimal(0)) + instruction.holding_mw
+            if (start is None or hour >= start) and (end is None or hour < end):
+                key = (instruction.book, hour)
+                side[key] = side.get(key, Decimal(0)) + instruction.holding_mw
             hour += dt.timedelta(hours=1)
 
     summary = []
@@ -893,8 +901,15 @@ def positions(
     )
     governed = _limits_and_instructions(client, org)
     caps, open_instructions = governed or ({}, [])
-    if book is not None:
-        open_instructions = [row for row in open_instructions if row.book == book]
+    # The filter bar governs every section: the instructions listed are
+    # those in the chosen book that deliver inside the chosen window.
+    open_instructions = [
+        row
+        for row in open_instructions
+        if (book is None or row.book == book)
+        and (start_at is None or row.delivery_end > start_at)
+        and (end_at is None or row.delivery_start < end_at)
+    ]
     context = (
         _chrome(engine, org, "positions")
         | _filter_options(engine, org)
@@ -908,7 +923,11 @@ def positions(
             # The caps and the open instructions are the ones standing
             # now, also when the positions shown are a past moment's;
             # the screen says so.
-            "limits": limit_summary(positions_now, caps, open_instructions) if governed else None,
+            "limits": (
+                limit_summary(positions_now, caps, open_instructions, start=start_at, end=end_at)
+                if governed
+                else None
+            ),
             "instructions": open_instructions,
             # The one filter bar governs both sections: the marks narrow
             # by the same book and market as the positions above them.
