@@ -17,9 +17,9 @@ from typing import Annotated, Literal
 from fastapi import APIRouter, Query
 
 from glasshouse.api import audit as audit_queries
-from glasshouse.api import refusals
+from glasshouse.api import instructions, refusals
 from glasshouse.api.deps import ClientDep
-from glasshouse.api.schemas import AuditEntry, RefusalLog
+from glasshouse.api.schemas import AuditEntry, InstructionRow, RefusalLog
 
 router = APIRouter(tags=["audit"])
 
@@ -50,3 +50,17 @@ def refusal_log(
     organisation. Not part of the audit history, and not complete: the
     answer carries its own caveat and its own bound."""
     return refusals.list_refusals(client, org=org, limit=limit, actor=actor)
+
+
+@router.get("/instructions")
+def instruction_list(
+    org: str,
+    client: ClientDep,
+    book: str | None = None,
+    open_only: Annotated[
+        bool, Query(description="only instructions holding room under a limit now")
+    ] = False,
+) -> list[InstructionRow]:
+    """Instructions (open orders): what was intended, what each still
+    holds under its book's limit, and how each ended."""
+    return instructions.list_instructions(client, org=org, book=book, open_only=open_only)

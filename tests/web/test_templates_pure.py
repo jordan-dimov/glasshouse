@@ -20,6 +20,7 @@ from glasshouse.api.schemas import (
     CurveDiff,
     CurveDiffPeriod,
     CurveVersion,
+    InstructionRow,
     OverviewSummary,
     PositionHour,
     ProjectionCursor,
@@ -751,3 +752,65 @@ def test_refusals_sit_beside_the_record_and_say_what_they_are() -> None:
     )
     assert "Nothing refused lately." in empty
     assert "at most the latest 20 refusals" in empty
+
+
+def test_room_left_allows_for_what_open_instructions_hold() -> None:
+    def hour(at: int, net: str) -> PositionHour:
+        return PositionHour(
+            org="acme",
+            book="spec",
+            market="de-power",
+            period_start=T0 + dt.timedelta(hours=at),
+            net_mw=Decimal(net),
+            transition_id="txn",
+        )
+
+    def held(direction: str, at: int, mw: str, hours: int = 1) -> InstructionRow:
+        return InstructionRow(
+            org="acme",
+            instruction=f"I-{direction}-{at}",
+            book="spec",
+            market="de-power",
+            direction=direction,
+            quantity=Decimal(mw),
+            holding_mw=Decimal(mw),
+            limit_price=Decimal("80"),
+            currency="EUR",
+            delivery_start=T0 + dt.timedelta(hours=at),
+            delivery_end=T0 + dt.timedelta(hours=at + hours),
+            placed_on=dt.date(2026, 6, 30),
+            valid_until=T0,
+            proposer="agent",
+            status="open",
+        )
+
+    caps = {"spec": Decimal("25")}
+    positions = [hour(0, "20"), hour(1, "10")]
+    # A buy of 4 in hour 0: 20 + 4 = 24 used, 1 left, hour 0 the tightest.
+    (line,) = limit_summary(positions, caps, [held("buy", 0, "4")])
+    assert (line["peak_hour"], line["peak_mw"], line["held_mw"], line["room_mw"]) == (
+        T0,
+        Decimal("20"),
+        Decimal("4"),
+        Decimal("1"),
+    )
+    # An open sale is not set against the bought side: still 20 used in
+    # hour 0, 5 left, and the instruction holds nothing on that side.
+    (line,) = limit_summary(positions, caps, [held("sell", 0, "10")])
+    assert (line["held_mw"], line["room_mw"]) == (Decimal("0"), Decimal("5"))
+    # A large open sale makes the sold side the tight one: 40 - 10 = 30
+    # in hour 1, past the cap, and the room left says so.
+    (line,) = limit_summary(positions, caps, [held("sell", 1, "40")])
+    assert (line["peak_hour"], line["held_mw"], line["room_mw"]) == (
+        T0 + dt.timedelta(hours=1),
+        Decimal("40"),
+        Decimal("-5"),
+    )
+    # An instruction over several hours holds room in each, and in an
+    # hour with no booked position at all.
+    (line,) = limit_summary([], caps, [held("buy", 5, "3", hours=2)])
+    assert (line["peak_mw"], line["held_mw"], line["room_mw"]) == (
+        Decimal("0"),
+        Decimal("3"),
+        Decimal("22"),
+    )

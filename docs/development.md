@@ -41,6 +41,15 @@ The answer is computed by replaying the ledger's history up to that instant thro
 
 Each as-of request replays the whole history, and the work grows with the number of delivery hours as well as the number of transitions. That is fine for the demo book and has not been measured on a large one.
 
+## Instructions
+
+An instruction is an intention to buy or sell that has not happened yet, such as an order sent to market. From the moment it is placed it holds room under its book's position limit, so a trade or another instruction cannot take that room. `/instructions?org=...` lists them; the Positions screen shows what is held; agents place and cancel them through MCP ([mcp.md](mcp.md)).
+
+- Open buys count towards the bought side of the limit and open sells towards the sold side. They are never set against each other.
+- A trade refused because instructions hold the room is refused by `room_not_held_by_instructions`, not by `hour_within_limit`, and its figures are the quantity instructed and the room the trades leave.
+- An instruction holds its room until it is cancelled, or until its lapse is recorded after `valid_until`. Time passing does not free the room by itself.
+- It is not approved by anyone and not connected to fills yet.
+
 ## Refusals
 
 `/refusals?org=...` returns the most recent proposals the rules refused for an organisation, with the rule and the figures. The Audit screen shows the same list. It is not the audit history and it is not complete: the engine writes a refusal at most once, after the proposal is rolled back, so one can be missing. Each answer says so and says how many it reaches back (`limit`, 20 unless asked, 200 at most).

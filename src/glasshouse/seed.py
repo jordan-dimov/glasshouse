@@ -264,6 +264,14 @@ def seed_demo(
         # speculative book and nothing else, so its cap binds it and the
         # hedge book refuses it, both by the rules as written.
         models.GrantCaptureAuthorityRequest(principal=AGENT, org=ORG, book=AGENT_BOOK),
+        # Who may place instructions (open orders): the agent in its one
+        # book, the desk and the demo login in every book.
+        models.GrantInstructAuthorityRequest(principal=AGENT, org=ORG, book=AGENT_BOOK),
+        *(
+            models.GrantInstructAuthorityRequest(principal=who, org=ORG, book=book)
+            for who in ("alice", "demo")
+            for book in (*BOOKS, GB_BOOK)
+        ),
         # Each market is declared with the currency it is priced in
         # before anything trades in it: the one place a currency comes
         # from.

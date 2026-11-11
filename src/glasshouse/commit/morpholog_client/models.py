@@ -116,6 +116,24 @@ class GrantValuationAuthorityRequest:
 
 
 @dataclass(frozen=True)
+class GrantInstructAuthorityRequest:
+    """Arguments for `grant_instruct_authority`."""
+
+    TRANSFORMATION: ClassVar[str] = "grant_instruct_authority"
+
+    principal: str
+    org: str
+    book: str
+
+    def to_args_named(self) -> dict[str, object]:
+        return {
+            "principal": values.encode_named(self.principal),
+            "org": values.encode_named(self.org),
+            "book": values.encode_named(self.book),
+        }
+
+
+@dataclass(frozen=True)
 class GrantLimitAuthorityRequest:
     """Arguments for `grant_limit_authority`."""
 
@@ -233,6 +251,73 @@ class AmendTradeRequest:
             "delivery_start": values.encode_named(self.delivery_start),
             "delivery_end": values.encode_named(self.delivery_end),
             "effective_from": values.encode_named(self.effective_from),
+        }
+
+
+@dataclass(frozen=True)
+class PlaceInstructionRequest:
+    """Arguments for `place_instruction`."""
+
+    TRANSFORMATION: ClassVar[str] = "place_instruction"
+
+    org: str
+    book: str
+    instruction: str
+    market: str
+    direction: str
+    quantity: Decimal
+    # amount in MW (the declaration carries the unit)
+    limit_price: Decimal
+    delivery_start: datetime
+    delivery_end: datetime
+    placed_on: date
+    valid_until: datetime
+
+    def to_args_named(self) -> dict[str, object]:
+        return {
+            "org": values.encode_named(self.org),
+            "book": values.encode_named(self.book),
+            "instruction": values.encode_named(self.instruction),
+            "market": values.encode_named(self.market),
+            "direction": values.encode_named(self.direction),
+            "quantity": values.encode_named(self.quantity),
+            "limit_price": values.encode_named(self.limit_price),
+            "delivery_start": values.encode_named(self.delivery_start),
+            "delivery_end": values.encode_named(self.delivery_end),
+            "placed_on": values.encode_named(self.placed_on),
+            "valid_until": values.encode_named(self.valid_until),
+        }
+
+
+@dataclass(frozen=True)
+class CancelInstructionRequest:
+    """Arguments for `cancel_instruction`."""
+
+    TRANSFORMATION: ClassVar[str] = "cancel_instruction"
+
+    org: str
+    instruction: str
+
+    def to_args_named(self) -> dict[str, object]:
+        return {
+            "org": values.encode_named(self.org),
+            "instruction": values.encode_named(self.instruction),
+        }
+
+
+@dataclass(frozen=True)
+class MarkInstructionLapsedRequest:
+    """Arguments for `mark_instruction_lapsed`."""
+
+    TRANSFORMATION: ClassVar[str] = "mark_instruction_lapsed"
+
+    org: str
+    instruction: str
+
+    def to_args_named(self) -> dict[str, object]:
+        return {
+            "org": values.encode_named(self.org),
+            "instruction": values.encode_named(self.instruction),
         }
 
 
@@ -383,6 +468,26 @@ class MaySetLimitClaim:
         return cls(
             actor=values.named_text("MaySetLimit.actor", args["actor"]),
             org=values.named_text("MaySetLimit.org", args["org"]),
+        )
+
+
+@dataclass(frozen=True)
+class MayInstructClaim:
+    """One admitted `MayInstruct` claim, decoded by declared kind."""
+
+    PREDICATE: ClassVar[str] = "MayInstruct"
+
+    actor: str
+    org: str
+    book: str
+
+    @classmethod
+    def from_named(cls, args: dict[str, object]) -> MayInstructClaim:
+        values.named_fields("MayInstruct", args, ("actor", "org", "book"))
+        return cls(
+            actor=values.named_text("MayInstruct.actor", args["actor"]),
+            org=values.named_text("MayInstruct.org", args["org"]),
+            book=values.named_text("MayInstruct.book", args["book"]),
         )
 
 
@@ -736,6 +841,159 @@ class PositionLimitClaim:
             org=values.named_text("PositionLimit.org", args["org"]),
             book=values.named_text("PositionLimit.book", args["book"]),
             cap=values.named_decimal("PositionLimit.cap", args["cap"]),
+        )
+
+
+@dataclass(frozen=True)
+class InstructionClaim:
+    """One admitted `Instruction` claim, decoded by declared kind."""
+
+    PREDICATE: ClassVar[str] = "Instruction"
+
+    org: str
+    book: str
+    instruction: str
+    proposer: str
+    market: str
+    direction: str
+    quantity: Decimal
+    # amount in MW (the declaration carries the unit)
+    limit_price: Decimal
+    delivery_start: datetime
+    delivery_end: datetime
+    placed_on: date
+    valid_until: datetime
+
+    @classmethod
+    def from_named(cls, args: dict[str, object]) -> InstructionClaim:
+        values.named_fields(
+            "Instruction",
+            args,
+            (
+                "org",
+                "book",
+                "instruction",
+                "proposer",
+                "market",
+                "direction",
+                "quantity",
+                "limit_price",
+                "delivery_start",
+                "delivery_end",
+                "placed_on",
+                "valid_until",
+            ),
+        )
+        return cls(
+            org=values.named_text("Instruction.org", args["org"]),
+            book=values.named_text("Instruction.book", args["book"]),
+            instruction=values.named_text(
+                "Instruction.instruction",
+                args["instruction"],
+            ),
+            proposer=values.named_text("Instruction.proposer", args["proposer"]),
+            market=values.named_text("Instruction.market", args["market"]),
+            direction=values.named_text("Instruction.direction", args["direction"]),
+            quantity=values.named_decimal("Instruction.quantity", args["quantity"]),
+            limit_price=values.named_decimal(
+                "Instruction.limit_price",
+                args["limit_price"],
+            ),
+            delivery_start=values.named_timestamp(
+                "Instruction.delivery_start",
+                args["delivery_start"],
+            ),
+            delivery_end=values.named_timestamp(
+                "Instruction.delivery_end",
+                args["delivery_end"],
+            ),
+            placed_on=values.named_date("Instruction.placed_on", args["placed_on"]),
+            valid_until=values.named_timestamp(
+                "Instruction.valid_until",
+                args["valid_until"],
+            ),
+        )
+
+
+@dataclass(frozen=True)
+class InstructionOpenClaim:
+    """One admitted `InstructionOpen` claim, decoded by declared kind."""
+
+    PREDICATE: ClassVar[str] = "InstructionOpen"
+
+    org: str
+    book: str
+    instruction: str
+    direction: str
+    remaining: Decimal
+    # amount in MW (the declaration carries the unit)
+    delivery_start: datetime
+    delivery_end: datetime
+    valid_until: datetime
+
+    @classmethod
+    def from_named(cls, args: dict[str, object]) -> InstructionOpenClaim:
+        values.named_fields(
+            "InstructionOpen",
+            args,
+            (
+                "org",
+                "book",
+                "instruction",
+                "direction",
+                "remaining",
+                "delivery_start",
+                "delivery_end",
+                "valid_until",
+            ),
+        )
+        return cls(
+            org=values.named_text("InstructionOpen.org", args["org"]),
+            book=values.named_text("InstructionOpen.book", args["book"]),
+            instruction=values.named_text(
+                "InstructionOpen.instruction",
+                args["instruction"],
+            ),
+            direction=values.named_text("InstructionOpen.direction", args["direction"]),
+            remaining=values.named_decimal(
+                "InstructionOpen.remaining",
+                args["remaining"],
+            ),
+            delivery_start=values.named_timestamp(
+                "InstructionOpen.delivery_start",
+                args["delivery_start"],
+            ),
+            delivery_end=values.named_timestamp(
+                "InstructionOpen.delivery_end",
+                args["delivery_end"],
+            ),
+            valid_until=values.named_timestamp(
+                "InstructionOpen.valid_until",
+                args["valid_until"],
+            ),
+        )
+
+
+@dataclass(frozen=True)
+class InstructionEndedClaim:
+    """One admitted `InstructionEnded` claim, decoded by declared kind."""
+
+    PREDICATE: ClassVar[str] = "InstructionEnded"
+
+    org: str
+    instruction: str
+    outcome: str
+
+    @classmethod
+    def from_named(cls, args: dict[str, object]) -> InstructionEndedClaim:
+        values.named_fields("InstructionEnded", args, ("org", "instruction", "outcome"))
+        return cls(
+            org=values.named_text("InstructionEnded.org", args["org"]),
+            instruction=values.named_text(
+                "InstructionEnded.instruction",
+                args["instruction"],
+            ),
+            outcome=values.named_text("InstructionEnded.outcome", args["outcome"]),
         )
 
 

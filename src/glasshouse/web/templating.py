@@ -52,6 +52,17 @@ def _ago(instant: dt.datetime | None, *, now: dt.datetime | None = None) -> str:
 # none.
 RULES_IN_PLAIN_WORDS = {
     "hour_within_limit": "This would take the book past its position limit in that hour.",
+    "room_not_held_by_instructions": (
+        "There would be room for this, but open instructions are holding it in that hour."
+    ),
+    "instruction_fits_under_limit": (
+        "With the trades booked and the instructions already open, this does not fit under "
+        "the book's position limit in that hour."
+    ),
+    "may_instruct": "This name is not allowed to place or cancel instructions in that book.",
+    "instruction_is_new": "An instruction with this id already exists.",
+    "instruction_is_still_valid": "The instruction's valid-until time has already passed.",
+    "instruction_has_lapsed": "The instruction is still valid, so it has not lapsed.",
     "may_capture_trade": "This name is not allowed to enter trades in that book.",
     "may_amend_trade": "This name is not allowed to change trades in that book.",
     "may_register_curve": "This name is not allowed to enter prices for that market.",

@@ -15,7 +15,7 @@ if sys.version_info < (3, 12):
     )
 
 PROGRAM = "glasshouse"
-MODEL_HASH = "sha256:61c2662bfa7cf652cb4fdbfa6493ea8dc513ce237d7775b3f5a04c7bcc95ae59"
+MODEL_HASH = "sha256:89917eeaaaabd3b8a83625e75649e269bd578db28e38592da6382486737d9e5a"
 MORPHOLOG_VERSION = "0.0.18"
 PYTHON_FLOOR = (3, 12)
 

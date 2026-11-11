@@ -14,6 +14,9 @@ An agent gets no special treatment. Its trade is a proposal like anyone's, and t
 | `position_limits` | The cap on each book's position in any one hour. |
 | `explain_trade` | Asks whether a trade would be accepted. Records nothing. |
 | `propose_trade` | Proposes one trade. The answer is accepted or refused. |
+| `place_instruction` | Records an intention to buy or sell that has not happened yet, and holds room for it under the book's limit. |
+| `cancel_instruction` | Cancels an instruction. Its room is free again at once. |
+| `list_instructions` | Instructions, how much each still holds, and whether each is open, overdue or ended. |
 | `audit_history` | The accepted changes, newest first, with who made each. |
 | `recent_refusals` | Recent refused proposals, with the rule and the figures. |
 
@@ -95,6 +98,49 @@ The first two trades take the hour to 22 and then 24 MW. The third would make it
 
 An agent that calls `position_limits` and `list_positions` first can work out that only 5 MW of room is left, and `explain_trade` will confirm it without proposing anything. Try asking the agent to buy in the `hedge-de` book as well: it is refused there by a different rule, `may_capture_trade`, because nobody gave it that authority.
 
+## Walk through: an open order holds its room
+
+A trader sends an order to market. Until it fills, nothing has been traded, so the book looks as if there is room. Someone else then books a trade into that room, and when the order fills the limit is broken. An instruction closes that gap: it tells the book about the intention, and the book holds the room.
+
+The `spec-de` book holds 20 MW at 12:00 and its limit is 25 MW, so 5 MW is left.
+
+1. **Place an instruction for 4 MW.** `place_instruction` is accepted. 4 of the 5 MW are now held.
+2. **Propose a trade for 2 MW in the same hour.** On the booked trades alone it would fit: 22 of 25 MW. It is refused, and the refusal says why:
+
+```json
+{
+  "accepted": false,
+  "summary": "room_not_held_by_instructions: 4 MW <= 3 MW does not hold (h = 2026-07-01T12:00:00+00:00)",
+  "refusal": {
+    "rule": "room_not_held_by_instructions",
+    "compared": { "op": "<=", "left": "4 MW", "right": "3 MW" }
+  }
+}
+```
+
+Read the two figures as: 4 MW is instructed, and after this trade only 3 MW of room would be left.
+
+3. **Cancel the instruction.** `cancel_instruction` is accepted, and the 4 MW are free.
+4. **Propose the same trade again.** It is accepted.
+
+How to tell the two refusals apart:
+
+- `hour_within_limit`: the booked trades themselves leave no room. The figures are the position and the limit.
+- `room_not_held_by_instructions`: there would be room, but open instructions hold it. The figures are the quantity instructed and the room the trades leave.
+
+Three things to know:
+
+- **Buys and sells are not set against each other.** An open sale does not make room to buy, because it may never fill. Open buys count towards the bought side and open sells towards the sold side.
+- **An instruction holds its room until it ends.** It ends when it is cancelled. Once its `valid_until` time has passed it is shown as overdue, and it still holds its room until someone cancels it or records that it lapsed.
+- **Booking the trade that results is still `propose_trade`.** Cancel the instruction first, or its room stays held on top of the trade.
+
+### What an instruction is not, yet
+
+- **Not approved by anyone.** There is no rule yet about who may approve an instruction, or that the person who placed it cannot approve it.
+- **Not connected to fills.** When the market reports that an order filled, nothing links that to the instruction. You cancel the instruction and book the trade yourself.
+
+Both are planned as the next two steps.
+
 ## What is recorded
 
 An accepted trade is in the audit history under the agent's name, like any other change. `audit_history` with `actor` set to `agent` shows everything it did.
@@ -113,6 +159,7 @@ Each of these is enforced by the rules in the ledger, not by the MCP server. The
 ## Limits of this first version
 
 - One trade type: a fixed-price power trade. No amendments yet.
+- Instructions cannot be approved or filled yet (see above).
 - No tools yet for curves, valuations or the list of organisations.
 - A trade takes the currency of its market. You do not state one, and a trade in a market that has not been declared is refused.
 - One token and one actor per hosted Glasshouse. Everyone holding the token shares one name and one limit, so a class should run local copies.

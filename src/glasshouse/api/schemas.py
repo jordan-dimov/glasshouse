@@ -325,3 +325,24 @@ class RefusalLog(BaseModel):
     caveat: str
     limit: int
     refusals: list[RecordedRefusal]
+
+
+class InstructionRow(BaseModel):
+    """An intention to buy or sell that has not happened yet (an open
+    order), and what it holds under its book's position limit now."""
+
+    org: str
+    instruction: str
+    book: str
+    market: str
+    direction: str
+    quantity: ExactDecimal  # MW, as instructed
+    holding_mw: ExactDecimal  # what counts against the limit now; 0 unless open
+    limit_price: ExactDecimal  # per MWh, in `currency`
+    currency: str  # the market's
+    delivery_start: datetime
+    delivery_end: datetime
+    placed_on: date
+    valid_until: datetime
+    proposer: str  # who placed it
+    status: str  # open, overdue (past valid_until, still holding), cancelled, lapsed, ...
