@@ -19,7 +19,7 @@ Every new function arrives one of three ways: as rules in [the one rule file](..
 | Amend a trade, keeping the old version | Has | A new version beside the old one; nothing is overwritten. |
 | Enter a trade on the screen | Planned | [#119](https://github.com/jordan-dimov/glasshouse/issues/119) |
 | Open orders that hold room under a limit | Has | Called instructions. Placed and cancelled by agents or the API. |
-| Approval of an order by a second person | Building | [#113](https://github.com/jordan-dimov/glasshouse/issues/113), with a token per actor. |
+| Approval of an order by a second person | Has | The approver must hold the right and must not be whoever placed it. Recorded, not enforced on the market. |
 | Recording fills from the market, and breaches | Planned | [#114](https://github.com/jordan-dimov/glasshouse/issues/114). Waits for the next release of the rules engine. |
 | Delivery periods of 15 and 30 minutes | Planned | [#116](https://github.com/jordan-dimov/glasshouse/issues/116). Needed for Great Britain and for intraday. Waits for the next release of the rules engine. |
 | Labels on trades (strategy, desk, customer) | Planned | [#128](https://github.com/jordan-dimov/glasshouse/issues/128) |
@@ -106,7 +106,7 @@ Every new function arrives one of three ways: as rules in [the one rule file](..
 | Export the record for an outsider to verify offline | Has | For the whole ledger. One trade only: [#83](https://github.com/jordan-dimov/glasshouse/issues/83). |
 | A published rule book, generated from the rules in force | Planned | [#86](https://github.com/jordan-dimov/glasshouse/issues/86) |
 | Checkpoints countersigned by an outside timestamp authority | Planned | [#80](https://github.com/jordan-dimov/glasshouse/issues/80), then signatures: [#42](https://github.com/jordan-dimov/glasshouse/issues/42). |
-| Sign-in for named users | Planned | Shared demo login today. A token per actor comes with [#113](https://github.com/jordan-dimov/glasshouse/issues/113); what a database login may assert is [#85](https://github.com/jordan-dimov/glasshouse/issues/85). |
+| Sign-in for named users | Planned | Shared demo login for the screens; a token per actor for agents. What a database login may assert is [#85](https://github.com/jordan-dimov/glasshouse/issues/85). |
 
 ## Software that trades
 
@@ -114,20 +114,19 @@ Every new function arrives one of three ways: as rules in [the one rule file](..
 |---|---|---|
 | An AI agent reads the book | Has | Through MCP. See [mcp.md](mcp.md). |
 | An agent proposes trades and places orders, under the same rules as a person | Has | Refusals come back as data. |
-| Each agent under its own name | Building | Part of [#113](https://github.com/jordan-dimov/glasshouse/issues/113). One shared name on the hosted demo today. |
+| Each agent under its own name | Has | A token per actor. A token does not prove who holds it: [#85](https://github.com/jordan-dimov/glasshouse/issues/85). |
 
 ## The order of work
 
 No dates. This is the order things are meant to be built in, and it can change.
 
-1. Approval of instructions, with a token per actor ([#113](https://github.com/jordan-dimov/glasshouse/issues/113)).
-2. Move to the next release of the rules engine, which lets one act branch. Two things below wait for it.
-3. Fills and breaches ([#114](https://github.com/jordan-dimov/glasshouse/issues/114)) and shorter delivery periods ([#116](https://github.com/jordan-dimov/glasshouse/issues/116)).
-4. The business date ([#44](https://github.com/jordan-dimov/glasshouse/issues/44)), because it blocks ordinary daily use.
-5. What else changes the shape of the record, while no ledger is being kept: counterparties as facts ([#117](https://github.com/jordan-dimov/glasshouse/issues/117)). Withdrawing a permission ([#115](https://github.com/jordan-dimov/glasshouse/issues/115)) belongs here too.
-6. What lets a desk start: figures out to Excel ([#118](https://github.com/jordan-dimov/glasshouse/issues/118)), a trade ticket ([#119](https://github.com/jordan-dimov/glasshouse/issues/119)), running beside what you have ([#120](https://github.com/jordan-dimov/glasshouse/issues/120)).
-7. From trade to cash: fees ([#122](https://github.com/jordan-dimov/glasshouse/issues/122)), the settlement statement ([#123](https://github.com/jordan-dimov/glasshouse/issues/123)), then the product packs ([#124](https://github.com/jordan-dimov/glasshouse/issues/124), [#125](https://github.com/jordan-dimov/glasshouse/issues/125), [#126](https://github.com/jordan-dimov/glasshouse/issues/126)).
-8. Fitting each desk: labels ([#128](https://github.com/jordan-dimov/glasshouse/issues/128)), more kinds of limit ([#129](https://github.com/jordan-dimov/glasshouse/issues/129)), the regulatory export ([#130](https://github.com/jordan-dimov/glasshouse/issues/130)).
+1. Move to the next release of the rules engine, which lets one act branch. Two things below wait for it.
+2. Fills and breaches ([#114](https://github.com/jordan-dimov/glasshouse/issues/114)) and shorter delivery periods ([#116](https://github.com/jordan-dimov/glasshouse/issues/116)).
+3. The business date ([#44](https://github.com/jordan-dimov/glasshouse/issues/44)), because it blocks ordinary daily use.
+4. What else changes the shape of the record, while no ledger is being kept: counterparties as facts ([#117](https://github.com/jordan-dimov/glasshouse/issues/117)). Withdrawing a permission ([#115](https://github.com/jordan-dimov/glasshouse/issues/115)) belongs here too.
+5. What lets a desk start: figures out to Excel ([#118](https://github.com/jordan-dimov/glasshouse/issues/118)), a trade ticket ([#119](https://github.com/jordan-dimov/glasshouse/issues/119)), running beside what you have ([#120](https://github.com/jordan-dimov/glasshouse/issues/120)).
+6. From trade to cash: fees ([#122](https://github.com/jordan-dimov/glasshouse/issues/122)), the settlement statement ([#123](https://github.com/jordan-dimov/glasshouse/issues/123)), then the product packs ([#124](https://github.com/jordan-dimov/glasshouse/issues/124), [#125](https://github.com/jordan-dimov/glasshouse/issues/125), [#126](https://github.com/jordan-dimov/glasshouse/issues/126)).
+7. Fitting each desk: labels ([#128](https://github.com/jordan-dimov/glasshouse/issues/128)), more kinds of limit ([#129](https://github.com/jordan-dimov/glasshouse/issues/129)), the regulatory export ([#130](https://github.com/jordan-dimov/glasshouse/issues/130)).
 
 The evidence work ([#121](https://github.com/jordan-dimov/glasshouse/issues/121), [#86](https://github.com/jordan-dimov/glasshouse/issues/86), [#41](https://github.com/jordan-dimov/glasshouse/issues/41), [#80](https://github.com/jordan-dimov/glasshouse/issues/80), [#83](https://github.com/jordan-dimov/glasshouse/issues/83)) runs alongside.
 

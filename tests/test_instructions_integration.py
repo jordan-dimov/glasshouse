@@ -11,6 +11,7 @@ spec-de holds 20 MW in the 12:00 hour, 20 MW in 13:00, and its cap is
 """
 
 import datetime as dt
+import json
 import time
 from typing import Any
 
@@ -235,4 +236,107 @@ def test_the_api_and_the_positions_screen_show_what_is_held(
     assert "2026-07-01 17:00Z" in row
     for figure in ("20", "2", "25", "3"):
         assert f'class="numeric">{figure}<' in row
-    assert "not approved by anyone and not connected to fills yet" in page
+    assert "It is not connected to fills yet" in page
+    assert "awaiting approval" in page  # spec-de asks for a second person
+
+
+def test_a_second_person_approves_and_never_the_one_who_placed_it(
+    desk: Desk, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The hosted way in, with a token per actor. spec-de requires
+    # approval. `demo` may both instruct and approve there, which is the
+    # case the rule is for: it places an instruction and cannot approve
+    # its own; `risk-manager` can; the agent, with no right to approve,
+    # is refused for that. Three tokens, three names in the record.
+    tokens = {
+        "demo": "token-of-the-demo-desk",
+        "risk-manager": "token-of-risk-manager",
+    }
+    monkeypatch.setenv("GLASSHOUSE_DATABASE_URL", DB)
+    monkeypatch.setenv("GLASSHOUSE_MORPHOLOG_BIN", str(BINARY))
+    monkeypatch.setenv("GLASSHOUSE_MCP_TOKEN", "token-of-the-agent")
+    monkeypatch.setenv("GLASSHOUSE_MCP_TOKENS", json.dumps(tokens))
+    monkeypatch.delenv("GLASSHOUSE_DEMO_PASSWORD", raising=False)
+
+    def tool(client: TestClient, token: str, name: str, arguments: dict[str, Any]) -> Any:
+        answer = client.post(
+            "/mcp",
+            json={
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "tools/call",
+                "params": {"name": name, "arguments": arguments},
+            },
+            headers={
+                "Accept": "application/json, text/event-stream",
+                "MCP-Protocol-Version": "2025-06-18",
+                "Authorization": f"Bearer {token}",
+            },
+        )
+        assert answer.status_code == 200, answer.text
+        structured = answer.json()["result"]["structuredContent"]
+        return structured.get("result", structured)
+
+    with TestClient(create_app()) as client:
+        placed = tool(client, tokens["demo"], "place_instruction", instruction("APPR-1", 5, "1"))
+        assert (placed["accepted"], placed["actor"]) == (True, "demo")
+        (waiting,) = [
+            row
+            for row in tool(client, tokens["demo"], "list_instructions", {"open_only": True})
+            if row["instruction"] == "APPR-1"
+        ]
+        assert (waiting["approval"], waiting["approved_by"]) == ("awaiting", None)
+
+        own = tool(client, tokens["demo"], "approve_instruction", {"instruction": "APPR-1"})
+        assert own["accepted"] is False
+        assert own["refusal"]["rule"] == "approver_is_not_proposer"
+        no_right = tool(
+            client, "token-of-the-agent", "approve_instruction", {"instruction": "APPR-1"}
+        )
+        assert (no_right["actor"], no_right["refusal"]["rule"]) == (AGENT, "may_approve")
+
+        approved = tool(
+            client, tokens["risk-manager"], "approve_instruction", {"instruction": "APPR-1"}
+        )
+        assert (approved["accepted"], approved["actor"]) == (True, "risk-manager")
+        twice = tool(
+            client, tokens["risk-manager"], "approve_instruction", {"instruction": "APPR-1"}
+        )
+        assert twice["refusal"]["rule"] == "instruction_not_yet_approved"
+        (done,) = [
+            row
+            for row in tool(client, "token-of-the-agent", "list_instructions", {})
+            if row["instruction"] == "APPR-1"
+        ]
+        assert (done["approval"], done["approved_by"], done["proposer"]) == (
+            "approved",
+            "risk-manager",
+            "demo",
+        )
+        # Turning one down ends it and frees its room.
+        tool(client, tokens["demo"], "place_instruction", instruction("APPR-2", 5, "1"))
+        rejected = tool(
+            client, tokens["risk-manager"], "reject_instruction", {"instruction": "APPR-2"}
+        )
+        assert rejected["accepted"], rejected
+        page = client.get("/ui/positions", params={"org": ORG}).text
+
+    # Two different names are in the audit history for the one instruction.
+    acts = {
+        row.transformation_name: row.actor
+        for row in desk.client.audit_named()
+        if any(claim.args.get("instruction") == "APPR-1" for claim in row.asserted_claims)
+    }
+    assert acts == {"place_instruction": "demo", "approve_instruction": "risk-manager"}
+    ended = {e.instruction: e.outcome for e in desk.client.read(models.InstructionEndedClaim)}
+    assert ended["APPR-2"] == "rejected"
+    assert "approved by risk-manager" in page
+
+
+def test_a_book_that_does_not_ask_for_approval_says_so(desk: Desk) -> None:
+    # hedge-de does not require approval; alice may instruct there.
+    alice = Desk(client=desk.client, engine=desk.engine, actor="alice", org=ORG)
+    placed = call(alice, "place_instruction", instruction("FREE-1", 3, "1") | {"book": "hedge-de"})
+    assert placed["accepted"], placed
+    (row,) = [r for r in call(alice, "list_instructions") if r["instruction"] == "FREE-1"]
+    assert row["approval"] == "not required"

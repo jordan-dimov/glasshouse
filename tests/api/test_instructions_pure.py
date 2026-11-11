@@ -68,6 +68,16 @@ CLAIMS = [
         "args": {"org": "acme-energy", "instruction": "I-gone", "outcome": "cancelled"},
     },
     {
+        "predicate": "ApprovalRequired",
+        "asserted_in": "t-0",
+        "args": {"org": "acme-energy", "book": "spec-de"},
+    },
+    {
+        "predicate": "InstructionApproved",
+        "asserted_in": "t-3",
+        "args": {"org": "acme-energy", "instruction": "I-open", "approver": "risk-manager"},
+    },
+    {
         "predicate": "MarketCurrency",
         "asserted_in": "t-0",
         "args": {"org": "acme-energy", "market": "de-power", "currency": "EUR"},
@@ -90,8 +100,15 @@ def test_status_and_what_is_held_come_from_one_read(tmp_path: Path) -> None:
         "I-gone": ("cancelled", Decimal("0")),
     }
     assert {row.currency for row in rows} == {"EUR"}
+    # spec-de requires approval: one has it, one waits. hedge-de does not.
+    approval = {row.instruction: (row.approval, row.approved_by) for row in rows}
+    assert approval == {
+        "I-open": ("approved", "risk-manager"),
+        "I-overdue": ("awaiting", None),
+        "I-gone": ("not required", None),
+    }
     argv = (tmp_path / "argv.txt").read_text().splitlines()
-    assert argv.count("--predicate") == 4  # one read of the ledger, four facts
+    assert argv.count("--predicate") == 6  # one read of the ledger, six facts
 
 
 def test_open_only_keeps_everything_still_holding_room(tmp_path: Path) -> None:

@@ -346,6 +346,11 @@ class InstructionRow(BaseModel):
     valid_until: datetime
     proposer: str  # who placed it
     status: str  # open, overdue (past valid_until, still holding), cancelled, lapsed, ...
+    # Whether a second person has agreed: "not required" (the book does
+    # not ask for it), "awaiting" or "approved". Recorded, not enforced
+    # on the market: the ledger cannot stop an order leaving the building.
+    approval: str
+    approved_by: str | None = None
 
 
 class Problem(BaseModel):

@@ -275,6 +275,14 @@ def seed_demo(
         # Each market is declared with the currency it is priced in
         # before anything trades in it: the one place a currency comes
         # from.
+        # A second pair of eyes: instructions in the speculative book need
+        # approval, and risk and the demo login may give it in any book.
+        models.RequireApprovalRequest(org=ORG, book=AGENT_BOOK),
+        *(
+            models.GrantApproveAuthorityRequest(principal=who, org=ORG, book=book)
+            for who in ("risk-manager", "demo")
+            for book in (*BOOKS, GB_BOOK)
+        ),
         models.DeclareMarketRequest(org=ORG, market=MARKET, currency=CURRENCY),
         models.DeclareMarketRequest(org=ORG, market=GB_MARKET, currency=GB_CURRENCY),
         models.GrantCaptureAuthorityRequest(principal="alice", org=ORG, book=GB_BOOK),

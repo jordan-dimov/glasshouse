@@ -47,7 +47,7 @@ def test_no_invariant_would_refuse_the_history_the_previous_rules_admitted() -> 
     }
     assert refusing == {}
     # Every invariant of the programme was scored, the new ones included.
-    assert len(report.invariants) == 29
+    assert len(report.invariants) == 31
 
 
 def test_the_gates_refuse_only_what_a_rule_change_meant_to_refuse() -> None:

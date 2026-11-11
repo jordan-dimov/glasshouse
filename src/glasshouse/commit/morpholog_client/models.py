@@ -134,6 +134,40 @@ class GrantInstructAuthorityRequest:
 
 
 @dataclass(frozen=True)
+class GrantApproveAuthorityRequest:
+    """Arguments for `grant_approve_authority`."""
+
+    TRANSFORMATION: ClassVar[str] = "grant_approve_authority"
+
+    principal: str
+    org: str
+    book: str
+
+    def to_args_named(self) -> dict[str, object]:
+        return {
+            "principal": values.encode_named(self.principal),
+            "org": values.encode_named(self.org),
+            "book": values.encode_named(self.book),
+        }
+
+
+@dataclass(frozen=True)
+class RequireApprovalRequest:
+    """Arguments for `require_approval`."""
+
+    TRANSFORMATION: ClassVar[str] = "require_approval"
+
+    org: str
+    book: str
+
+    def to_args_named(self) -> dict[str, object]:
+        return {
+            "org": values.encode_named(self.org),
+            "book": values.encode_named(self.book),
+        }
+
+
+@dataclass(frozen=True)
 class GrantLimitAuthorityRequest:
     """Arguments for `grant_limit_authority`."""
 
@@ -294,6 +328,38 @@ class CancelInstructionRequest:
     """Arguments for `cancel_instruction`."""
 
     TRANSFORMATION: ClassVar[str] = "cancel_instruction"
+
+    org: str
+    instruction: str
+
+    def to_args_named(self) -> dict[str, object]:
+        return {
+            "org": values.encode_named(self.org),
+            "instruction": values.encode_named(self.instruction),
+        }
+
+
+@dataclass(frozen=True)
+class ApproveInstructionRequest:
+    """Arguments for `approve_instruction`."""
+
+    TRANSFORMATION: ClassVar[str] = "approve_instruction"
+
+    org: str
+    instruction: str
+
+    def to_args_named(self) -> dict[str, object]:
+        return {
+            "org": values.encode_named(self.org),
+            "instruction": values.encode_named(self.instruction),
+        }
+
+
+@dataclass(frozen=True)
+class RejectInstructionRequest:
+    """Arguments for `reject_instruction`."""
+
+    TRANSFORMATION: ClassVar[str] = "reject_instruction"
 
     org: str
     instruction: str
@@ -488,6 +554,26 @@ class MayInstructClaim:
             actor=values.named_text("MayInstruct.actor", args["actor"]),
             org=values.named_text("MayInstruct.org", args["org"]),
             book=values.named_text("MayInstruct.book", args["book"]),
+        )
+
+
+@dataclass(frozen=True)
+class MayApproveClaim:
+    """One admitted `MayApprove` claim, decoded by declared kind."""
+
+    PREDICATE: ClassVar[str] = "MayApprove"
+
+    actor: str
+    org: str
+    book: str
+
+    @classmethod
+    def from_named(cls, args: dict[str, object]) -> MayApproveClaim:
+        values.named_fields("MayApprove", args, ("actor", "org", "book"))
+        return cls(
+            actor=values.named_text("MayApprove.actor", args["actor"]),
+            org=values.named_text("MayApprove.org", args["org"]),
+            book=values.named_text("MayApprove.book", args["book"]),
         )
 
 
@@ -970,6 +1056,54 @@ class InstructionOpenClaim:
             valid_until=values.named_timestamp(
                 "InstructionOpen.valid_until",
                 args["valid_until"],
+            ),
+        )
+
+
+@dataclass(frozen=True)
+class ApprovalRequiredClaim:
+    """One admitted `ApprovalRequired` claim, decoded by declared kind."""
+
+    PREDICATE: ClassVar[str] = "ApprovalRequired"
+
+    org: str
+    book: str
+
+    @classmethod
+    def from_named(cls, args: dict[str, object]) -> ApprovalRequiredClaim:
+        values.named_fields("ApprovalRequired", args, ("org", "book"))
+        return cls(
+            org=values.named_text("ApprovalRequired.org", args["org"]),
+            book=values.named_text("ApprovalRequired.book", args["book"]),
+        )
+
+
+@dataclass(frozen=True)
+class InstructionApprovedClaim:
+    """One admitted `InstructionApproved` claim, decoded by declared kind."""
+
+    PREDICATE: ClassVar[str] = "InstructionApproved"
+
+    org: str
+    instruction: str
+    approver: str
+
+    @classmethod
+    def from_named(cls, args: dict[str, object]) -> InstructionApprovedClaim:
+        values.named_fields(
+            "InstructionApproved",
+            args,
+            ("org", "instruction", "approver"),
+        )
+        return cls(
+            org=values.named_text("InstructionApproved.org", args["org"]),
+            instruction=values.named_text(
+                "InstructionApproved.instruction",
+                args["instruction"],
+            ),
+            approver=values.named_text(
+                "InstructionApproved.approver",
+                args["approver"],
             ),
         )
 

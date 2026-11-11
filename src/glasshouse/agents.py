@@ -64,7 +64,9 @@ INSTRUCTIONS = (
     "a trade would be accepted with explain_trade (nothing is recorded). Propose one with "
     "propose_trade. An instruction is an intention that has not happened yet, such as an "
     "order sent to market: place_instruction records it and holds room for it under the "
-    "book's position limit until it ends; cancel_instruction frees that room. "
+    "book's position limit until it ends; cancel_instruction frees that room. Where a book "
+    "requires approval, a different actor approves with approve_instruction; you cannot "
+    "approve your own. "
     "A refusal is a normal answer, not an error: it names the rule and the figures that "
     "broke it. Quantities are MW. A price is per MWh in the currency of its market, and "
     "every price and valuation you are given names its currency: read it, never assume "
@@ -384,10 +386,11 @@ def build_server(desk: Callable[[], Desk]) -> MCPServer:
         the instruction is overdue. An overdue instruction still holds
         its room until it is cancelled or its lapse is recorded.
 
-        An instruction is not approved by anyone and is not connected to
-        fills yet. Booking the trade that results is still
-        propose_trade; cancel the instruction first, or its room stays
-        held."""
+        Some books require approval by a second person: check the
+        instruction's approval in list_instructions before acting on it.
+        An instruction is not connected to fills yet. Booking the trade
+        that results is still propose_trade; cancel the instruction
+        first, or its room stays held."""
         at = desk()
         try:
             request = instructions.place_request(
@@ -420,12 +423,34 @@ def build_server(desk: Callable[[], Desk]) -> MCPServer:
         return _outcome(at, at.client.submit(request, actor=at.actor, explain_on_reject=True))
 
     @server.tool()
+    def approve_instruction(instruction: str) -> ProposalOutcome:
+        """Approve an open instruction as a second person. Refused if you
+        do not hold the right to approve in its book, if you are the one
+        who placed it, or if it is already approved or has ended."""
+        at = desk()
+        request = models.ApproveInstructionRequest(org=at.org, instruction=instruction)
+        return _outcome(at, at.client.submit(request, actor=at.actor, explain_on_reject=True))
+
+    @server.tool()
+    def reject_instruction(instruction: str) -> ProposalOutcome:
+        """Turn an open instruction down as a second person. It ends and
+        its room under the limit is free again. The same conditions as
+        approving. (Whoever placed it withdraws it with
+        cancel_instruction.)"""
+        at = desk()
+        request = models.RejectInstructionRequest(org=at.org, instruction=instruction)
+        return _outcome(at, at.client.submit(request, actor=at.actor, explain_on_reject=True))
+
+    @server.tool()
     def list_instructions(book: str | None = None, open_only: bool = False) -> list[InstructionRow]:
         """Instructions in this organisation: what was intended, how much
         each still holds under its book's limit (holding_mw), and its
         status: open, overdue (past valid_until but still holding room
-        until cancelled), cancelled or lapsed. open_only keeps those
-        holding room now."""
+        until cancelled), cancelled, rejected or lapsed. approval says
+        whether a second person has agreed: "not required" in a book
+        that does not ask for it, otherwise "awaiting" or "approved"
+        (with approved_by). Do not act on an instruction that is
+        awaiting approval. open_only keeps those holding room now."""
         at = desk()
         return instructions.list_instructions(at.client, org=at.org, book=book, open_only=open_only)
 

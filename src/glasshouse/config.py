@@ -40,6 +40,12 @@ class Settings(BaseSettings):
     # the ledger has granted that actor and no more.
     mcp_token: str | None = None
     mcp_actor: str = "agent"
+    # More callers, each its own named actor: `{"actor": "token", ...}`
+    # (a JSON object in the environment). With these, the ledger's rules
+    # can tell who proposed from who approved. A token is a shared
+    # secret, not a sign-in: it does not prove who holds it, or that two
+    # tokens are held by two people.
+    mcp_tokens: dict[str, str] = {}
 
     @field_validator("mcp_token", mode="before")
     @classmethod
@@ -49,6 +55,35 @@ class Settings(BaseSettings):
         # password is different, and refused below: that one would open
         # something.)
         return None if isinstance(value, str) and not value.strip() else value
+
+    @field_validator("mcp_tokens")
+    @classmethod
+    def _each_actor_has_a_real_token_of_its_own(cls, value: dict[str, str]) -> dict[str, str]:
+        for actor, token in value.items():
+            if not actor.strip():
+                raise ValueError("GLASSHOUSE_MCP_TOKENS names an actor that is blank")
+            if len(token.strip()) < 12:
+                raise ValueError(
+                    f"GLASSHOUSE_MCP_TOKENS: the token for {actor!r} must be at least 12 "
+                    "non-blank characters"
+                )
+        if len(set(value.values())) != len(value):
+            # One token for two actors could not say which of them called.
+            raise ValueError("GLASSHOUSE_MCP_TOKENS gives two actors the same token")
+        return value
+
+    def agent_tokens(self) -> dict[str, str]:
+        """Every bearer token the agents' door accepts, with the actor
+        each one acts as. Empty means there is no door."""
+        accepted = {token: actor for actor, token in self.mcp_tokens.items()}
+        if self.mcp_token is not None:
+            if self.mcp_token in accepted and accepted[self.mcp_token] != self.mcp_actor:
+                raise ValueError(
+                    "GLASSHOUSE_MCP_TOKEN is also the token of another actor in "
+                    "GLASSHOUSE_MCP_TOKENS"
+                )
+            accepted[self.mcp_token] = self.mcp_actor
+        return accepted
 
     @field_validator("demo_password", "mcp_token")
     @classmethod

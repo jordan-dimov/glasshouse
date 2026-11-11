@@ -10,9 +10,14 @@ was instructed, what each instruction still holds, and how each ended.
 Instructions are read from governed state through the commit client,
 like the limits they hold room under. They are not a projection yet.
 
-What an instruction is not, yet: it is not approved by anyone, and it is
-not connected to fills. Whether it may be sent, and what happens when
-the market reports a fill, are rules still to come.
+A book can require approval. An instruction there is approved by a
+second person, who must hold the right and must not be whoever placed
+it; both conditions are rules in the ledger. The approval is recorded.
+It is not enforced on the market: the ledger cannot stop an order
+leaving the building, so a client reads `approval` before it sends.
+
+What an instruction is not, yet: it is not connected to fills. What
+happens when the market reports one is a rule still to come.
 """
 
 from __future__ import annotations
@@ -23,7 +28,14 @@ from decimal import Decimal, InvalidOperation
 from glasshouse.api.schemas import InstructionRow
 from glasshouse.commit import GlasshouseClient, models
 
-_PREDICATES = ("Instruction", "InstructionOpen", "InstructionEnded", "MarketCurrency")
+_PREDICATES = (
+    "Instruction",
+    "InstructionOpen",
+    "InstructionEnded",
+    "MarketCurrency",
+    "ApprovalRequired",
+    "InstructionApproved",
+)
 
 
 def list_instructions(
@@ -65,6 +77,15 @@ def list_instructions(
         (claim.org, claim.market): claim.currency
         for claim in map(models.MarketCurrencyClaim.from_named, of("MarketCurrency"))
     }
+    needs_approval = {
+        (claim.org, claim.book)
+        for claim in map(models.ApprovalRequiredClaim.from_named, of("ApprovalRequired"))
+    }
+    approvers = {
+        claim.instruction: claim.approver
+        for claim in map(models.InstructionApprovedClaim.from_named, of("InstructionApproved"))
+        if claim.org == org
+    }
     listed = []
     for placed in map(models.InstructionClaim.from_named, of("Instruction")):
         if placed.org != org or (book is not None and placed.book != book):
@@ -95,6 +116,14 @@ def list_instructions(
                 valid_until=placed.valid_until,
                 proposer=placed.proposer,
                 status=status,
+                approval=(
+                    "approved"
+                    if placed.instruction in approvers
+                    else "awaiting"
+                    if (placed.org, placed.book) in needs_approval
+                    else "not required"
+                ),
+                approved_by=approvers.get(placed.instruction),
             )
         )
     return sorted(listed, key=lambda row: (row.book, row.instruction))

@@ -27,8 +27,9 @@ its own gate, `AgentDoorMiddleware`: a bearer token, because an MCP
 client is a program that sends a header, not a browser that answers a
 Basic challenge. The demo login steps aside for that one prefix, and only
 when the door is mounted; with no token configured `/mcp` is an unknown
-path behind the login like any other. The token maps to one actor string
-and nothing more, the same grade of identity as the login. It is not
+path behind the login like any other. Each token maps to one actor string
+and nothing more, the same grade of identity as the login: it does not
+prove who holds it, or that two tokens are held by two people. It is not
 OAuth: there is no authorisation server here to send a client to, and
 the gate does not pretend there is.
 """
@@ -38,6 +39,7 @@ from __future__ import annotations
 import base64
 import binascii
 import secrets
+from contextvars import ContextVar
 
 from fastapi import Request
 from fastapi.responses import JSONResponse
@@ -59,6 +61,12 @@ _CROSS_SITE = JSONResponse({"detail": "cross-site request refused"}, status_code
 _REFUSED_FETCH_SITES = (b"cross-site", b"same-site")
 
 
+# Which actor the request being served was authenticated as, by its
+# bearer token. Set by the door below for the duration of one request
+# and read by the MCP tools (`api/app.py`): the caller's identity comes
+# from the token it holds, never from anything it sends.
+agent_caller: ContextVar[str | None] = ContextVar("agent_caller", default=None)
+
 AGENT_PATH = "/mcp"
 _AGENT_CHALLENGE = JSONResponse(
     {"detail": "a bearer token is required"},
@@ -73,17 +81,31 @@ def _is_agent_path(path: str) -> bool:
 
 class AgentDoorMiddleware:
     """The agent's door and its gate in one place: a request for `/mcp`
-    is answered by the MCP app, and only if it carries the configured
-    bearer token; every other request passes through untouched. A
+    is answered by the MCP app, and only if it carries one of the
+    configured bearer tokens; every other request passes through
+    untouched. Each token belongs to one actor, and the request is served
+    as that actor (`agent_caller`). A
     middleware, not a mount: a mount answers `/mcp` with a redirect to
     `/mcp/`, which a client behind a TLS proxy may follow to the wrong
     scheme, and the path an operator pastes into a client should simply
     work."""
 
-    def __init__(self, app: ASGIApp, *, door: ASGIApp, token: str) -> None:
+    def __init__(self, app: ASGIApp, *, door: ASGIApp, tokens: dict[str, str]) -> None:
         self.app = app
         self._door = door
-        self._expected = b"bearer " + token.encode("utf-8")
+        self._accepted = [
+            (b"bearer " + token.encode("utf-8"), actor) for token, actor in tokens.items()
+        ]
+
+    def _actor_for(self, presented: bytes) -> str | None:
+        # Every token is compared, in constant time each, whichever
+        # matches: how long the answer takes says nothing about which
+        # tokens exist.
+        found: str | None = None
+        for expected, actor in self._accepted:
+            if secrets.compare_digest(presented, expected):
+                found = actor
+        return found
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         if scope["type"] != "http" or not _is_agent_path(scope["path"]):
@@ -95,11 +117,16 @@ class AgentDoorMiddleware:
                 scheme, _, credential = value.partition(b" ")
                 presented = scheme.lower() + b" " + credential.strip()
                 break
-        if not secrets.compare_digest(presented, self._expected):
+        actor = self._actor_for(presented)
+        if actor is None:
             await _AGENT_CHALLENGE(scope, receive, send)
             return
         inner: Scope = {**scope, "path": AGENT_PATH, "raw_path": AGENT_PATH.encode()}
-        await self._door(inner, receive, send)
+        served_as = agent_caller.set(actor)
+        try:
+            await self._door(inner, receive, send)
+        finally:
+            agent_caller.reset(served_as)
 
 
 class DemoAuthMiddleware:
