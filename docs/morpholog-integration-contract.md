@@ -724,7 +724,7 @@ No story gave up on either side. The release's keyed reads land where our worklo
 
 Section 38 put v0.0.19 under Glasshouse and adopted none of its language. This pass adopts the language, and asks the question behind the release: where does the ledger do work our Python still does? Glasshouse#114 (fills and breaches) was waiting on exactly this, so it is built here. The product decisions came from etrmbiz (desk practice, agreed by the user); they are marked as such below.
 
-**The model.** MODEL_HASH `sha256:1d543745…` → `sha256:7f03f79b…` (30 predicates, 9 definitions, 40 invariants, 26 transformations, 1 derived claim). `check -v`: `compiled`, `all bound`, `body reads: 1 whole`, the same one as before (`establish_ledger`). `check --strict` clean.
+**The model.** MODEL_HASH `sha256:1d543745…` → `sha256:841d45a7…` (30 predicates, 9 definitions, 40 invariants, 26 transformations, 1 derived claim). `check -v`: `compiled`, `all bound`, `body reads: 1 whole`, the same one as before (`establish_ledger`). `check --strict` clean.
 
 - *`x in (a, b)`* (morpholog#730) respells the four closed lists: currencies, the two buy-or-sell rules, how an instruction ends.
 - *Named figures* (#755) replace the per-hour sums the two limit gates each wrote out: `booked_in_hour`, `net_in_hour`, `standing_in_hour` (every trade, where the hour stands before the act) and `held_in_hour`. `hour_is_within_cap` and `hour_has_room_for_instructions` now read in one line each.
@@ -755,10 +755,10 @@ Section 38 put v0.0.19 under Glasshouse and adopted none of its language. This p
 
 **Load: no measurable cost.** `scripts/classroom_load.py burst`, the same 20 organisations on fresh restores of the 11,003-claim fixture, the same v0.0.19 binary, the rules of section 38 (worktree at e040c51) against these, interleaved, three runs each. Before: 0.450, 0.493 and 0.537 retries per commit, 13.5-15.4 commits per second. After: 0.548, 0.543 and 0.487, 14.0-16.6 commits per second. No story gave up on either side, and capture stayed at about 1.1 attempts. The ranges overlap. The burst does not place instructions or record fills, so this measures what the extra per-hour sums cost ordinary capture and marking, and that is nothing measurable. Contention on instructions and fills in one book is not measured by the harness yet.
 
-**For upstream (sent to the Morpholog agent, not filed):**
+**For upstream (sent to the Morpholog agent, not filed; it passed 1, 2 and 4-6 to the user for triage, and 7 is morpholog#787 and #788):**
 1. A failed `or` reports no compared figures.
 2. Parse errors that do not name the rule being broken: an expression as an `admit` argument; `let x = f(y)` or `let x = a + b` inside a definition without parentheses.
-3. An `if` condition's matches do not reach its branch, and `value` has no default, so an optional field is read as `sum(r | ...)`.
+3. An `if` condition's matches do not reach its branch. (We also asked for a `value` with a default. It exists, `value P(..) default 0 MW`, and `record_fill` uses it for what the instruction still holds. It replaced a `sum`, which would have added several matches where `value` refuses them.)
 4. An act that changes nothing is a transition, which forced the duplicated `something_has_lapsed` gate.
 5. No date from an instant, so `placed_on` comes from the caller.
 6. `periods` needs its bound restated in an act that took the window from a bound claim.

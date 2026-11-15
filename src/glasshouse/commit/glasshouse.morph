@@ -612,7 +612,7 @@ transformation record_fill(org, instruction, execution, trade, counterparty, ver
     require execution_is_new: not InstructionFill(org: org, execution: execution, ..)
     require trade_is_new: not TradeCaptured(trade: trade, ..)
     require terms_version_is_new: not TradeTerms(version: version, ..)
-    let left = sum(r | InstructionOpen(org: org, instruction: instruction, remaining: r, ..))
+    let left = value InstructionOpen(org: org, instruction: instruction, remaining: _, ..) default 0 MW
     let still_held = left - quantity
     if quantity < left:
         retract InstructionOpen(org: org, instruction: instruction, ..)
