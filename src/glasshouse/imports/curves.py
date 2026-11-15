@@ -19,7 +19,7 @@ import csv
 import datetime as dt
 import io
 from collections.abc import Sequence
-from decimal import Decimal, InvalidOperation
+from decimal import InvalidOperation
 
 from glasshouse.commit import (
     GlasshouseClient,
@@ -43,7 +43,7 @@ from glasshouse.imports.report import (
     RowOutcome,
     why,
 )
-from glasshouse.imports.trades import ImportFormatError
+from glasshouse.imports.trades import EXACT_DECIMALS, ImportFormatError, exact_decimal
 from glasshouse.logging import get_logger
 
 log = get_logger("glasshouse.imports")
@@ -72,12 +72,13 @@ def _curve(rows: list[dict[str, str]]) -> tuple[dt.date, HourlyCurve]:
         raise ValueError(f"as_of must be an ISO date, got {rows[0]['as_of']!r}") from None
     try:
         periods = sorted(
-            (dt.datetime.fromisoformat(row["period_start"]), Decimal(row["price"])) for row in rows
+            (dt.datetime.fromisoformat(row["period_start"]), exact_decimal(row["price"]))
+            for row in rows
         )
+    except InvalidOperation:
+        raise ValueError(f"prices must be {EXACT_DECIMALS}") from None
     except ValueError:
         raise ValueError("period_start must be RFC 3339 instants") from None
-    except InvalidOperation:
-        raise ValueError("price must be an exact decimal") from None
     return as_of, HourlyCurve(tuple(periods))
 
 

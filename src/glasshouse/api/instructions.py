@@ -27,6 +27,7 @@ from decimal import Decimal, InvalidOperation
 
 from glasshouse.api.schemas import InstructionRow
 from glasshouse.commit import GlasshouseClient, models
+from glasshouse.imports.trades import EXACT_DECIMALS, exact_decimal
 
 _PREDICATES = (
     "Instruction",
@@ -139,11 +140,11 @@ def place_request(
     the instructing party's to choose: it is the day the instruction is
     placed."""
     try:
-        quantity = Decimal(fields["quantity"])
-        limit_price = Decimal(fields["limit_price"])
+        quantity = exact_decimal(fields["quantity"])
+        limit_price = exact_decimal(fields["limit_price"])
     except InvalidOperation:
         raise ValueError(
-            "quantity/limit_price must be exact decimals, got "
+            f"quantity/limit_price must be {EXACT_DECIMALS}, got "
             f"{fields['quantity']!r}/{fields['limit_price']!r}"
         ) from None
     try:

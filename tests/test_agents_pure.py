@@ -102,6 +102,7 @@ def test_the_tools_are_the_thirteen_and_none_takes_an_actor_or_an_organisation()
     ("field", "bad", "says"),
     [
         ("quantity", "lots", "exact decimals"),
+        ("quantity", "1" * 30, "29 digits"),
         ("trade_date", "yesterday", "ISO date"),
         ("delivery_start", "noon", "RFC 3339"),
         # No offset: a naive time is never guessed at (law 9).

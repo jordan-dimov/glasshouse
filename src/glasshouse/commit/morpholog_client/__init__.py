@@ -16,10 +16,11 @@ if sys.version_info < (3, 12):
 
 PROGRAM = "glasshouse"
 MODEL_HASH = "sha256:1d543745024d022cadbce861178da6dfd2dc9e25f1a8af74b29facb8cec81c81"
-MORPHOLOG_VERSION = "0.0.18"
+MORPHOLOG_VERSION = "0.0.19"
 PYTHON_FLOOR = (3, 12)
 
 from . import envelopes, models, values  # noqa: E402
+from .values import digest  # noqa: E402
 from .adapter import (  # noqa: E402
     Morpholog,
     MorphologBatchIncomplete,
@@ -115,6 +116,7 @@ __all__ = [
     "open_client",
     "open_session",
     "connect_service",
+    "digest",
     "envelopes",
     "models",
     "values",

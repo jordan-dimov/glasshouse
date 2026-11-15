@@ -5,6 +5,7 @@ receipts."""
 import csv
 import io
 import json
+from decimal import Decimal, InvalidOperation
 from pathlib import Path
 
 import pytest
@@ -13,7 +14,7 @@ from hypothesis import strategies as st
 
 from glasshouse.commit import GlasshouseClient
 from glasshouse.imports import ImportFormatError, ImportIncompleteError, import_trades, parse_trades
-from glasshouse.imports.trades import COLUMNS
+from glasshouse.imports.trades import COLUMNS, exact_decimal
 from tests.support import fake_binary
 
 HEADER = (
@@ -50,6 +51,7 @@ RECEIPTS = (
                     "asserted_claims": [],
                     "retracted_claims": [],
                     "emitted_intents": [],
+                    "drawn_subjects": [],
                     "row": 1,
                 }
             ),
@@ -67,6 +69,36 @@ def test_parse_quarantines_each_dishonest_row_with_its_reason() -> None:
     assert "offset" in reasons[3]  # the codec refuses the naive instant
     assert "exact decimals" in reasons[4]
     assert "ISO date" in reasons[5]
+
+
+@pytest.mark.parametrize(
+    ("text", "number"),
+    [("86.25", Decimal("86.25")), ("010", Decimal("10")), ("-0.5", Decimal("-0.5"))],
+)
+def test_an_exact_decimal_is_read_as_written(text: str, number: Decimal) -> None:
+    assert exact_decimal(text) == number
+
+
+@pytest.mark.parametrize(
+    "text",
+    # Not a number; not finite; past 28 places, or 29 digits in all: the
+    # ledger refuses those rather than rounding them (Morpholog v0.0.19).
+    ["ten", "", "NaN", "Infinity", "1." + "0" * 28 + "1", "9" * 30, "1e40"],
+)
+def test_a_number_the_ledger_cannot_hold_as_written_is_refused(text: str) -> None:
+    with pytest.raises(InvalidOperation):
+        exact_decimal(text)
+
+
+def test_an_over_precise_quantity_is_quarantined_for_itself_not_for_its_delivery() -> None:
+    # The codec used to be the first to see it, and refused under the
+    # delivery instants' name.
+    row = GOOD.format(n=1).replace(",10,", ",10." + "0" * 28 + "1,")
+    accepted, quarantined = parse_trades(f"{HEADER}\n{row}", org="acme-energy")
+    assert not accepted
+    ((_, outcome),) = quarantined
+    assert "28 decimal places" in outcome.detail
+    assert "offset" not in outcome.detail
 
 
 def test_header_mismatch_refuses_the_whole_file() -> None:
@@ -115,6 +147,7 @@ ERROR_RECEIPTS = (
                     "asserted_claims": [],
                     "retracted_claims": [],
                     "emitted_intents": [],
+                    "drawn_subjects": [],
                     "row": 1,
                 }
             ),

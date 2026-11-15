@@ -152,6 +152,8 @@ def test_a_well_formed_instruction_becomes_one_typed_request() -> None:
     [
         ("quantity", "lots", "exact decimals"),
         ("limit_price", "cheap", "exact decimals"),
+        ("quantity", "NaN", "exact decimals"),
+        ("limit_price", "86." + "1" * 29, "28 decimal places"),  # held as written, or refused
         ("valid_until", "tomorrow", "RFC 3339"),
         ("delivery_start", "2026-07-02T00:00:00", "offset from UTC"),  # naive: never guessed
         ("valid_until", "2026-07-01T18:00:00", "offset from UTC"),

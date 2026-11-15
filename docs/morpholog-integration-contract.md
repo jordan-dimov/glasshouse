@@ -676,3 +676,46 @@ Every run on both sides committed all 540 decisions and ended at the same 12,483
 **Seed.** `spec-de` requires approval; `risk-manager` and the demo login may approve in all three books (66 transitions).
 
 **Counts.** Pure 331 passed, live 470 passed, coverage gate held.
+
+## 38. Kinds held, decimals as written, an approval read by key: pin **v0.0.18** → **v0.0.19**, 15/11/2026, no model change
+
+Thirty-two merges. Most of the release is new language (`if`/`else`, `for Pattern(...)`, a definition that names a figure, typed parameters, recursion, `digest`) that this pass does not use: it is the re-pin that comes before slice 3 (#114) and sub-hour periods (#116), which will. No migration (the schema head is still 030). Semantics version 5 → 6.
+
+**The pin.** `scripts/install-morpholog.sh` names v0.0.19 with the three published checksums (fetched, not transcribed). `check --verbose`: `invariant checks: compiled`, `invariant cases: all bound`, `body reads: 1 whole` (`establish_ledger`'s `ledger_is_new`, as before). `check --strict` clean: neither new hint (a sum calling a definition with a wildcard argument, morpholog#748; a sum over an `or` whose branches can hold together, #751) fires, and no definition is named like a builtin (#755). **MODEL_HASH unchanged** (`sha256:1d543745…`) and `morpholog_views.sql` regenerates byte-identical, so the demo takes the ordinary order: web, then cron, no reset.
+
+**The client** regenerated on five of six files (`models.py` unchanged, 448 changed lines). What reached our code was two test fixtures: the fake binary's canned commit receipts gained `drawn_subjects`, which a receipt must now carry (#765). Our programme draws no subjects, so every receipt carries an empty list. `MorphologRequestError.kind` and `.parameter` (#718, #766), `Errored.kind`, the `if` and `for_each` trace steps, the `derived` index need, `read_view_surface()` and `values.digest()` are present and read by nothing here yet.
+
+**Behaviour change: a decimal is held as written or refused (#761), and our importers named the wrong field for it.** Past 28 decimal places or a 96-bit coefficient the kernel used to round; now the binary refuses and so does the client's codec, in both directions. Probing the import with a quantity of `10.` plus 28 zeros and a 1 found that the row was quarantined as "delivery_start/delivery_end must carry an offset from UTC": `capture_request` used `to_args_named()` as its last validator and assumed any codec error was a naive instant. `NaN`, `Infinity` and `1e40` had the same wrong reason before this release; v0.0.19 widened it. Fixed: `exact_decimal` in `imports/trades.py` reads the text and holds it to `values.encode_decimal`, so a number the ledger cannot hold is refused as itself (`quantity/price must be exact decimals (at most 28 decimal places and 29 digits)`). The trades import, the curves import and `place_request` (the instructions API and the MCP tool) all use it; tests pin each. The figures we compute are held to the same limit with no new code: MTM runs under Python's default 28-digit Decimal context, so its coefficient always fits, and only a product of inputs carrying more than about fourteen decimal places each could pass 28 places, which the codec would then refuse when the mark is proposed, never round.
+
+**Semantics 6 (#718).** A value of the wrong kind for its field is now a kernel error (`claim_kind_mismatch`), and nothing is written. The live suite passes whole under v0.0.19, so no flow of ours admits a misfit. Rows decided under 5 are untouched and keep their semantics in the audit row; `audit verify` passes over a ledger holding both (rehearsed below). The `not_re_evaluated` verdict the release note mentions belongs to `audit receipt` and `verify-receipt`, which Glasshouse does not use; evidence packs stay format 19 and export and verify offline as before.
+
+**One new index.** The keyed read by a value an earlier `bind` found (#732) applies to `approve_instruction` and `reject_instruction`: they `bind` the instruction's book, then read `MayApprove` by it. `provision indexes --check` on a v0.0.18 database names `morpholog_ci_mayapprove_2_vk1_…` (`MayApprove[2]`) as the one thing outstanding; `glasshouse provision` builds it (89 keep, 1 create; 12 statistics objects keep). Nothing else in the plan moved.
+
+**Rehearsed on a kept ledger, both ways.** Main at v0.0.18 seeded a fresh database (66 rows, semantics 5). This branch with v0.0.19 then ran `provision` (1.8 s), and the fit check, `provision indexes --check`, `audit verify` and all six `glasshouse verify` legs were clean. It wrote one row (a limit change, semantics 6), and `audit verify` and `verify` passed over the mixed ledger. For rollback, main at v0.0.18 ran `provision` over that ledger (it reports the new index `stale` and leaves it, since nothing prunes without `--prune`), passed `audit verify` and the six legs, and wrote the next row. So rollback is a plain redeploy of the previous commit.
+
+**Load: no change, measured.** `scripts/classroom_load.py burst`, twenty organisations, ten trades each, 540 commits, a fresh restore of the 11,003-claim fixture per run, main (v0.0.18) against this branch (v0.0.19), interleaved, the same programme on both sides.
+
+| | run 1 | run 2 | run 3 |
+|---|---|---|---|
+| retries per commit, v0.0.18 | 0.520 | 0.481 | 0.506 |
+| retries per commit, v0.0.19 | 0.472 | 0.533 | 0.494 |
+| commits per second, v0.0.18 | 18.9 | 19.7 | 13.9 |
+| commits per second, v0.0.19 | 19.2 | 16.5 | 16.8 |
+| relation SIRead on `claims` present, v0.0.18 | 0.60 | 0.66 | 0.70 |
+| relation SIRead on `claims` present, v0.0.19 | 0.63 | 0.51 | 0.63 |
+
+No story gave up on either side. The release's keyed reads land where our workload does not reach (`MayApprove` is not in the burst), and the lock holders are the same on both: SSI's own tail (a lock that outlived its committed transaction, 29-46 percent of observations), the audit insert, and the compiled `valued_trade_was_captured` and `trade_valued_unique_by_…` checks. These figures are higher than section 36's 0.38-0.41 on the same harness: that is the day and the machine (both sides here moved together), not the release.
+
+**`max_pred_locks_per_transaction` (#769): not needed here, measured.** The release note says a transaction holding more than 32 predicate locks under `morpholog.claims` has them replaced by one lock on the whole table, and our bursts show such a lock in 51-70 percent of samples on both binaries. Three more v0.0.19 runs on the same fixture with the setting at 256 (the container restarted for it, then reset to 64): the whole-table lock was present in **0 percent** of samples, and retries per commit were 0.509, 0.459 and 0.461, inside the default runs' spread, with commits per second 17.0-18.5 and none given up. So the escalation is real, but our conflicts come from the rows the acts actually share, not from the table lock. The demo does not need the setting, and Render's managed PostgreSQL is not asked to change. A desk whose acts read far more rows than the burst's (hundreds of trades in one book under the limit gate) should run this comparison again before deciding.
+
+**Not adopted, with the reason.**
+
+- `if`/`else` (#753): slice 3, where a fill and, in the branch that breaches, the breach are one act.
+- `true`/`false` and `x in (a, b)` (#730): `direction_is_buy_or_sell` reads better as `direction in (#buy, #sell)`, but respelling it moves the hash, so it waits for slice 3's model change instead of costing the demo a reset now.
+- `for Pattern(...)` (#754): a candidate for recording every overdue instruction's lapse in one act; nothing forces it yet.
+- Typed parameters (#756), definitions that name a figure (#755), recursion (#768), `digest` (#758): no Glasshouse rule asks for them today. A named figure may tidy the room sums in `hour_has_room_for_instructions` when slice 3 touches them.
+- `generate views --describe`, `--derived live`, `--history` (#740, #741, #750): we have no derived claims, and a history view per predicate is a candidate for #41's as-of audit screen. Each changes the sealed view surface, so each comes with the feature that needs it.
+
+**For upstream.** Nothing to file.
+
+**Counts.** Pure 348 passed, live 487 passed (17 new cases for `exact_decimal` and the three refusals), coverage 96.0 percent.
