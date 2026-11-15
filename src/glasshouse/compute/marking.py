@@ -22,6 +22,9 @@ one, the correction lands first and each mark after it, so for a window
 superseded curve. Atomically there is no such state to observe: every
 act commits or none does.
 
+`amend_and_remark` is the amendment as the desk means it, in the same
+shape: the new terms and the trade's new mark as one decision.
+
 `value_trade` is the killer query's write side: read the trade and the
 official curve back from governed state, pick the terms version in
 force on the curve's business date (the same rule the ledger's generated
@@ -53,6 +56,7 @@ from glasshouse.commit import (
 from glasshouse.commit.morpholog_client.envelopes import AtomicCommitted, AtomicRejected
 from glasshouse.commit.morpholog_client.models import (
     AdmitValuationRequest,
+    AmendTradeRequest,
     CorrectCurveRequest,
     CurveRegisteredClaim,
     OfficialCurveClaim,
@@ -60,6 +64,7 @@ from glasshouse.commit.morpholog_client.models import (
     TradeCapturedClaim,
     TradeTermsClaim,
 )
+from glasshouse.compute.amendment import amendment_request
 from glasshouse.compute.curves import HourlyCurve
 from glasshouse.compute.store import CurveStore
 from glasshouse.compute.terms import terms_in_force_on
@@ -181,23 +186,7 @@ def value_trade(
     official = _one(officials, f"official curve for {org}/{captured.market}")
     versions = [t for t in morpholog.read(TradeTermsClaim) if t.org == org and t.trade == trade]
     terms = _in_force(versions, trade=trade, as_of=official.as_of)
-    registered = _one(
-        [
-            r
-            for r in morpholog.read(CurveRegisteredClaim)
-            if r.org == org and r.version == official.version
-        ],
-        f"registration of curve version {official.version!r}",
-    )
-
-    curve = store.load(org=org, version=official.version)
-    if curve.payload_hash() != registered.payload_hash:
-        raise MarkingError(
-            f"payload for curve version {official.version!r} does not match its admitted "
-            f"hash: stored {curve.payload_hash()}, claimed {registered.payload_hash}. "
-            "The app schema disagrees with the ledger; refusing to compute from it."
-        )
-
+    curve = _anchored_curve(morpholog, store, org=org, version=official.version)
     return morpholog.submit(
         AdmitValuationRequest(
             org=org,
@@ -301,7 +290,87 @@ def correct_and_remark(
     return outcome
 
 
-def _act(request: CorrectCurveRequest | AdmitValuationRequest, actor: str) -> dict[str, object]:
+def amend_and_remark(
+    morpholog: GlasshouseClient,
+    store: CurveStore,
+    *,
+    actor: str,
+    valuation_actor: str,
+    org: str,
+    trade: str,
+    quantity: Decimal,
+    price: Decimal,
+    delivery_start: dt.datetime,
+    delivery_end: dt.datetime,
+    effective_from: dt.date,
+) -> Outcome | AtomicCommitted | AtomicRejected:
+    """Amend a trade and re-mark it under its new terms as ONE decision
+    (glasshouse#84), as `correct_and_remark` does for a curve: there is
+    no committed moment at which the trade's terms and its current mark
+    disagree, and a refused mark leaves the terms unamended.
+
+    The mark is struck against the official curve for the trade's
+    market, from the new terms, which the ledger's own gate then checks
+    are the ones in force on the curve's date. When there is nothing to
+    re-mark the amendment is proposed alone: no official curve yet, or
+    new terms that take effect only after the curve's date (the current
+    mark, under the terms still in force then, stays right)."""
+    amendment = amendment_request(
+        morpholog,
+        org=org,
+        trade=trade,
+        quantity=quantity,
+        price=price,
+        delivery_start=delivery_start,
+        delivery_end=delivery_end,
+        effective_from=effective_from,
+    )
+    captured = _one(
+        [c for c in morpholog.read(TradeCapturedClaim) if c.org == org and c.trade == trade],
+        f"captured trade {trade!r} in {org}",
+    )
+    officials = [
+        o
+        for o in morpholog.read(OfficialCurveClaim)
+        if o.org == org and o.market == captured.market
+    ]
+    _refuse_several_business_dates(officials, org=org, market=captured.market)
+    if not officials or effective_from > officials[0].as_of:
+        log.info("marking.amended_without_remark", org=org, trade=trade, officials=len(officials))
+        return morpholog.submit(amendment, actor=actor)
+    (official,) = officials
+    curve = _anchored_curve(morpholog, store, org=org, version=official.version)
+    new_terms = TradeTermsClaim(
+        org=org,
+        trade=trade,
+        version=amendment.new_version,
+        quantity=quantity,
+        price=price,
+        delivery_start=delivery_start,
+        delivery_end=delivery_end,
+        effective_from=effective_from,
+    )
+    return morpholog.transact(
+        [
+            _act(amendment, actor),
+            _act(
+                AdmitValuationRequest(
+                    org=org,
+                    book=captured.book,
+                    trade=trade,
+                    curve_version=official.version,
+                    terms_version=amendment.new_version,
+                    mtm=_mtm(captured, new_terms, curve),
+                ),
+                valuation_actor,
+            ),
+        ]
+    )
+
+
+def _act(
+    request: CorrectCurveRequest | AdmitValuationRequest | AmendTradeRequest, actor: str
+) -> dict[str, object]:
     """One `transact` act in the batch row shape. The generated
     `transact` takes raw rows where `submit` takes the typed request;
     the request's own codec still validates every value."""
@@ -310,6 +379,27 @@ def _act(request: CorrectCurveRequest | AdmitValuationRequest, actor: str) -> di
         "actor": actor,
         "args_named": request.to_args_named(),
     }
+
+
+def _anchored_curve(
+    morpholog: GlasshouseClient, store: CurveStore, *, org: str, version: str
+) -> HourlyCurve:
+    """The stored prices of a curve version, re-hashed against the hash
+    the ledger admitted for it (`glasshouse verify` in miniature, on the
+    read path where it is nearly free); a mismatch is a named refusal
+    to compute from it."""
+    registered = _one(
+        [r for r in morpholog.read(CurveRegisteredClaim) if r.org == org and r.version == version],
+        f"registration of curve version {version!r}",
+    )
+    curve = store.load(org=org, version=version)
+    if curve.payload_hash() != registered.payload_hash:
+        raise MarkingError(
+            f"payload for curve version {version!r} does not match its admitted "
+            f"hash: stored {curve.payload_hash()}, claimed {registered.payload_hash}. "
+            "The app schema disagrees with the ledger; refusing to compute from it."
+        )
+    return curve
 
 
 def _mtm(captured: TradeCapturedClaim, terms: TradeTermsClaim, curve: HourlyCurve) -> Decimal:

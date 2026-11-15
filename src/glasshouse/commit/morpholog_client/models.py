@@ -1335,6 +1335,117 @@ class BreachAnsweredClaim:
 
 
 @dataclass(frozen=True)
+class InstructionStandingClaim:
+    """One admitted `InstructionStanding` claim, decoded by declared kind."""
+
+    PREDICATE: ClassVar[str] = "InstructionStanding"
+
+    org: str
+    instruction: str
+    book: str
+    market: str
+    direction: str
+    quantity: Decimal
+    # amount in MW (the declaration carries the unit)
+    limit_price: Decimal
+    currency: str
+    delivery_start: datetime
+    delivery_end: datetime
+    placed_on: date
+    valid_until: datetime
+    proposer: str
+    holding: Decimal
+    # amount in MW (the declaration carries the unit)
+    outcome: str
+    approval: str
+    approved_by: str
+
+    @classmethod
+    def from_named(cls, args: dict[str, object]) -> InstructionStandingClaim:
+        values.named_fields(
+            "InstructionStanding",
+            args,
+            (
+                "org",
+                "instruction",
+                "book",
+                "market",
+                "direction",
+                "quantity",
+                "limit_price",
+                "currency",
+                "delivery_start",
+                "delivery_end",
+                "placed_on",
+                "valid_until",
+                "proposer",
+                "holding",
+                "outcome",
+                "approval",
+                "approved_by",
+            ),
+        )
+        return cls(
+            org=values.named_text("InstructionStanding.org", args["org"]),
+            instruction=values.named_text(
+                "InstructionStanding.instruction",
+                args["instruction"],
+            ),
+            book=values.named_text("InstructionStanding.book", args["book"]),
+            market=values.named_text("InstructionStanding.market", args["market"]),
+            direction=values.named_text(
+                "InstructionStanding.direction",
+                args["direction"],
+            ),
+            quantity=values.named_decimal(
+                "InstructionStanding.quantity",
+                args["quantity"],
+            ),
+            limit_price=values.named_decimal(
+                "InstructionStanding.limit_price",
+                args["limit_price"],
+            ),
+            currency=values.named_text(
+                "InstructionStanding.currency",
+                args["currency"],
+            ),
+            delivery_start=values.named_timestamp(
+                "InstructionStanding.delivery_start",
+                args["delivery_start"],
+            ),
+            delivery_end=values.named_timestamp(
+                "InstructionStanding.delivery_end",
+                args["delivery_end"],
+            ),
+            placed_on=values.named_date(
+                "InstructionStanding.placed_on",
+                args["placed_on"],
+            ),
+            valid_until=values.named_timestamp(
+                "InstructionStanding.valid_until",
+                args["valid_until"],
+            ),
+            proposer=values.named_text(
+                "InstructionStanding.proposer",
+                args["proposer"],
+            ),
+            holding=values.named_decimal(
+                "InstructionStanding.holding",
+                args["holding"],
+            ),
+            outcome=values.named_text("InstructionStanding.outcome", args["outcome"]),
+            approval=values.named_text(
+                "InstructionStanding.approval",
+                args["approval"],
+            ),
+            approved_by=values.named_text(
+                "InstructionStanding.approved_by",
+                args["approved_by"],
+            ),
+        )
+
+
+@dataclass(frozen=True)
 class UnansweredBreachClaim:
     """One admitted `UnansweredBreach` claim, decoded by declared kind."""
 

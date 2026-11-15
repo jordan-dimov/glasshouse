@@ -40,9 +40,13 @@ from glasshouse.commit import (
 )
 from glasshouse.commit.morpholog_client import Request
 from glasshouse.commit.morpholog_client.envelopes import AtomicCommitted, ReplayConsistent
-from glasshouse.compute.amendment import amend_trade
 from glasshouse.compute.curves import HourlyCurve
-from glasshouse.compute.marking import correct_and_remark, register_curve_version, value_trade
+from glasshouse.compute.marking import (
+    amend_and_remark,
+    correct_and_remark,
+    register_curve_version,
+    value_trade,
+)
 from glasshouse.compute.store import CurveStore, engine_url
 from glasshouse.compute.store import metadata as payload_metadata
 from glasshouse.compute.terms import terms_version_id
@@ -469,26 +473,28 @@ def seed_demo(
     # The Wednesday amendment: a new terms version supersedes T-003's,
     # lineage linked, and the trade is re-marked under it against the
     # corrected curve - so the record carries both kinds of supersession
-    # and a mark pinned to each version pair.
+    # and a mark pinned to each version pair. One decision, as the
+    # correction is: the trade never stands between its new terms and its
+    # new mark (glasshouse#84).
     (trade, book, _counterparty, _direction, _quantity, price, start, end) = next(
         row for row in _TRADES if row[0] == AMENDED_TRADE
     )
-    _committed(
-        amend_trade(
-            client,
-            actor="alice",
-            org=ORG,
-            trade=trade,
-            quantity=AMENDED_QUANTITY,
-            price=Decimal(price),
-            delivery_start=DAY + dt.timedelta(hours=start),
-            delivery_end=DAY + dt.timedelta(hours=end),
-            effective_from=AMENDMENT_EFFECTIVE,
-        )
+    amended = amend_and_remark(
+        client,
+        store,
+        actor="alice",
+        valuation_actor="risk-engine",
+        org=ORG,
+        trade=trade,
+        quantity=AMENDED_QUANTITY,
+        price=Decimal(price),
+        delivery_start=DAY + dt.timedelta(hours=start),
+        delivery_end=DAY + dt.timedelta(hours=end),
+        effective_from=AMENDMENT_EFFECTIVE,
     )
-    close = _committed(
-        value_trade(client, store, actor="risk-engine", org=ORG, book=book, trade=trade)
-    )
+    if not isinstance(amended, AtomicCommitted) or len(amended.acts) != 2:
+        raise SeedError(f"the Wednesday amendment was not committed with its mark: {amended!r}")
+    close = amended.acts[-1].outcome
 
     project_everything(client, engine, patience=patience)
     # The close of the story is checkpointed covering its last transition

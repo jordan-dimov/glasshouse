@@ -15,11 +15,16 @@ import pytest
 import sqlalchemy as sa
 
 from glasshouse.commit import MODEL_FILE, Committed, GlasshouseClient, Rejected, models
-from glasshouse.commit.morpholog_client.envelopes import AtomicCommitted, GateRejection
+from glasshouse.commit.morpholog_client.envelopes import (
+    AtomicCommitted,
+    AtomicRejected,
+    GateRejection,
+)
 from glasshouse.compute.amendment import AmendmentError, amend_trade
 from glasshouse.compute.curves import HourlyCurve
 from glasshouse.compute.marking import (
     MarkingError,
+    amend_and_remark,
     correct_and_remark,
     register_curve_version,
     value_trade,
@@ -277,3 +282,69 @@ def test_a_correction_re_marks_each_trade_under_its_terms_in_force(
         (f"{org}/T-1", f"{org}/T-1/v2"): Decimal("260"),
         (f"{org}/T-2", f"{org}/T-2/v1"): Decimal("-130"),
     }
+
+
+def _amend_and_remark(
+    client: GlasshouseClient,
+    store: CurveStore,
+    org: str,
+    effective: dt.date,
+    *,
+    valuation_actor: str = "risk-engine",
+) -> object:
+    return amend_and_remark(
+        client,
+        store,
+        actor="alice",
+        valuation_actor=valuation_actor,
+        org=org,
+        trade=f"{org}/T-1",
+        quantity=Decimal("20"),
+        price=Decimal("80"),
+        delivery_start=T0,
+        delivery_end=T0 + dt.timedelta(hours=2),
+        effective_from=effective,
+    )
+
+
+def test_the_amendment_and_its_new_mark_are_one_decision(
+    stack: tuple[GlasshouseClient, CurveStore],
+) -> None:
+    # glasshouse#84: no committed moment at which the terms and the mark
+    # disagree. 20 MW bought at 80 against 84 and 85: 20 x 4 + 20 x 5.
+    client, store = stack
+    org = "amend-remark"
+    _desk(client, store, org)
+    outcome = _amend_and_remark(client, store, org, AS_OF)
+    assert isinstance(outcome, AtomicCommitted)
+    (mark,) = [v for v in client.read(models.TradeValuedClaim) if v.trade == f"{org}/T-1"]
+    assert (mark.terms_version, mark.mtm) == (f"{org}/T-1/v2", Decimal("180"))
+    ids = {act.outcome.transition_id for act in outcome.acts}
+    stamped = {row.committed_at for row in client.audit_named() if row.transition_id in ids}
+    assert len(stamped) == 1  # one transaction
+
+
+def test_a_refused_mark_leaves_the_terms_unamended(
+    stack: tuple[GlasshouseClient, CurveStore],
+) -> None:
+    client, store = stack
+    org = "amend-refused"
+    _desk(client, store, org)
+    outcome = _amend_and_remark(client, store, org, AS_OF, valuation_actor="nobody")
+    assert isinstance(outcome, AtomicRejected)
+    assert (outcome.act, outcome.rule) == (2, "may_value_trade")
+    versions = [t.version for t in client.read(models.TradeTermsClaim) if t.trade == f"{org}/T-1"]
+    assert versions == [f"{org}/T-1/v1"]
+
+
+def test_with_nothing_to_remark_the_amendment_is_proposed_alone(
+    stack: tuple[GlasshouseClient, CurveStore],
+) -> None:
+    # Terms that take effect after the curve's date are not the ones a
+    # mark on that date is struck under: the current mark stays right.
+    client, store = stack
+    org = "amend-later"
+    _desk(client, store, org)
+    later = _amend_and_remark(client, store, org, AS_OF + dt.timedelta(days=1))
+    assert isinstance(later, Committed)
+    assert [v for v in client.read(models.TradeValuedClaim) if v.trade == f"{org}/T-1"] == []

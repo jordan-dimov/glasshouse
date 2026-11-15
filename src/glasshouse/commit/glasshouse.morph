@@ -374,6 +374,30 @@ define hour_has_room_for_instructions(org, book, as_of, excluded, signed_quantit
     more_bought + bought <= max(cap, exposure) - after
     and more_sold + sold <= max(cap, exposure) + after
 
+-- Where each instruction stands, as the Positions screen, the API and
+-- the agent list it: what was intended, what it still holds under the
+-- limit, how it ended (or `#open`), and whether a second person has
+-- agreed. One read, worked out by the ledger, so the facts it comes
+-- from always agree with each other and it can be asked of any past
+-- moment. Whether an open instruction is past its time is the reader's
+-- clock, not the ledger's, so it is not here.
+predicate InstructionStanding(org: Subject, instruction: Subject, book: Subject, market: Subject, direction: Subject, quantity: Decimal[MW], limit_price: Decimal, currency: Subject, delivery_start: Timestamp, delivery_end: Timestamp, placed_on: Date, valid_until: Timestamp, proposer: Subject, holding: Decimal[MW], outcome: Subject, approval: Subject, approved_by: Subject)
+derived InstructionStanding(org, instruction, book, market):
+    over Instruction(org: org, instruction: instruction, book: book, market: market, ..)
+    value direction = value Instruction(org: org, instruction: instruction, direction: _, ..)
+    value quantity = value Instruction(org: org, instruction: instruction, quantity: _, ..)
+    value limit_price = value Instruction(org: org, instruction: instruction, limit_price: _, ..)
+    value currency = value MarketCurrency(org: org, market: market, currency: _)
+    value delivery_start = value Instruction(org: org, instruction: instruction, delivery_start: _, ..)
+    value delivery_end = value Instruction(org: org, instruction: instruction, delivery_end: _, ..)
+    value placed_on = value Instruction(org: org, instruction: instruction, placed_on: _, ..)
+    value valid_until = value Instruction(org: org, instruction: instruction, valid_until: _, ..)
+    value proposer = value Instruction(org: org, instruction: instruction, proposer: _, ..)
+    value holding = value InstructionOpen(org: org, instruction: instruction, remaining: _, ..) default 0 MW
+    value outcome = value InstructionEnded(org: org, instruction: instruction, outcome: _) default #open
+    value approval = if(InstructionApproved(org: org, instruction: instruction, ..), #approved, if(ApprovalRequired(org: org, book: book), #awaiting, #not_required))
+    value approved_by = value InstructionApproved(org: org, instruction: instruction, approver: _) default #nobody
+
 -- The breaches nobody has answered yet, with the fill each came from:
 -- what the Positions screen lists. Worked out by the ledger each time
 -- it is asked, so it can never disagree with the facts it is read from.

@@ -34,7 +34,6 @@ from glasshouse.commit.views import (
     VIEWS_FILE,
     VIEWS_SCHEMA,
     apply_views,
-    missing_catalogued_views,
     views_model_hash,
 )
 
@@ -62,7 +61,6 @@ __all__ = [
     "Rejected",
     "apply_views",
     "envelopes",
-    "missing_catalogued_views",
     "models",
     "values",
     "views_model_hash",
