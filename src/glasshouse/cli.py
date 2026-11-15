@@ -28,6 +28,7 @@ from pydantic import ValidationError
 from typer.main import get_command
 
 from glasshouse.agents import Desk, build_server
+from glasshouse.api import fills
 from glasshouse.commit import (
     MODEL_FILE,
     VIEWS_SCHEMA,
@@ -45,6 +46,8 @@ from glasshouse.commit.morpholog_client.envelopes import (
     TreeUnsupportedPack,
 )
 from glasshouse.commit.morpholog_client.models import (
+    AnswerBreachRequest,
+    LapseOverdueInstructionsRequest,
     PositionLimitClaim,
     SetPositionLimitRequest,
 )
@@ -241,6 +244,98 @@ def set_limit_command(
     print(
         f"position limit for {book} in {org}: {cap_mw} MW{was}; transition {outcome.transition_id}"
     )
+
+
+@app.command(
+    "record-fill",
+    help="Record a fill the market reported against an instruction, and book its trade. A fill "
+    "is booked even when it breaks a rule; the ledger records the breach with it.",
+)
+def record_fill_command(
+    org: Annotated[str, typer.Option(help="the organisation")],
+    instruction: Annotated[str, typer.Option(help="the instruction that filled")],
+    execution: Annotated[str, typer.Option(help="the outside firm's identifier for the fill")],
+    trade: Annotated[str, typer.Option(help="the trade id to book it as")],
+    counterparty: Annotated[str, typer.Option(help="who the trade is with")],
+    quantity: Annotated[str, typer.Option(help="MW filled, as written (never a float)")],
+    price: Annotated[str, typer.Option(help="per MWh, in the market's currency")],
+    trade_date: Annotated[str, typer.Option(help="the trade date, ISO")],
+    actor: Annotated[str, typer.Option(help="the reconciling service (holds MayRecordFills)")],
+    database_url: DatabaseUrl = "",
+) -> None:
+    client = _client(_db(database_url))
+    try:
+        request = fills.fill_request(
+            org=org,
+            instruction=instruction,
+            execution=execution,
+            trade=trade,
+            counterparty=counterparty,
+            quantity=quantity,
+            price=price,
+            trade_date=trade_date,
+        )
+    except ValueError as malformed:
+        print(f"error: {malformed}", file=sys.stderr)
+        raise typer.Exit(code=2) from malformed
+    outcome = client.submit(request, actor=actor, explain_on_reject=True)
+    if isinstance(outcome, Rejected):
+        print(f"refused: {why(outcome.explanation)}", file=sys.stderr)
+        raise typer.Exit(code=1)
+    breaches = sorted(str(c.args[3]) for c in outcome.asserted_claims if c.predicate == "Breach")
+    print(
+        f"fill {execution} booked as {trade}; "
+        + (f"breaches: {', '.join(breaches)}" if breaches else "no breach")
+        + f"; transition {outcome.transition_id}"
+    )
+
+
+@app.command(
+    "answer-breach",
+    help="Answer a breach: what was decided and why. Needs the right to answer breaches, and "
+    "is refused for the trader who placed the instruction behind it.",
+)
+def answer_breach_command(
+    org: Annotated[str, typer.Option(help="the organisation")],
+    trade: Annotated[str, typer.Option(help="the trade the breach is on")],
+    kind: Annotated[str, typer.Option(help="limit, unapproved, after_end, price or overfill")],
+    decision: Annotated[str, typer.Option(help=f"one of: {', '.join(fills.DECISIONS)}")],
+    note: Annotated[str, typer.Option(help="why, in words")],
+    actor: Annotated[str, typer.Option(help="who is answering (holds MayAnswerBreach)")],
+    database_url: DatabaseUrl = "",
+) -> None:
+    client = _client(_db(database_url))
+    outcome = client.submit(
+        AnswerBreachRequest(org=org, trade=trade, kind=kind, decision=decision, note=note),
+        actor=actor,
+        explain_on_reject=True,
+    )
+    if isinstance(outcome, Rejected):
+        print(f"refused: {why(outcome.explanation)}", file=sys.stderr)
+        raise typer.Exit(code=1)
+    print(f"breach {kind} on {trade} answered: {decision}; transition {outcome.transition_id}")
+
+
+@app.command(
+    "lapse-instructions",
+    help="Record the lapse of every instruction in a book whose valid_until has passed, and free "
+    "the room each held. Refused when none has passed.",
+)
+def lapse_instructions_command(
+    org: Annotated[str, typer.Option(help="the organisation")],
+    book: Annotated[str, typer.Option(help="the book to sweep")],
+    actor: Annotated[str, typer.Option(help="who is recording it (may instruct, or fills)")],
+    database_url: DatabaseUrl = "",
+) -> None:
+    client = _client(_db(database_url))
+    outcome = client.submit(
+        LapseOverdueInstructionsRequest(org=org, book=book), actor=actor, explain_on_reject=True
+    )
+    if isinstance(outcome, Rejected):
+        print(f"refused: {why(outcome.explanation)}", file=sys.stderr)
+        raise typer.Exit(code=1)
+    lapsed = [c for c in outcome.asserted_claims if c.predicate == "InstructionEnded"]
+    print(f"{len(lapsed)} instruction(s) lapsed in {book}; transition {outcome.transition_id}")
 
 
 @app.command(

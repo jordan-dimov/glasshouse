@@ -367,3 +367,15 @@ class BookScope(BaseModel):
     org: str = Field(description="the organisation the answer is about")
     book: str | None = Field(default=None, description="only this book")
     market: str | None = Field(default=None, description="only this market")
+
+
+class BreachRow(BaseModel):
+    """A breach nobody has answered yet: a fill the market reported that
+    broke a rule. The trade stands; this is what someone must answer for.
+    Worked out by the ledger itself each time it is asked."""
+
+    org: str
+    book: str
+    trade: str  # the trade the fill was booked as
+    kind: str  # limit, unapproved, after_end, price or overfill
+    execution: str  # the outside firm's identifier for the fill

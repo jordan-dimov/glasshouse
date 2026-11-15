@@ -128,9 +128,10 @@ An instruction is an intention to buy or sell that has not happened yet, such as
 
 - Open buys count towards the bought side of the limit and open sells towards the sold side. They are never set against each other.
 - A trade refused because instructions hold the room is refused by `room_not_held_by_instructions`, not by `hour_within_limit`, and its figures are the quantity instructed and the room the trades leave.
-- An instruction holds its room until it is cancelled, or until its lapse is recorded after `valid_until`. Time passing does not free the room by itself.
+- An instruction holds its room until it is cancelled or filled, or until its lapse is recorded after `valid_until`. Time passing does not free the room by itself: `lapse_overdue_instructions` records every lapse in a book in one act (CLI `lapse-instructions`, MCP tool of the same name), and the demo profile runs it every minute for books with something overdue (`glasshouse/sweep.py`).
 - A book can require approval (`require_approval`). An instruction there is approved or rejected by someone who holds `MayApprove` in the book and did not place it. The approval is recorded; it is not enforced on the market.
-- It is not connected to fills yet.
+- A fill the market reports is recorded by a reconciling service (`MayRecordFills`, CLI `record-fill`). It books the trade and reduces what the instruction holds, and is booked even when it breaks a rule, with each breach recorded in the same act: `limit`, `unapproved`, `after_end`, `price`, `overfill`. `GET /breaches` and the Positions screen list the unanswered ones; `answer-breach` answers one (`MayAnswerBreach`, never the trader who placed the instruction).
+- A book over its cap trades only towards flat: a trade or instruction is admitted while it leaves the hour within the cap or makes its net strictly smaller (`breach_must_shrink` refuses a flip to the same size on the other side).
 
 ## Refusals
 

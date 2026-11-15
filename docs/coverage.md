@@ -18,10 +18,10 @@ Every new function arrives one of three ways: as rules in [the one rule file](..
 | Capture a fixed-price power trade | Has | By CSV import, command line or agent. Whole hours only. |
 | Amend a trade, keeping the old version | Has | A new version beside the old one; nothing is overwritten. |
 | Enter a trade on the screen | Planned | [#119](https://github.com/jordan-dimov/glasshouse/issues/119) |
-| Open orders that hold room under a limit | Has | Called instructions. Placed and cancelled by agents or the API. |
+| Open orders that hold room under a limit | Has | Called instructions. Placed and cancelled by agents. An overdue one keeps its room until its lapse is recorded, which the hosted demo does every minute. |
 | Approval of an order by a second person | Has | The approver must hold the right and must not be whoever placed it. Recorded, not enforced on the market. |
-| Recording fills from the market, and breaches | Planned | [#114](https://github.com/jordan-dimov/glasshouse/issues/114). Waits for the next release of the rules engine. |
-| Delivery periods of 15 and 30 minutes | Planned | [#116](https://github.com/jordan-dimov/glasshouse/issues/116). Needed for Great Britain and for intraday. Waits for the next release of the rules engine. |
+| Recording fills from the market, and breaches | Has | A reconciling service records each fill from the command line. The fill is booked even when it breaks a rule, and the breach is recorded with it: the limit broken, no approval, the order already ended, a worse price than its limit, more than it held. A book over its limit trades only back towards flat. Risk answers each breach, never the trader behind it. No HTTP endpoint records a fill yet. |
+| Delivery periods of 15 and 30 minutes | Planned | [#116](https://github.com/jordan-dimov/glasshouse/issues/116). Needed for Great Britain and for intraday. |
 | Labels on trades (strategy, desk, customer) | Planned | [#128](https://github.com/jordan-dimov/glasshouse/issues/128) |
 | Counterparties with legal identity and agreements | Planned | [#117](https://github.com/jordan-dimov/glasshouse/issues/117). A counterparty is a bare name today. |
 | Trades in from an exchange's or broker's own file | Planned | [#127](https://github.com/jordan-dimov/glasshouse/issues/127). Waiting for a real file to work from. |
@@ -120,13 +120,12 @@ Every new function arrives one of three ways: as rules in [the one rule file](..
 
 No dates. This is the order things are meant to be built in, and it can change.
 
-1. Move to the next release of the rules engine, which lets one act branch. Two things below wait for it.
-2. Fills and breaches ([#114](https://github.com/jordan-dimov/glasshouse/issues/114)) and shorter delivery periods ([#116](https://github.com/jordan-dimov/glasshouse/issues/116)).
-3. The business date ([#44](https://github.com/jordan-dimov/glasshouse/issues/44)), because it blocks ordinary daily use.
-4. What else changes the shape of the record, while no ledger is being kept: counterparties as facts ([#117](https://github.com/jordan-dimov/glasshouse/issues/117)). Withdrawing a permission ([#115](https://github.com/jordan-dimov/glasshouse/issues/115)) belongs here too.
-5. What lets a desk start: figures out to Excel ([#118](https://github.com/jordan-dimov/glasshouse/issues/118)), a trade ticket ([#119](https://github.com/jordan-dimov/glasshouse/issues/119)), running beside what you have ([#120](https://github.com/jordan-dimov/glasshouse/issues/120)).
-6. From trade to cash: fees ([#122](https://github.com/jordan-dimov/glasshouse/issues/122)), the settlement statement ([#123](https://github.com/jordan-dimov/glasshouse/issues/123)), then the product packs ([#124](https://github.com/jordan-dimov/glasshouse/issues/124), [#125](https://github.com/jordan-dimov/glasshouse/issues/125), [#126](https://github.com/jordan-dimov/glasshouse/issues/126)).
-7. Fitting each desk: labels ([#128](https://github.com/jordan-dimov/glasshouse/issues/128)), more kinds of limit ([#129](https://github.com/jordan-dimov/glasshouse/issues/129)), the regulatory export ([#130](https://github.com/jordan-dimov/glasshouse/issues/130)).
+1. Shorter delivery periods ([#116](https://github.com/jordan-dimov/glasshouse/issues/116)). Fills and breaches ([#114](https://github.com/jordan-dimov/glasshouse/issues/114)) came with the move to the rules engine's release that lets one act branch.
+2. The business date ([#44](https://github.com/jordan-dimov/glasshouse/issues/44)), because it blocks ordinary daily use.
+3. What else changes the shape of the record, while no ledger is being kept: counterparties as facts ([#117](https://github.com/jordan-dimov/glasshouse/issues/117)). Withdrawing a permission ([#115](https://github.com/jordan-dimov/glasshouse/issues/115)) belongs here too.
+4. What lets a desk start: figures out to Excel ([#118](https://github.com/jordan-dimov/glasshouse/issues/118)), a trade ticket ([#119](https://github.com/jordan-dimov/glasshouse/issues/119)), running beside what you have ([#120](https://github.com/jordan-dimov/glasshouse/issues/120)).
+5. From trade to cash: fees ([#122](https://github.com/jordan-dimov/glasshouse/issues/122)), the settlement statement ([#123](https://github.com/jordan-dimov/glasshouse/issues/123)), then the product packs ([#124](https://github.com/jordan-dimov/glasshouse/issues/124), [#125](https://github.com/jordan-dimov/glasshouse/issues/125), [#126](https://github.com/jordan-dimov/glasshouse/issues/126)).
+6. Fitting each desk: labels ([#128](https://github.com/jordan-dimov/glasshouse/issues/128)), more kinds of limit ([#129](https://github.com/jordan-dimov/glasshouse/issues/129)), the regulatory export ([#130](https://github.com/jordan-dimov/glasshouse/issues/130)).
 
 The evidence work ([#121](https://github.com/jordan-dimov/glasshouse/issues/121), [#86](https://github.com/jordan-dimov/glasshouse/issues/86), [#41](https://github.com/jordan-dimov/glasshouse/issues/41), [#80](https://github.com/jordan-dimov/glasshouse/issues/80), [#83](https://github.com/jordan-dimov/glasshouse/issues/83)) runs alongside.
 

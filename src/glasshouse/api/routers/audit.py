@@ -17,9 +17,9 @@ from typing import Annotated, Literal
 from fastapi import APIRouter, Query
 
 from glasshouse.api import audit as audit_queries
-from glasshouse.api import instructions, refusals
+from glasshouse.api import fills, instructions, refusals
 from glasshouse.api.deps import UNAVAILABLE, ClientDep
-from glasshouse.api.schemas import AuditEntry, InstructionRow, RefusalLog
+from glasshouse.api.schemas import AuditEntry, BreachRow, InstructionRow, RefusalLog
 
 router = APIRouter(tags=["audit"], responses=UNAVAILABLE)
 
@@ -32,9 +32,7 @@ def audit_log(
     limit: Annotated[int | None, Query(ge=1, le=500)] = None,
     offset: Annotated[int, Query(ge=0)] = 0,
 ) -> list[AuditEntry]:
-    entries = audit_queries.list_audit(client)
-    if scope == "org":
-        entries = [e for e in entries if audit_queries.mentions_org(e, org)]
+    entries = audit_queries.list_audit(client, org=org if scope == "org" else None)
     end = offset + limit if limit is not None else None
     return entries[offset:end]
 
@@ -64,3 +62,12 @@ def instruction_list(
     """Instructions (open orders): what was intended, what each still
     holds under its book's limit, and how each ended."""
     return instructions.list_instructions(client, org=org, book=book, open_only=open_only)
+
+
+@router.get("/breaches")
+def breach_list(org: str, client: ClientDep) -> list[BreachRow]:
+    """Breaches nobody has answered yet: fills the market reported that
+    broke a rule (the cap, approval, an ended instruction, the limit
+    price, or more than was held). The trades stand; each breach waits
+    for someone with the right to answer for it."""
+    return fills.list_breaches(client, org=org)

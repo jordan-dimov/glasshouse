@@ -38,7 +38,12 @@ from glasshouse.imports.trades import COLUMNS as TRADE_COLUMNS
 from glasshouse.projections.runner import ProjectorProgress
 from glasshouse.verify import Leg, VerifyReport
 from glasshouse.web.routes import limit_summary
-from glasshouse.web.templating import RULES_IN_PLAIN_WORDS, _ago, templates
+from glasshouse.web.templating import (
+    BREACH_KINDS_IN_PLAIN_WORDS,
+    RULES_IN_PLAIN_WORDS,
+    _ago,
+    templates,
+)
 
 T0 = dt.datetime(2026, 7, 1, tzinfo=dt.UTC)
 
@@ -644,6 +649,25 @@ def test_each_book_is_summed_up_against_its_limit() -> None:
     assert (summary["idle"]["peak_mw"], summary["idle"]["room_mw"]) == (Decimal("0"), Decimal("10"))
 
 
+def test_a_book_trading_in_two_markets_is_summed_up_on_its_whole_net() -> None:
+    # The cap is on the book's net in an hour, every market counted. Two
+    # rows for one hour, one per market, add up: 12 + 10 is 22 MW, which
+    # leaves 3 MW under a 25 MW cap, not the 13 or 15 one market shows.
+    rows = [
+        PositionHour(
+            org="acme",
+            book="spec",
+            market=market,
+            period_start=T0,
+            net_mw=Decimal(net),
+            transition_id="txn",
+        )
+        for market, net in (("de-power", "12"), ("at-power", "10"))
+    ]
+    (line,) = limit_summary(rows, {"spec": Decimal("25")})
+    assert (line["peak_mw"], line["room_mw"]) == (Decimal("22"), Decimal("3"))
+
+
 def test_a_refusal_is_glossed_in_plain_words_and_keeps_the_rules_own_line() -> None:
     refusal = "hour_within_limit: 30 MW <= 25 MW does not hold (h = 2026-07-01T12:00:00+00:00)"
     html = templates.env.from_string(
@@ -662,6 +686,12 @@ def test_a_refusal_is_glossed_in_plain_words_and_keeps_the_rules_own_line() -> N
     # A rule with no gloss shows its own line, and nothing is made up.
     assert "some_new_rule: x" in html
     assert set(RULES_IN_PLAIN_WORDS) <= _rule_names()
+
+
+def test_every_kind_of_breach_has_plain_words_and_no_other() -> None:
+    # The kinds are the ledger's closed list; the screen's words follow it.
+    (listed,) = re.findall(r"implies kind in \(([^)]*)\)", MODEL_FILE.read_text())
+    assert set(BREACH_KINDS_IN_PLAIN_WORDS) == {k.strip().lstrip("#") for k in listed.split(",")}
 
 
 def _rule_names() -> set[str]:

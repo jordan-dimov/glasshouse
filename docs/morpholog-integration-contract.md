@@ -719,3 +719,59 @@ No story gave up on either side. The release's keyed reads land where our worklo
 **For upstream.** Nothing to file.
 
 **Counts.** Pure 348 passed, live 487 passed (17 new cases for `exact_decimal` and the three refusals), coverage 96.0 percent.
+
+## 39. Branching acts, named figures and a derived read: fills and breaches, and a book over its cap trades back: 15/11/2026, model change, no re-pin
+
+Section 38 put v0.0.19 under Glasshouse and adopted none of its language. This pass adopts the language, and asks the question behind the release: where does the ledger do work our Python still does? Glasshouse#114 (fills and breaches) was waiting on exactly this, so it is built here. The product decisions came from etrmbiz (desk practice, agreed by the user); they are marked as such below.
+
+**The model.** MODEL_HASH `sha256:1d543745…` → `sha256:7f03f79b…` (30 predicates, 9 definitions, 40 invariants, 26 transformations, 1 derived claim). `check -v`: `compiled`, `all bound`, `body reads: 1 whole`, the same one as before (`establish_ledger`). `check --strict` clean.
+
+- *`x in (a, b)`* (morpholog#730) respells the four closed lists: currencies, the two buy-or-sell rules, how an instruction ends.
+- *Named figures* (#755) replace the per-hour sums the two limit gates each wrote out: `booked_in_hour`, `net_in_hour`, `standing_in_hour` (every trade, where the hour stands before the act) and `held_in_hour`. `hour_is_within_cap` and `hour_has_room_for_instructions` now read in one line each.
+- *`for Pattern(...)` with `if`* (#753, #754): `lapse_overdue_instructions(org, book)` visits every open instruction in a book and lapses those past `valid_until`, in one act. It replaces `mark_instruction_lapsed`, which nothing called. A gate `something_has_lapsed` refuses a sweep that would change nothing, because an act that changes nothing is still a transition on the record. It repeats the loop's pattern, and strict made its bindings take other names. Whoever may instruct in the book may run it, and so may whoever records fills.
+- *`if`/`else`* carries `record_fill` (#114, below).
+- *A derived claim* (#741's family): `UnansweredBreach(org, book, trade, kind, execution)`, over `Breach` and not `BreachAnswered`, read through `derived_named(where=)`. Which breaches stand unanswered is the ledger's to say. Live derived views refuse it (the `value` lookup), so the SQL surface carries it from the cache. Glasshouse reads it from the binary.
+- *`admit_valuation` binds the market's currency itself.* The caller no longer states it; `mark_is_in_market_currency` and `marking.market_currency` are gone. That also made every mark in the 972e70fd history replay again (the call has its old arity), so the rehearsal test now counts 0 unreplayable and 13 more `market_has_a_currency` refusals: that history declared no market.
+
+**Fills and breaches (#114).** `MayRecordFills(actor, org)` is held by a reconciling service, never a trader or an agent. `record_fill(org, instruction, execution, trade, counterparty, version, quantity, price, trade_date)` binds the instruction (book, market, side, window and limit price come from it), refuses a repeated `execution` and books the trade. Then it branches. A fill smaller than what is held reduces it. Otherwise an open instruction ends as `#filled`, and an ended one is left as it ended. Each breach is recorded in the branch where it applies: `#limit` (the cap truly broken in some hour, judged as capture judges it), `#unapproved`, `#after_end`, `#price` (worse than the limit price: higher for a buy, lower for a sale) and `#overfill`. All five kinds and the decisions are closed lists. `answer_breach(org, trade, kind, decision, note)` needs `MayAnswerBreach` and refuses the trader who placed the instruction behind the fill (`answerer_is_not_the_trader`). The decision is one of `#accepted`, `#unwind`, `#cap_raised` and `#disputed`, with a note. Kinds, the separate right and segregation, the decision list and the seed are etrmbiz's recommendations.
+
+**A book over its cap trades only towards flat (etrmbiz).** A fill can take a book past its cap, and before this pass the book could then do nothing until the cap was raised. The rules are now:
+- `hour_is_within_cap` is `abs(after) <= max(cap, abs(before))`, one comparison, so a refusal still reports its figures and reads exactly as before inside the cap.
+- The first draft was an `or` (`abs(after) <= cap or abs(after) < abs(before)`). Every limit refusal then lost its `compared`: the kernel reports no figures for a failed `or`. That is asked of upstream below.
+- `max` alone admits one edge: a flip to the same size on the other side (+120 to -120), which would let a book in breach churn. A second gate refuses only that. `breach_must_shrink` uses `breach_shrinks`: in an hour already over its cap, the net must get strictly smaller. It is on capture, amendment and placement; placement judges the instruction as if it filled.
+- The room rule lets each side go up to the hour's standing exposure (its larger side, open instructions counted as filled) instead of the cap, which is the same rule inside the cap.
+- Pinned live (`tests/commit/test_fills_integration.py`): +120 to -120 refused, +120 to -110 admissible, +120 to +70 admitted with an open buy holding room, a buy refused, a sell instruction admitted, a sale to -150 refused.
+- `record_fill` records a mirror fill as a `#limit` breach.
+
+**Our side.**
+- `glasshouse/sweep.py` reads which books hold an overdue instruction and proposes the sweep for those only, as `GLASSHOUSE_SWEEP_ACTOR` (default `reconciler`), every minute in the demo profile beside the projector thread. etrmbiz's first idea was to let the room rule ignore an instruction past its time, which means reading `decided_at`. `explain` still has no decision time on v0.0.19 (`decided_at referenced with no decision time in scope`, checked today), and every import is previewed through it, so that would break previews. It is recorded beside morpholog#791 as a forcing requirement, with section 36. Holding room past `valid_until` errs on the safe side, so the interval is about usability.
+- CLI `record-fill`, `answer-breach` and `lapse-instructions`. `GET /breaches`. A breaches panel on the Positions screen, with plain words for each kind, held by a test to the rule file's list. MCP gains `lapse_overdue_instructions` (14 tools); no tool records a fill. No HTTP write endpoint records a fill either, because the JSON API has no write identity yet: that is a design of its own.
+- The seed: `reconciler` may record fills; risk and the demo login may answer. On Thursday the hedge desk's two orders fill at hours 22-24, where nothing else delivers: one cleanly, one at a worse price than its limit, which leaves one unanswered `#price` breach. Both are marked. That is 75 transitions, 10 trades and 17 marks, and the German total is 390.5 EUR (287.5 plus 69 and 34).
+
+**Fixed on the way.**
+- `limit_summary` kept only one market's row per book and hour, while a cap is on the whole net. The Positions screen now sums the markets, and computes the summary over every market even when a market filter is chosen.
+- `/audit?scope=org` and the agent's `audit_history` narrow in the binary (`audit_named(mentions=org)`), so other organisations' rows never leave it, then keep the precise `org` check.
+- The projector's `PROJECTED` and `IGNORED` lists are now held by a test to the rule file's predicates. A new fact had stopped the fold the first time one was admitted.
+
+**Load: no measurable cost.** `scripts/classroom_load.py burst`, the same 20 organisations on fresh restores of the 11,003-claim fixture, the same v0.0.19 binary, the rules of section 38 (worktree at e040c51) against these, interleaved, three runs each. Before: 0.450, 0.493 and 0.537 retries per commit, 13.5-15.4 commits per second. After: 0.548, 0.543 and 0.487, 14.0-16.6 commits per second. No story gave up on either side, and capture stayed at about 1.1 attempts. The ranges overlap. The burst does not place instructions or record fills, so this measures what the extra per-hour sums cost ordinary capture and marking, and that is nothing measurable. Contention on instructions and fills in one book is not measured by the harness yet.
+
+**For upstream (sent to the Morpholog agent, not filed):**
+1. A failed `or` reports no compared figures.
+2. Parse errors that do not name the rule being broken: an expression as an `admit` argument; `let x = f(y)` or `let x = a + b` inside a definition without parentheses.
+3. An `if` condition's matches do not reach its branch, and `value` has no default, so an optional field is read as `sum(r | ...)`.
+4. An act that changes nothing is a transition, which forced the duplicated `something_has_lapsed` gate.
+5. No date from an instant, so `placed_on` comes from the caller.
+6. `periods` needs its bound restated in an act that took the window from a bound claim.
+7. Live derived views refuse `value` lookups and conditionals, which both our derived reads use.
+
+**Where Morpholog could do more for us, next, by value:**
+- *Instruction and curve status as derived claims.* `api/instructions.py` and `api/curves.py` still work out open, ended, approval and official, superseded, registered in Python, and an as-of read of a derived claim is free. The catch: one consistent read of facts plus a derived claim needs a pinned transition, not two calls.
+- *The amendment act binds the latest version itself* (a version nobody superseded) and drops `prior_version`, removing `compute/amendment.py`'s own latest-version logic.
+- *The seed and other multi-act flows as one `transact` or `submit_all`*: amendment then re-mark (as the curve correction already does), grants, limits.
+- *`generate views --describe` and `catalogue_differences`* in place of the hand-written inventory check in `verify.py` and `commit/views.py`.
+- *A preview of a whole import as one rehearsal*, so rows that breach a cap only together are not each previewed as admissible.
+- *The reconciler's HTTP write path* once there is an identity design for API writes (the token-per-actor door is the model).
+
+**When `explain` has a decision time.** morpholog#791 (`explain` binds its read transaction's start as `decided_at` against a database) is implemented upstream but not released. When it is released and pinned, the time test can move back into the room definition, as section 36 first designed it. Then an overdue instruction stops holding room by the rule itself, and the sweep becomes record-keeping. That waits for the release, and for a measurement of what it costs import previews.
+
+**Counts.** Pure 351 passed, 148 skipped. Live 499 passed, coverage 95.4 percent.

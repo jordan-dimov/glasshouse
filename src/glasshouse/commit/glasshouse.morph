@@ -7,9 +7,15 @@
 -- How to read it:
 --   predicate       the shape of a fact (a "claim")
 --   invariant       a rule that every claim must satisfy, always
---   define          a named condition, reused below
+--   define          a named condition (`:`) or a named figure (`=`),
+--                   reused below
+--   derived         a fact the ledger works out from other facts
+--                   whenever it is asked, never stored
 --   transformation  an act: the only way claims are added or removed
 --   require         a gate: the act is refused unless this holds
+--   bind            find the one claim that matches, and keep its fields
+--   if / else       choose what the act does; only the branch taken runs
+--   for             do the same for every claim that matches
 --   admit, retract  add a claim, remove a claim
 --   actor           whoever is making the proposal
 --
@@ -33,6 +39,13 @@ predicate MayValueTrade(actor: Subject, org: Subject, book: Subject)
 predicate MaySetLimit(actor: Subject, org: Subject)
 predicate MayInstruct(actor: Subject, org: Subject, book: Subject)
 predicate MayApprove(actor: Subject, org: Subject, book: Subject)
+-- Who may record what the market reports as filled. A reconciling
+-- service, never a trader or an agent: a fill is booked even when it
+-- breaks a rule, so the right to record one must be narrow.
+predicate MayRecordFills(actor: Subject, org: Subject)
+-- Who may answer for a breach: risk, by default the holders of
+-- MaySetLimit. Never the trader behind the breach (see answer_breach).
+predicate MayAnswerBreach(actor: Subject, org: Subject)
 -- Who may hand out the permissions above, in one organisation.
 predicate MayGrantAuthority(actor: Subject, org: Subject)
 -- Who may create organisations. One holder: the ledger's root.
@@ -137,6 +150,31 @@ predicate InstructionEnded(org: Subject, instruction: Subject, outcome: Subject)
     unique by (instruction)
     append only
 
+-- A fill the market reported against an instruction, and the trade it
+-- was booked as. `execution` is the outside firm's own identifier for
+-- the fill, so the same report cannot be booked twice.
+predicate InstructionFill(org: Subject, instruction: Subject, execution: Subject, trade: Subject)
+    unique by (trade)
+    append only
+
+-- Something that happened and should not have. The trade stands: it
+-- happened. The breach is what someone must answer for. The kinds:
+--   #limit       the fill took the book past its cap in some hour
+--   #unapproved  the book requires approval and nobody approved
+--   #after_end   the instruction had already ended (a late fill)
+--   #price       a worse price than the instruction's limit price
+--   #overfill    more than the instruction still held
+predicate Breach(org: Subject, book: Subject, trade: Subject, kind: Subject)
+    unique by (trade, kind)
+    append only
+
+-- Who looked at a breach, what they decided, and why. Once per breach.
+-- The decision is one of a closed list, so it can be reported on; the
+-- note says why in words.
+predicate BreachAnswered(org: Subject, trade: Subject, kind: Subject, answered_by: Subject, decision: Subject, note: Subject)
+    unique by (trade, kind)
+    append only
+
 -- Rules that hold for every claim, whichever act wrote it.
 -- (Uniqueness, the single official pointer and the version chains are
 -- generated from the clauses on the predicates above.)
@@ -151,19 +189,18 @@ predicate InstructionEnded(org: Subject, instruction: Subject, outcome: Subject)
 -- Adding one is a change to this file.
 invariant currency_is_one_power_is_priced_in:
     MarketCurrency(org: org, market: market, currency: currency)
-    implies (currency = #EUR or currency = #GBP or currency = #NOK or currency = #SEK
-        or currency = #DKK or currency = #PLN or currency = #RON)
+    implies currency in (#EUR, #GBP, #NOK, #SEK, #DKK, #PLN, #RON)
 
 invariant direction_is_buy_or_sell:
     TradeCaptured(trade: trade, direction: direction, ..)
-    implies (direction = #buy or direction = #sell)
+    implies direction in (#buy, #sell)
 
 invariant position_limit_is_positive:
     PositionLimit(org: org, book: book, cap: cap) implies cap > 0 MW
 
 invariant instruction_is_buy_or_sell:
     Instruction(instruction: instruction, direction: direction, ..)
-    implies (direction = #buy or direction = #sell)
+    implies direction in (#buy, #sell)
 
 invariant instructed_quantity_is_positive:
     Instruction(instruction: instruction, quantity: qty, ..) implies qty > 0 MW
@@ -181,7 +218,29 @@ invariant approved_instruction_was_placed:
 
 invariant instruction_ends_one_of_four_ways:
     InstructionEnded(instruction: instruction, outcome: outcome, ..)
-    implies (outcome = #filled or outcome = #rejected or outcome = #cancelled or outcome = #lapsed)
+    implies outcome in (#filled, #rejected, #cancelled, #lapsed)
+
+invariant fill_was_instructed:
+    InstructionFill(org: org, instruction: instruction, trade: trade, ..)
+    implies Instruction(org: org, instruction: instruction, ..)
+
+invariant fill_was_booked:
+    InstructionFill(org: org, trade: trade, ..) implies TradeCaptured(org: org, trade: trade, ..)
+
+invariant breach_is_of_a_known_kind:
+    Breach(trade: trade, kind: kind, ..) implies kind in (#limit, #unapproved, #after_end, #price, #overfill)
+
+invariant breach_decision_is_one_of_four:
+    BreachAnswered(trade: trade, kind: kind, decision: decision, ..)
+    implies decision in (#accepted, #unwind, #cap_raised, #disputed)
+
+invariant breach_names_a_booked_trade:
+    Breach(org: org, book: book, trade: trade, kind: kind)
+    implies TradeCaptured(org: org, book: book, trade: trade, ..)
+
+invariant answer_names_a_recorded_breach:
+    BreachAnswered(org: org, trade: trade, kind: kind, ..)
+    implies Breach(org: org, trade: trade, kind: kind, ..)
 
 invariant terms_belong_to_captured_trade:
     TradeTerms(org: org, trade: trade, ..) implies TradeCaptured(org: org, trade: trade, ..)
@@ -236,47 +295,92 @@ define org_terms_in_force_on(org, as_of, trade, quantity, delivery_start, delive
     and from on_or_before as_of
     and not (exists later: TradeTerms(org: org, trade: trade, effective_from: later, ..) and later after from and later on_or_before as_of)
 
--- Would the book stay within its cap in hour `h`? Adds up what the
--- book has bought and sold for that hour, under the terms in force on
--- `as_of`, then adds the proposed quantity (negative for a sale). The
--- trade named `amended` is left out: an amendment replaces its own
--- earlier quantity. A new trade is not in the book yet, so naming it
--- changes nothing.
+-- How much the book has booked on one side (`#buy` or `#sell`) for the
+-- hour starting at `h`, under the terms in force on `as_of`. The trade
+-- named `excluded` is left out: an amendment replaces its own earlier
+-- quantity. A new trade is not in the book yet, so naming it changes
+-- nothing.
+define booked_in_hour(org, book, as_of, excluded, side, h) = (sum(q | org_terms_in_force_on(org, as_of, t, q, s, e)
+        and TradeCaptured(org: org, book: book, trade: t, direction: side, ..)
+        and t != excluded and s at_or_before h and h strictly_before e))
+
+-- The book's net position in that hour: bought less sold, leaving out
+-- the trade named `excluded`.
+define net_in_hour(org, book, as_of, excluded, h) = (booked_in_hour(org, book, as_of, excluded, #buy, h)
+    - booked_in_hour(org, book, as_of, excluded, #sell, h))
+
+-- The book's whole net position in that hour, every trade counted:
+-- where the hour stands before the act.
+define standing_in_hour(org, book, as_of, h) = (sum(q | org_terms_in_force_on(org, as_of, t, q, s, e)
+        and TradeCaptured(org: org, book: book, trade: t, direction: #buy, ..)
+        and s at_or_before h and h strictly_before e)
+    - sum(q | org_terms_in_force_on(org, as_of, t, q, s, e)
+        and TradeCaptured(org: org, book: book, trade: t, direction: #sell, ..)
+        and s at_or_before h and h strictly_before e))
+
+-- What open instructions on one side still hold in that hour.
+define held_in_hour(org, book, side, h) = (sum(left | InstructionOpen(org: org, book: book, instruction: i, direction: side, remaining: left, delivery_start: s, delivery_end: e, ..)
+        and s at_or_before h and h strictly_before e))
+
+-- Does the book keep to its cap in hour `h` once the proposed quantity
+-- (negative for a sale) is added? The net must stay within the cap, or,
+-- where the hour already stands further out than the cap (a fill can
+-- take it there), no further out than it stands. That is how a book
+-- over its cap trades its way back: towards flat, never further out.
+-- It is written as one comparison so that a refusal reports its two
+-- figures ("26 MW <= 25 MW does not hold"). Within the cap that reads
+-- exactly as a plain cap check.
 define hour_is_within_cap(org, book, as_of, amended, signed_quantity, h, cap):
-    abs(sum(q | org_terms_in_force_on(org, as_of, t, q, s, e)
-                and TradeCaptured(org: org, book: book, trade: t, direction: #buy, ..)
-                and t != amended and s at_or_before h and h strictly_before e)
-        - sum(q | org_terms_in_force_on(org, as_of, t, q, s, e)
-                and TradeCaptured(org: org, book: book, trade: t, direction: #sell, ..)
-                and t != amended and s at_or_before h and h strictly_before e)
-        + signed_quantity) <= cap
+    let after = (net_in_hour(org, book, as_of, amended, h) + signed_quantity)
+    let before = (standing_in_hour(org, book, as_of, h))
+    abs(after) <= max(cap, abs(before))
+
+-- The rest of the way back from a breach: in an hour already over its
+-- cap, the act must make the net strictly smaller. The comparison above
+-- lets the net stay as far out as it stands, so without this a book in
+-- breach could flip from +120 to -120 and back, each trade admitted and
+-- none of them reducing anything. Within the cap this always holds.
+-- `excluded` and `signed_quantity` are as above; for an instruction the
+-- signed quantity is the instruction itself, as if it filled.
+define breach_shrinks(org, book, as_of, excluded, signed_quantity, h, cap):
+    let after = (net_in_hour(org, book, as_of, excluded, h) + signed_quantity)
+    let before = (standing_in_hour(org, book, as_of, h))
+    abs(before) <= cap or abs(after) < abs(before)
 
 -- Is there still room in hour `h` once open instructions are counted?
 -- An open instruction may fill or may not, so it is never set against
 -- the other side. Open buys count as if they will all fill, towards
 -- the bought side. Open sells count the same way towards the sold side.
--- The two figures a refusal reports are: the quantity instructed for
+-- Each side must stay within the cap or, where the hour already stands
+-- further out than the cap (its larger side, every open instruction
+-- counted as filled), no further out than that: the same way back from
+-- a breach as above.
+-- The figures a refusal reports first are: the quantity instructed for
 -- that side (open instructions plus the one being placed), and the room
 -- the booked trades leave on that side. So "7 MW <= 5 MW does not hold"
 -- reads: 7 MW is instructed and only 5 MW of room is left.
--- An instruction holds its room until it ends: cancelled, or recorded
--- as lapsed once its `valid_until` has passed. Time is not read here on
--- purpose. A rule that reads the clock cannot be previewed ("would this
--- be accepted?"), and every trade import is previewed.
+-- An instruction holds its room until it ends: filled, cancelled, or
+-- recorded as lapsed once its `valid_until` has passed. Time is not
+-- read here on purpose. A rule that reads the clock cannot be previewed
+-- ("would this be accepted?"), and every trade import is previewed.
 -- `excluded` and `signed_quantity` are as in hour_is_within_cap.
 -- `more_bought` and `more_sold` are the instruction being placed.
 define hour_has_room_for_instructions(org, book, as_of, excluded, signed_quantity, more_bought, more_sold, h, cap):
-    let net = (sum(q | org_terms_in_force_on(org, as_of, t, q, s, e)
-                and TradeCaptured(org: org, book: book, trade: t, direction: #buy, ..)
-                and t != excluded and s at_or_before h and h strictly_before e)
-        - sum(q | org_terms_in_force_on(org, as_of, t, q, s, e)
-                and TradeCaptured(org: org, book: book, trade: t, direction: #sell, ..)
-                and t != excluded and s at_or_before h and h strictly_before e)
-        + signed_quantity)
-    more_bought + sum(left | InstructionOpen(org: org, book: book, instruction: i, direction: #buy, remaining: left, delivery_start: s, delivery_end: e, ..)
-                and s at_or_before h and h strictly_before e) <= cap - net
-    and more_sold + sum(left | InstructionOpen(org: org, book: book, instruction: i, direction: #sell, remaining: left, delivery_start: s, delivery_end: e, ..)
-                and s at_or_before h and h strictly_before e) <= cap + net
+    let after = (net_in_hour(org, book, as_of, excluded, h) + signed_quantity)
+    let before = (standing_in_hour(org, book, as_of, h))
+    let bought = (held_in_hour(org, book, #buy, h))
+    let sold = (held_in_hour(org, book, #sell, h))
+    let exposure = (max(bought + before, sold - before))
+    more_bought + bought <= max(cap, exposure) - after
+    and more_sold + sold <= max(cap, exposure) + after
+
+-- The breaches nobody has answered yet, with the fill each came from:
+-- what the Positions screen lists. Worked out by the ledger each time
+-- it is asked, so it can never disagree with the facts it is read from.
+predicate UnansweredBreach(org: Subject, book: Subject, trade: Subject, kind: Subject, execution: Subject)
+derived UnansweredBreach(org, book, trade, kind):
+    over Breach(org: org, book: book, trade: trade, kind: kind) and not BreachAnswered(org: org, trade: trade, kind: kind, ..)
+    value execution = value InstructionFill(org: org, trade: trade, execution: _, ..)
 
 -- The acts. Every gate has a name, and a refusal reports that name.
 
@@ -323,6 +427,14 @@ transformation grant_instruct_authority(principal, org, book):
 transformation grant_approve_authority(principal, org, book):
     require may_grant_authority: MayGrantAuthority(actor, org)
     admit MayApprove(principal, org, book)
+
+transformation grant_fill_authority(principal, org):
+    require may_grant_authority: MayGrantAuthority(actor, org)
+    admit MayRecordFills(principal, org)
+
+transformation grant_breach_authority(principal, org):
+    require may_grant_authority: MayGrantAuthority(actor, org)
+    admit MayAnswerBreach(principal, org)
 
 -- Say that a book's instructions need approval from now on.
 transformation require_approval(org, book):
@@ -373,6 +485,8 @@ transformation capture_trade(org, book, trade, counterparty, market, direction, 
     let signed = if(direction = #buy, quantity, 0 MW - quantity)
     require hour_within_limit: (forall cap in PositionLimit(org, book, cap): forall h in hours:
         hour_is_within_cap(org, book, trade_date, trade, signed, h, cap))
+    require breach_must_shrink: (forall cap in PositionLimit(org, book, cap): forall h in hours:
+        breach_shrinks(org, book, trade_date, trade, signed, h, cap))
     require room_not_held_by_instructions: (forall cap in PositionLimit(org, book, cap): forall h in hours:
         hour_has_room_for_instructions(org, book, trade_date, trade, signed, 0 MW, 0 MW, h, cap))
     admit TradeCaptured(org, book, trade, counterparty, market, direction)
@@ -396,6 +510,8 @@ transformation amend_trade(org, trade, prior_version, new_version, quantity, pri
     let signed = if(direction = #buy, quantity, 0 MW - quantity)
     require hour_within_limit: (forall cap in PositionLimit(org, book, cap): forall h in hours:
         hour_is_within_cap(org, book, effective_from, trade, signed, h, cap))
+    require breach_must_shrink: (forall cap in PositionLimit(org, book, cap): forall h in hours:
+        breach_shrinks(org, book, effective_from, trade, signed, h, cap))
     require room_not_held_by_instructions: (forall cap in PositionLimit(org, book, cap): forall h in hours:
         hour_has_room_for_instructions(org, book, effective_from, trade, signed, 0 MW, 0 MW, h, cap))
     admit TradeTerms(org, trade, new_version, quantity, price, delivery_start, delivery_end, effective_from)
@@ -419,6 +535,9 @@ transformation place_instruction(org, book, instruction, market, direction, quan
     require delivery_is_whole_hours: (delivery_end - delivery_start) / duration(PT1H) = sum(1 | h in hours)
     let bought = if(direction = #buy, quantity, 0 MW)
     let sold = if(direction = #sell, quantity, 0 MW)
+    let as_if_filled = if(direction = #buy, quantity, 0 MW - quantity)
+    require breach_must_shrink: (forall cap in PositionLimit(org, book, cap): forall h in hours:
+        breach_shrinks(org, book, placed_on, instruction, as_if_filled, h, cap))
     require instruction_fits_under_limit: (forall cap in PositionLimit(org, book, cap): forall h in hours:
         hour_has_room_for_instructions(org, book, placed_on, instruction, 0 MW, bought, sold, h, cap))
     admit Instruction(org, book, instruction, actor, market, direction, quantity, limit_price, delivery_start, delivery_end, placed_on, valid_until)
@@ -456,17 +575,81 @@ transformation reject_instruction(org, instruction):
     retract InstructionOpen(org: org, instruction: instruction, ..)
     admit InstructionEnded(org, instruction, #rejected)
 
--- Record that an instruction ran out of time, and free the room it
--- held. Refused while the instruction is still valid. Until this is
--- recorded (or the instruction is cancelled) a lapsed instruction goes
--- on holding its room: the safe side to err on.
-transformation mark_instruction_lapsed(org, instruction):
-    bind instruction_is_open: InstructionOpen(org: org, book: book, instruction: instruction, valid_until: until, ..)
-    require may_instruct: MayInstruct(actor, org, book)
+-- Record every instruction in a book that has run out of time, and
+-- free the room each held. One act visits every open instruction in
+-- the book and lapses those whose `valid_until` has passed; the rest
+-- are left alone. Refused when none has passed, so a sweep that finds
+-- nothing writes nothing. Until this runs (or the instruction is
+-- cancelled) a lapsed instruction goes on holding its room: the safe
+-- side to err on. Whoever may instruct in the book may run it, and so
+-- may the reconciling service, which runs it on a schedule.
+transformation lapse_overdue_instructions(org, book):
+    require may_lapse: MayInstruct(actor, org, book) or MayRecordFills(actor, org)
     let now = decided_at
-    require instruction_has_lapsed: until strictly_before now
-    retract InstructionOpen(org: org, instruction: instruction, ..)
-    admit InstructionEnded(org, instruction, #lapsed)
+    require something_has_lapsed: exists overdue: InstructionOpen(org: org, book: book, instruction: overdue, valid_until: deadline, ..) and deadline strictly_before now
+    for InstructionOpen(org: org, book: book, instruction: i, valid_until: until, ..):
+        if until strictly_before now:
+            retract InstructionOpen(org: org, instruction: i, ..)
+            admit InstructionEnded(org, i, #lapsed)
+
+-- Record a fill the market reported, and book the trade it is. A fill
+-- has happened, so it is booked even when it breaks a rule, and the
+-- breach is recorded with it in the same act. Ordinary capture stays
+-- exactly as strict: only this act, by a narrow right, books past a
+-- limit.
+-- The book, market, side and delivery window are the instruction's.
+-- What the instruction still holds goes down by the fill. When nothing
+-- is left it ends as filled.
+-- A fill within what the instruction held cannot break the limit: that
+-- room was held for it. Each of these is booked and recorded as a breach
+-- (see Breach): the cap truly broken in some hour, judged as for a
+-- trade; no approval where the book requires one; the instruction
+-- already ended; a worse price than its limit price (higher for a buy,
+-- lower for a sale); more than it still held.
+transformation record_fill(org, instruction, execution, trade, counterparty, version, quantity, price, trade_date):
+    require may_record_fills: MayRecordFills(actor, org)
+    bind instruction_was_placed: Instruction(org: org, book: book, instruction: instruction, market: market, direction: direction, limit_price: limit_price, delivery_start: delivery_start, delivery_end: delivery_end, valid_until: valid_until, ..)
+    require execution_is_new: not InstructionFill(org: org, execution: execution, ..)
+    require trade_is_new: not TradeCaptured(trade: trade, ..)
+    require terms_version_is_new: not TradeTerms(version: version, ..)
+    let left = sum(r | InstructionOpen(org: org, instruction: instruction, remaining: r, ..))
+    let still_held = left - quantity
+    if quantity < left:
+        retract InstructionOpen(org: org, instruction: instruction, ..)
+        admit InstructionOpen(org, book, instruction, direction, still_held, delivery_start, delivery_end, valid_until)
+    else:
+        if InstructionOpen(org: org, instruction: instruction, ..):
+            retract InstructionOpen(org: org, instruction: instruction, ..)
+            admit InstructionEnded(org, instruction, #filled)
+            if quantity > left:
+                admit Breach(org, book, trade, #overfill)
+        else:
+            admit Breach(org, book, trade, #after_end)
+    if (direction = #buy and price > limit_price) or (direction = #sell and price < limit_price):
+        admit Breach(org, book, trade, #price)
+    require delivery_is_at_most_a_year: delivery_end - delivery_start no_longer_than duration(PT8784H)
+    let hours = periods(delivery_start, delivery_end, duration(PT1H))
+    let signed = if(direction = #buy, quantity, 0 MW - quantity)
+    if exists cap: PositionLimit(org: org, book: book, cap: cap) and not (forall h in hours: hour_is_within_cap(org, book, trade_date, trade, signed, h, cap) and breach_shrinks(org, book, trade_date, trade, signed, h, cap)):
+        admit Breach(org, book, trade, #limit)
+    if ApprovalRequired(org: org, book: book) and not InstructionApproved(org: org, instruction: instruction, ..):
+        admit Breach(org, book, trade, #unapproved)
+    admit InstructionFill(org, instruction, execution, trade)
+    admit TradeCaptured(org, book, trade, counterparty, market, direction)
+    admit TradeTerms(org, trade, version, quantity, price, delivery_start, delivery_end, trade_date)
+
+-- Answer a breach: who looked at it, what they decided and why. The
+-- answer comes from someone with the right, and never from the trader
+-- who placed the instruction behind the fill: nobody signs off their
+-- own breach.
+transformation answer_breach(org, trade, kind, decision, note):
+    require may_answer_breach: MayAnswerBreach(actor, org)
+    require breach_was_recorded: Breach(org: org, trade: trade, kind: kind, ..)
+    require breach_not_yet_answered: not BreachAnswered(org: org, trade: trade, kind: kind, ..)
+    bind breach_came_from_a_fill: InstructionFill(org: org, instruction: instruction, trade: trade, ..)
+    bind fill_was_instructed: Instruction(org: org, instruction: instruction, proposer: trader, ..)
+    require answerer_is_not_the_trader: actor != trader
+    admit BreachAnswered(org, trade, kind, actor, decision, note)
 
 -- Register the first curve for a market and date, and make it official.
 -- If one is already official, this is refused: use correct_curve.
@@ -496,19 +679,17 @@ transformation correct_curve(org, market, as_of, prior_version, new_version, pay
 -- be the official one for the trade's market right now, and the terms
 -- version must be the one in force on that curve's date. A mark against
 -- a stale curve or the wrong terms cannot be recorded.
--- The mark says which currency it is in, and that must be the currency
--- of the trade's market. Trade and curve share a market, so they share
--- a currency already. The mark is the number that comes from outside.
+-- The mark is in the currency of the trade's market. The ledger looks
+-- that up itself and records it beside the number, so a caller cannot
+-- state another.
 -- The patterns of a gate share one `require` because a name bound in
 -- one pattern (`market`, `as_of`) is only visible within that `require`.
--- That is also why the currency gate looks the trade's market up again,
--- under its own name.
-transformation admit_valuation(org, book, trade, curve_version, terms_version, mtm, currency):
+transformation admit_valuation(org, book, trade, curve_version, terms_version, mtm):
     require may_value_trade: MayValueTrade(actor, org, book)
     require valued_against_official_curve_and_terms_in_force: TradeCaptured(org: org, book: book, trade: trade, market: market, ..)
     and OfficialCurve(org: org, market: market, as_of: as_of, version: curve_version)
     and trade_terms_in_force_on(trade: trade, as_of: as_of, org: org, version: terms_version, ..)
-    require mark_is_in_market_currency: TradeCaptured(org: org, trade: trade, market: traded_in, ..)
-    and MarketCurrency(org: org, market: traded_in, currency: currency)
+    bind trade_is_captured: TradeCaptured(org: org, book: book, trade: trade, market: traded_in, ..)
+    bind market_has_a_currency: MarketCurrency(org: org, market: traded_in, currency: currency)
     require valuation_is_new: not TradeValued(trade: trade, curve_version: curve_version, terms_version: terms_version, ..)
     admit TradeValued(org, book, trade, curve_version, terms_version, mtm, currency)

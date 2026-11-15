@@ -119,7 +119,6 @@ def _mark(client: GlasshouseClient, org: str, curve: str, terms: str) -> object:
             curve_version=curve,
             terms_version=terms,
             mtm=Decimal("0"),
-            currency="EUR",
         ),
         actor="risk-engine",
         explain_on_reject=True,

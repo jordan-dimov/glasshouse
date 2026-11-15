@@ -102,6 +102,14 @@ IGNORED = frozenset(
         "Instruction",
         "InstructionOpen",
         "InstructionEnded",
+        # Fills and breaches, and who may record or answer them: read
+        # from governed state. A fill's trade arrives as the ordinary
+        # `TradeCaptured` and `TradeTerms`, which are projected above.
+        "MayRecordFills",
+        "MayAnswerBreach",
+        "InstructionFill",
+        "Breach",
+        "BreachAnswered",
     }
 )
 

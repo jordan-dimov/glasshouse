@@ -36,23 +36,28 @@ def test_seed_reset_seeds_verifies_and_repeats(capsys: pytest.CaptureFixture[str
 
     assert cli.main(["seed", "--reset", "--database-url", DB]) == 0
     out = capsys.readouterr().out
-    assert "seeded acme-energy: 3 book(s), 8 trade(s)" in out
+    assert "seeded acme-energy: 3 book(s), 10 trade(s)" in out
     assert "verify: consistent" in out  # printed only after all six legs passed
     # The close is checkpointed covering its last transition, so the
     # seeded ledger's history tree has a head to prove (one checkpoint,
     # over every audit row the story wrote).
-    assert "2 position limit(s); checkpoint over 66 audit row(s); verify" in out
+    assert "2 position limit(s); checkpoint over 75 audit row(s); verify" in out
 
     engine = sa.create_engine(engine_url(DB))
     with engine.connect() as connection:
         checkpoints = connection.execute(
             sa.text("select count(*), max(tree_size) from morpholog.audit_checkpoints")
         ).one()
-        assert tuple(checkpoints) == (1, 66)
+        assert tuple(checkpoints) == (1, 75)
         trades = connection.execute(sa.select(blotter_trade)).all()
-        assert len(trades) == 8
+        assert len(trades) == 10
         assert {t.book for t in trades} == {"spec-de", "hedge-de", "spec-gb"}
-        assert {t.counterparty for t in trades} == {"stadtwerk-x", "nordkraft", "albion-power"}
+        assert {t.counterparty for t in trades} == {
+            "stadtwerk-x",
+            "nordkraft",
+            "albion-power",
+            "eex",
+        }
         # Every screen has a negative to show: a net-short delivery hour
         # and a mark struck above the curve.
         assert connection.execute(
@@ -63,9 +68,9 @@ def test_seed_reset_seeds_verifies_and_repeats(capsys: pytest.CaptureFixture[str
         ).scalar()
         marks = connection.execute(sa.select(sa.func.count()).select_from(trade_valuation))
         # Two marks per German trade (v1 and the corrected v2) plus
-        # T-003's re-mark under its amended terms, and one per British
-        # trade.
-        assert marks.scalar() == 15
+        # T-003's re-mark under its amended terms, one per British trade,
+        # and one per fill.
+        assert marks.scalar() == 17
         # Two currencies side by side, each mark stating its own, and the
         # German figures what they were before a second market existed.
         totals: dict[str, Decimal] = dict(
@@ -77,7 +82,7 @@ def test_seed_reset_seeds_verifies_and_repeats(capsys: pytest.CaptureFixture[str
                 )
             ).all()
         )
-        assert totals == {"EUR": Decimal("287.5"), "GBP": Decimal("140")}
+        assert totals == {"EUR": Decimal("390.5"), "GBP": Decimal("140")}
         amended = connection.execute(
             sa.select(blotter_trade).where(blotter_trade.c.trade == "T-003")
         ).one()
@@ -87,14 +92,14 @@ def test_seed_reset_seeds_verifies_and_repeats(capsys: pytest.CaptureFixture[str
             1,
         )
         versions = connection.execute(sa.select(sa.func.count()).select_from(trade_terms_version))
-        assert versions.scalar() == 9  # eight first versions and one amendment
+        assert versions.scalar() == 11  # ten first versions and one amendment
 
     # Plain seed is idempotent by refusal: any ledger history refuses.
     assert cli.main(["seed", "--database-url", DB]) == 1
     assert "already has transitions" in capsys.readouterr().err
     with engine.connect() as connection:
         count = connection.execute(sa.select(sa.func.count()).select_from(blotter_trade))
-        assert count.scalar() == 8  # the refusal changed nothing
+        assert count.scalar() == 10  # the refusal changed nothing
 
     # The nightly-cron semantics: a second reset succeeds from the top.
     assert cli.main(["seed", "--reset", "--database-url", DB]) == 0

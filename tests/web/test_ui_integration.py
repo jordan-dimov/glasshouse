@@ -147,7 +147,7 @@ def test_positions_show_the_short_hour_and_current_marks(ui: TestClient) -> None
     # the curve, carries a negative mark - both rendered loud.
     assert 'class="numeric neg">-15<' in response.text
     assert 'class="numeric neg">-100<' in response.text
-    assert response.text.count("crv-2026-07-01-v2") == 6  # one current mark per trade, all on v2
+    assert response.text.count("crv-2026-07-01-v2") == 8  # one current mark per trade, all on v2
     with ui as client:
         windowed = client.get(
             "/ui/positions",
@@ -166,7 +166,7 @@ def test_the_positions_filter_bar_narrows_the_marks_too(ui: TestClient) -> None:
         by_market = client.get("/ui/positions", params={"org": ORG, "market": "fr-power"})
     assert "T-003" in by_book.text  # a hedge-de mark stays
     assert "T-001" not in by_book.text  # every spec-de mark is gone
-    assert by_book.text.count("crv-2026-07-01-v2") == 3  # hedge-de's three current marks only
+    assert by_book.text.count("crv-2026-07-01-v2") == 5  # hedge-de's five current marks only
     assert by_market.text.count("crv-2026-07-01-v2") == 0
     assert "No trade here has been valued" in by_market.text
 

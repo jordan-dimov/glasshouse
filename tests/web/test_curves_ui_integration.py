@@ -66,7 +66,7 @@ def test_the_diff_shows_exactly_the_revised_hours_and_each_versions_marks(
     # T-003 was re-marked on the corrected curve under its amended
     # terms, so the correction carries seven marks: one per trade, and
     # T-003 once per terms version, each named.
-    assert len(json_diff["compare_marks"]) == 7
+    assert len(json_diff["compare_marks"]) == 9  # seven German trades and the two fills
     assert [m["terms_version"] for m in json_diff["compare_marks"] if m["trade"] == "T-003"] == [
         "T-003/v1",
         "T-003/v2",

@@ -128,6 +128,22 @@ _GB_TRADES: tuple[tuple[str, str, str, str, str, int, int], ...] = (
 # Six German trades: both books, both directions, two counterparties, at least
 # one net-short delivery hour (T-006 alone in hedge-de at 09-11) and at
 # least one negative mark (T-001, struck well above the curve).
+# Thursday: two orders the hedge desk sent to the exchange, and their
+# fills as the reconciling service records them. The first fills at a
+# better price than its limit, cleanly. The second fills at a worse one,
+# so the ledger books it and records a `price` breach that nobody has
+# answered yet: the Positions screen shows it.
+FILL_BOOK = "hedge-de"
+RECONCILER = "reconciler"
+_FILLS: tuple[tuple[str, str, str, str, str, str], ...] = (
+    # (instruction, execution, trade, quantity, limit price, fill price)
+    ("I-001", "EEX-0001", "T-007", "3", "82", "81"),
+    ("I-002", "EEX-0002", "T-008", "2", "82", "84"),
+)
+# Late evening, where nothing else in the hedge book delivers, so the
+# rest of the story's figures stand as they were.
+FILL_HOURS = (22, 24)
+
 _TRADES: tuple[tuple[str, str, str, str, str, str, int, int], ...] = (
     # (trade, book, counterparty, direction, quantity, price, start hour, end hour)
     ("T-001", "spec-de", "stadtwerk-x", "buy", "10", "85", 8, 12),
@@ -291,6 +307,13 @@ def seed_demo(
         models.GrantCaptureAuthorityRequest(principal="demo", org=ORG, book=GB_BOOK),
         models.GrantCurveAuthorityRequest(principal="demo", org=ORG, market=GB_MARKET),
         models.GrantValuationAuthorityRequest(principal="demo", org=ORG, book=GB_BOOK),
+        # The reconciling service records what the market reports filled;
+        # risk and the demo login answer for breaches.
+        models.GrantFillAuthorityRequest(principal=RECONCILER, org=ORG),
+        *(
+            models.GrantBreachAuthorityRequest(principal=who, org=ORG)
+            for who in ("risk-manager", "demo")
+        ),
     )
     for grant in grants:
         _committed(client.submit(grant, actor="bootstrap"))
@@ -400,6 +423,49 @@ def seed_demo(
     if not isinstance(corrected, AtomicCommitted) or len(corrected.acts) != 1 + len(_TRADES):
         raise SeedError(f"the Tuesday correction was not committed whole: {corrected!r}")
 
+    # Thursday's orders and their fills (see _FILLS), each fill booked as
+    # a trade and marked like any other.
+    for instruction, execution, trade, quantity, limit_price, fill_price in _FILLS:
+        _committed(
+            client.submit(
+                models.PlaceInstructionRequest(
+                    org=ORG,
+                    book=FILL_BOOK,
+                    instruction=instruction,
+                    market=MARKET,
+                    direction="buy",
+                    quantity=Decimal(quantity),
+                    limit_price=Decimal(limit_price),
+                    delivery_start=DAY + dt.timedelta(hours=FILL_HOURS[0]),
+                    delivery_end=DAY + dt.timedelta(hours=FILL_HOURS[1]),
+                    placed_on=AS_OF,
+                    # Valid from the moment the seed runs: an instruction
+                    # cannot be placed already out of time.
+                    valid_until=dt.datetime.now(dt.UTC) + dt.timedelta(days=1),
+                ),
+                actor="alice",
+            )
+        )
+        _committed(
+            client.submit(
+                models.RecordFillRequest(
+                    org=ORG,
+                    instruction=instruction,
+                    execution=execution,
+                    trade=trade,
+                    counterparty="eex",
+                    version=terms_version_id(trade, 1),
+                    quantity=Decimal(quantity),
+                    price=Decimal(fill_price),
+                    trade_date=AS_OF,
+                ),
+                actor=RECONCILER,
+            )
+        )
+        _committed(
+            value_trade(client, store, actor="risk-engine", org=ORG, book=FILL_BOOK, trade=trade)
+        )
+
     # The Wednesday amendment: a new terms version supersedes T-003's,
     # lineage linked, and the trade is re-marked under it against the
     # corrected curve - so the record carries both kinds of supersession
@@ -436,10 +502,10 @@ def seed_demo(
     return SeedReport(
         org=ORG,
         books=len(BOOKS) + 1,
-        trades=len(_TRADES) + len(_GB_TRADES),
+        trades=len(_TRADES) + len(_GB_TRADES) + len(_FILLS),
         curves=3,
         amendments=1,
-        valuations=2 * len(_TRADES) + 1 + len(_GB_TRADES),
+        valuations=2 * len(_TRADES) + 1 + len(_GB_TRADES) + len(_FILLS),
         limits=len(LIMITS),
         checkpoint_rows=anchored.checkpoint.tree_size,
     )

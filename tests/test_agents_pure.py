@@ -39,6 +39,7 @@ TOOLS = {
     "list_instructions",
     "approve_instruction",
     "reject_instruction",
+    "lapse_overdue_instructions",
     "audit_history",
     "recent_refusals",
 }

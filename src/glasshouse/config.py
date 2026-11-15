@@ -46,6 +46,10 @@ class Settings(BaseSettings):
     # secret, not a sign-in: it does not prove who holds it, or that two
     # tokens are held by two people.
     mcp_tokens: dict[str, str] = {}
+    # The reconciling service's actor: in the demo profile it records the
+    # lapse of overdue instructions every minute (`glasshouse.sweep`),
+    # with the right the ledger grants it (MayRecordFills) and no more.
+    sweep_actor: str = "reconciler"
 
     @field_validator("mcp_token", mode="before")
     @classmethod

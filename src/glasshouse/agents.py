@@ -388,9 +388,10 @@ def build_server(desk: Callable[[], Desk]) -> MCPServer:
 
         Some books require approval by a second person: check the
         instruction's approval in list_instructions before acting on it.
-        An instruction is not connected to fills yet. Booking the trade
-        that results is still propose_trade; cancel the instruction
-        first, or its room stays held."""
+        When the order fills in the market, the fill is recorded by the
+        firm's reconciling service, not by you: it books the trade and
+        frees the room the instruction held. Do not book the result with
+        propose_trade, or it is counted twice."""
         at = desk()
         try:
             request = instructions.place_request(
@@ -423,6 +424,16 @@ def build_server(desk: Callable[[], Desk]) -> MCPServer:
         return _outcome(at, at.client.submit(request, actor=at.actor, explain_on_reject=True))
 
     @server.tool()
+    def lapse_overdue_instructions(book: str) -> ProposalOutcome:
+        """Record the lapse of every instruction in a book whose
+        valid_until has passed, in one decision, and free the room each
+        held. Instructions still valid are left alone. Refused when
+        none has passed, or if you may not instruct in the book."""
+        at = desk()
+        request = models.LapseOverdueInstructionsRequest(org=at.org, book=book)
+        return _outcome(at, at.client.submit(request, actor=at.actor, explain_on_reject=True))
+
+    @server.tool()
     def approve_instruction(instruction: str) -> ProposalOutcome:
         """Approve an open instruction as a second person. Refused if you
         do not hold the right to approve in its book, if you are the one
@@ -446,7 +457,8 @@ def build_server(desk: Callable[[], Desk]) -> MCPServer:
         """Instructions in this organisation: what was intended, how much
         each still holds under its book's limit (holding_mw), and its
         status: open, overdue (past valid_until but still holding room
-        until cancelled), cancelled, rejected or lapsed. approval says
+        until cancelled or lapsed with lapse_overdue_instructions),
+        filled, cancelled, rejected or lapsed. approval says
         whether a second person has agreed: "not required" in a book
         that does not ask for it, otherwise "awaiting" or "approved"
         (with approved_by). Do not act on an instruction that is
@@ -463,8 +475,8 @@ def build_server(desk: Callable[[], Desk]) -> MCPServer:
         at = desk()
         entries = (
             entry
-            for entry in audit_queries.list_audit(at.client)
-            if audit_queries.mentions_org(entry, at.org) and (actor is None or entry.actor == actor)
+            for entry in audit_queries.list_audit(at.client, org=at.org)
+            if actor is None or entry.actor == actor
         )
         return [entry for entry, _ in zip(entries, range(max(1, min(limit, 500))), strict=False)]
 

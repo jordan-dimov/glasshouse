@@ -49,9 +49,15 @@ def _entry(row: AuditRowNamed) -> AuditEntry:
     )
 
 
-def list_audit(client: GlasshouseClient) -> list[AuditEntry]:
-    """The whole transition log, newest first."""
-    return [_entry(row) for row in reversed(client.audit_named())]
+def list_audit(client: GlasshouseClient, *, org: str | None = None) -> list[AuditEntry]:
+    """The transition log, newest first. With `org`, only the rows that
+    touch that organisation: the binary narrows to rows that name it
+    anywhere (so other organisations' rows never leave it), and
+    `mentions_org` keeps those whose claims carry it as their `org`."""
+    if org is None:
+        return [_entry(row) for row in reversed(client.audit_named())]
+    rows = reversed(client.audit_named(mentions=org))
+    return [entry for entry in map(_entry, rows) if mentions_org(entry, org)]
 
 
 def mentions_org(entry: AuditEntry, org: str) -> bool:

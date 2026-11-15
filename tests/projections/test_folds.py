@@ -3,6 +3,7 @@ the folds do not honestly cover; and the row functions the SQL applier
 and the in-memory replay share. No database anywhere in this module."""
 
 import datetime as dt
+import re
 from collections import defaultdict
 from decimal import Decimal
 
@@ -10,10 +11,12 @@ import pytest
 from hypothesis import given
 from hypothesis import strategies as st
 
-from glasshouse.commit import envelopes, models
+from glasshouse.commit import MODEL_FILE, envelopes, models
 from glasshouse.compute.terms import current_terms
 from glasshouse.projections import ProjectionError, fold_transition
 from glasshouse.projections.projector import (
+    IGNORED,
+    PROJECTED,
     Amendment,
     BlotterRow,
     Capture,
@@ -441,3 +444,14 @@ def test_the_wire_shape_decodes_into_the_fold() -> None:
     _, deltas = open_row(fold.captures[0], T0, "tid", "a")
     assert deltas[0].delta_mw == Decimal("10")
     assert deltas[0].period_start == T0
+
+
+def test_every_predicate_the_rules_declare_is_projected_or_deliberately_ignored() -> None:
+    # The fold refuses a predicate it has never met, loudly, so a new
+    # fact in the rule file without a line here would stop the projector
+    # the first time one is admitted. Derived facts are never admitted.
+    text = MODEL_FILE.read_text()
+    declared = set(re.findall(r"^predicate (\w+)\(", text, re.MULTILINE))
+    derived = set(re.findall(r"^derived (\w+)\(", text, re.MULTILINE))
+    assert PROJECTED.isdisjoint(IGNORED)
+    assert declared - derived == PROJECTED | IGNORED

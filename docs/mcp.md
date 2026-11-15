@@ -18,7 +18,8 @@ An agent gets no special treatment. Its trade is a proposal like anyone's, and t
 | `cancel_instruction` | Cancels an instruction. Its room is free again at once. |
 | `approve_instruction` | Approves an instruction as a second person. Refused if you placed it yourself. |
 | `reject_instruction` | Turns an instruction down. It ends and its room is free again. |
-| `list_instructions` | Instructions, how much each still holds, whether each is open, overdue or ended, and whether it is approved. |
+| `lapse_overdue_instructions` | Records the lapse of every instruction in a book whose time has run out, and frees the room each held. |
+| `list_instructions` | Instructions, how much each still holds, whether each is open, overdue or ended (filled, cancelled, rejected or lapsed), and whether it is approved. |
 | `audit_history` | The accepted changes, newest first, with who made each. |
 | `recent_refusals` | Recent refused proposals, with the rule and the figures. |
 
@@ -172,7 +173,7 @@ Things to know:
 
 ### What an instruction is not, yet
 
-- **Not connected to fills.** When the market reports that an order filled, nothing links that to the instruction. You cancel the instruction and book the trade yourself. This is the next step.
+- **Not yours to fill.** When the order fills in the market, the firm's reconciling service records the fill: it books the trade and frees the room the instruction held. No tool records a fill, and booking the result with `propose_trade` would count it twice.
 
 ## What is recorded
 

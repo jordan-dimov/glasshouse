@@ -16,8 +16,9 @@ it; both conditions are rules in the ledger. The approval is recorded.
 It is not enforced on the market: the ledger cannot stop an order
 leaving the building, so a client reads `approval` before it sends.
 
-What an instruction is not, yet: it is not connected to fills. What
-happens when the market reports one is a rule still to come.
+When the market reports a fill, the reconciling service records it
+(`api/fills.py`, `record_fill`): the trade is booked and what the
+instruction holds goes down, ending it as filled when nothing is left.
 """
 
 from __future__ import annotations

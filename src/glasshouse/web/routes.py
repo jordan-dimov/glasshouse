@@ -30,7 +30,7 @@ from fastapi import APIRouter, File, Form, Query, Request, Response, UploadFile
 from fastapi.responses import RedirectResponse, StreamingResponse
 from pydantic import BaseModel
 
-from glasshouse.api import asof, health, instructions, queries, refusals
+from glasshouse.api import asof, fills, health, instructions, queries, refusals
 from glasshouse.api import audit as audit_queries
 from glasshouse.api import curves as curve_queries
 from glasshouse.api.auth import authenticated_actor
@@ -45,7 +45,7 @@ from glasshouse.api.deps import (
     ProjectorDep,
     StoreDep,
 )
-from glasshouse.api.schemas import CurveVersion, InstructionRow, PositionHour
+from glasshouse.api.schemas import BreachRow, CurveVersion, InstructionRow, PositionHour
 from glasshouse.commit import (
     GlasshouseClient,
     MorphologError,
@@ -251,9 +251,12 @@ def limit_summary(
     `start` and `end` are the delivery window the positions were read
     for. An instruction's hours outside it are left out, so the summary
     is about the same hours as the rows beside it."""
-    net: dict[tuple[str, dt.datetime], Decimal] = {
-        (position.book, position.period_start): position.net_mw for position in positions
-    }
+    # A book's cap is on its whole net in an hour, every market counted,
+    # as the ledger adds it up; positions arrive one row per market.
+    net: dict[tuple[str, dt.datetime], Decimal] = {}
+    for row in positions:
+        key = (row.book, row.period_start)
+        net[key] = net.get(key, Decimal(0)) + row.net_mw
     bought: dict[tuple[str, dt.datetime], Decimal] = {}
     sold: dict[tuple[str, dt.datetime], Decimal] = {}
     for instruction in held or []:
@@ -294,6 +297,17 @@ def limit_summary(
             }
         )
     return summary
+
+
+def _unanswered_breaches(client: GlasshouseClient, org: str, book: str | None) -> list[BreachRow]:
+    """The breaches nobody has answered, from the ledger's own derived
+    read, in the chosen book. Empty when the ledger cannot answer: the
+    rest of the screen is still worth showing."""
+    try:
+        breaches = fills.list_breaches(client, org=org)
+    except MorphologError:
+        return []
+    return [row for row in breaches if book is None or row.book == book]
 
 
 def _limits_and_instructions(
@@ -961,12 +975,26 @@ def positions(
             # The caps and the open instructions are the ones standing
             # now, also when the positions shown are a past moment's;
             # the screen says so.
+            # A cap is on the book's whole net in an hour, every market
+            # counted, so the summary reads every market's rows even when
+            # the table shows one.
             "limits": (
-                limit_summary(positions_now, caps, open_instructions, start=start_at, end=end_at)
+                limit_summary(
+                    positions_now
+                    if market is None
+                    else queries.list_positions(
+                        engine, org=org, book=book, start=start_at, end=end_at, past=past
+                    ),
+                    caps,
+                    open_instructions,
+                    start=start_at,
+                    end=end_at,
+                )
                 if governed
                 else None
             ),
             "instructions": open_instructions,
+            "breaches": _unanswered_breaches(client, org, book),
             # The one filter bar governs both sections: the marks narrow
             # by the same book and market as the positions above them.
             "valuations": queries.list_valuations(

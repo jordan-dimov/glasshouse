@@ -38,6 +38,7 @@ from glasshouse.compute.store import CurveStore
 from glasshouse.config import get_settings
 from glasshouse.logging import configure_logging, get_logger
 from glasshouse.projections.runner import RunningProjector, start_projector_thread
+from glasshouse.sweep import RunningSweep, start_sweep_thread
 from glasshouse.web import STATIC_DIR
 from glasshouse.web import routes as web
 from glasshouse.web.routes import unavailable_page
@@ -55,6 +56,7 @@ def create_app() -> FastAPI:
         # whatever happens after: a client build that failed would
         # otherwise leak the pool on a half-completed startup.
         projector: RunningProjector | None = None
+        sweep: RunningSweep | None = None
         stack = AsyncExitStack()
         try:
             if agents is not None:
@@ -73,9 +75,17 @@ def create_app() -> FastAPI:
                 # PROGRESS, not merely its liveness.
                 projector = start_projector_thread(app.state.client, engine)
                 app.state.projector = projector
+                # The same profile records overdue instructions' lapses,
+                # so their room comes free within a minute of expiring.
+                sweep = start_sweep_thread(app.state.client, actor=settings.sweep_actor)
             log.info("api.startup", environment=settings.environment, version=__version__)
             yield
         finally:
+            if sweep is not None:
+                # It reads through the binary, not this pool, and waits
+                # on its own event: setting it ends the loop at once.
+                sweep.stop.set()
+                sweep.thread.join(timeout=5)
             if projector is not None:
                 thread, stop = projector.thread, projector.stop
                 stop.set()
