@@ -17,7 +17,12 @@
   <button type="submit">Apply</button>
 </form>
 
-{% if breaches %}
+{% if breaches is none %}
+<section role="alert">
+  <h2>Breaches to answer</h2>
+  <p>{{ badge("quarantined", "could not be read") }} The ledger did not answer the question of which breaches are unanswered, so this screen cannot say there are none. The figures below are still current. Try again in a moment; if this stays, check the service's health page.</p>
+</section>
+{% elif breaches %}
 <section>
   <h2>Breaches to answer</h2>
   <div class="table-scroll">

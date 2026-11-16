@@ -296,6 +296,21 @@ def record_fill_command(
             trade_date=trade_date,
         )
     )
+    already = fills.recorded_as(client, org=org, execution=execution)
+    if already is not None:
+        # A retry after a timeout, or a report seen twice: the ledger
+        # holds one booking per execution, so the same report is an
+        # answer, and a different one under the same id is a conflict.
+        conflicts = fills.repeat_conflicts(client, request, already)
+        if conflicts:
+            print(
+                f"conflict: fill {execution} was booked as {already}, and this report "
+                f"differs: {'; '.join(conflicts)}",
+                file=sys.stderr,
+            )
+            raise typer.Exit(code=1)
+        print(f"fill {execution} is already recorded, as {already}")
+        return
     outcome = _committed_or_exit(client, request, actor)
     breaches = sorted(fills.breaches_of(client, org=org, trade=trade))
     print(
@@ -308,7 +323,8 @@ def record_fill_command(
 @app.command(
     "answer-breach",
     help="Answer a breach: what was decided and why. Needs the right to answer breaches, and "
-    "is refused for the trader who placed the instruction behind it.",
+    "is refused for the trader who placed the instruction behind it. An answer records the "
+    "decision, not that it has been carried out.",
 )
 def answer_breach_command(
     org: Annotated[str, typer.Option(help="the organisation")],

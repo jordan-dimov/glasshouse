@@ -299,14 +299,19 @@ def limit_summary(
     return summary
 
 
-def _unanswered_breaches(client: GlasshouseClient, org: str, book: str | None) -> list[BreachRow]:
+def _unanswered_breaches(
+    client: GlasshouseClient, org: str, book: str | None
+) -> list[BreachRow] | None:
     """The breaches nobody has answered, from the ledger's own derived
-    read, in the chosen book. Empty when the ledger cannot answer: the
-    rest of the screen is still worth showing."""
+    read, in the chosen book; `None` when the ledger cannot answer. An
+    empty list says there are none, and a failed read must never say
+    that: the screen shows the rest with a warning that breaches could
+    not be read, so a risk problem cannot vanish with the binary."""
     try:
         return fills.list_breaches(client, org=org, book=book)
-    except MorphologError:
-        return []
+    except MorphologError as unreadable:
+        log.warning("ui.breaches_unreadable", org=org, error=str(unreadable))
+        return None
 
 
 def _limits_and_instructions(

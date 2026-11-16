@@ -152,9 +152,12 @@ predicate InstructionEnded(org: Subject, instruction: Subject, outcome: Subject)
 
 -- A fill the market reported against an instruction, and the trade it
 -- was booked as. `execution` is the outside firm's own identifier for
--- the fill, so the same report cannot be booked twice.
+-- the fill, and both identities are unique: the same report is booked
+-- once, whatever trade id a second attempt offers, even when two
+-- attempts race.
 predicate InstructionFill(org: Subject, instruction: Subject, execution: Subject, trade: Subject)
     unique by (trade)
+    unique by (org, execution)
     append only
 
 -- Something that happened and should not have. The trade stands: it
@@ -170,7 +173,10 @@ predicate Breach(org: Subject, book: Subject, trade: Subject, kind: Subject)
 
 -- Who looked at a breach, what they decided, and why. Once per breach.
 -- The decision is one of a closed list, so it can be reported on; the
--- note says why in words.
+-- note says why in words. An answer records a decision, not that it was
+-- carried out: `#unwind` does not mean the trade was unwound, nor
+-- `#cap_raised` that the cap was changed. That is why the open read is
+-- named for what it knows, unanswered, not unresolved.
 predicate BreachAnswered(org: Subject, trade: Subject, kind: Subject, answered_by: Subject, decision: Subject, note: Subject)
     unique by (trade, kind)
     append only

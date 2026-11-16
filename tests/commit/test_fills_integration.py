@@ -18,14 +18,22 @@ not matter.
 import datetime as dt
 import subprocess
 import time
+from concurrent.futures import ThreadPoolExecutor
 from decimal import Decimal
 
 import pytest
-from typer.testing import CliRunner
+from typer.testing import CliRunner, Result
 
 from glasshouse import cli
 from glasshouse.api import fills
-from glasshouse.commit import MODEL_FILE, Committed, GlasshouseClient, models
+from glasshouse.commit import (
+    MODEL_FILE,
+    Committed,
+    GlasshouseClient,
+    MorphologRequestError,
+    Rejected,
+    models,
+)
 from glasshouse.compute.terms import terms_version_id
 from glasshouse.sweep import overdue_books, sweep_once
 from tests.support import BINARY, DB, committed, login_role, needs_live_stack, refused
@@ -35,7 +43,18 @@ pytestmark = [needs_live_stack, pytest.mark.usefixtures("cli_binary")]
 ORG, MARKET = "fills-org", "de-power"
 DAY = dt.datetime(2027, 7, 1, tzinfo=dt.UTC)
 ON = dt.date(2026, 7, 1)
-BOOKS = ("held", "kinds", "late", "priced", "approved", "breached", "answered", "swept", "quiet")
+BOOKS = (
+    "held",
+    "kinds",
+    "late",
+    "priced",
+    "approved",
+    "breached",
+    "answered",
+    "swept",
+    "quiet",
+    "raced",
+)
 
 
 @pytest.fixture(scope="module")
@@ -325,3 +344,74 @@ def test_the_cli_records_a_fill_and_answers_its_breach(ledger: GlasshouseClient)
         ["lapse-instructions", *common, "--book", "quiet", "--actor", "trader"],
     )
     assert again.exit_code == 1
+
+
+def test_one_execution_is_booked_once_even_when_two_attempts_race(
+    ledger: GlasshouseClient,
+) -> None:
+    # The same outside report offered twice at once under two trade ids:
+    # the ledger holds the execution unique, so one books and the other
+    # is refused (or loses a serialisation race and is refused on retry).
+    committed(ledger, instruct("raced", "R-1", "buy", "4"), "trader")
+
+    def attempt(trade: str) -> object:
+        client = GlasshouseClient(str(MODEL_FILE), DB, binary=str(BINARY))
+        request = fills.fill_request(
+            org=ORG,
+            instruction="R-1",
+            execution="RACE-1",
+            trade=trade,
+            counterparty="eex",
+            quantity="2",
+            price="85",
+            trade_date=ON.isoformat(),
+        )
+        for _ in range(5):
+            try:
+                return client.submit(request, actor="recon")
+            except MorphologRequestError as raced:
+                if not raced.retriable:
+                    raise
+        raise AssertionError("still racing after five attempts")
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        outcomes = list(pool.map(attempt, ["T-RACE-A", "T-RACE-B"]))
+    booked = [o for o in outcomes if isinstance(o, Committed)]
+    assert len(booked) == 1
+    assert all(isinstance(o, Rejected) for o in outcomes if o not in booked)
+    winner = fills.recorded_as(ledger, org=ORG, execution="RACE-1")
+    assert winner in {"T-RACE-A", "T-RACE-B"}
+    trades = {t.trade for t in ledger.read(models.TradeCapturedClaim)}
+    assert len({"T-RACE-A", "T-RACE-B"} & trades) == 1
+    assert holding(ledger, "R-1") == Decimal("2")
+
+    # The reconciler retrying after a timeout: the same report is
+    # already recorded; the same id with other figures is a conflict.
+    runner = CliRunner()
+
+    def report(quantity: str) -> Result:
+        return runner.invoke(
+            cli.app,
+            [
+                "record-fill",
+                "--org", ORG,
+                "--database-url", DB,
+                "--instruction", "R-1",
+                "--execution", "RACE-1",
+                "--trade", "T-RACE-C",
+                "--counterparty", "eex",
+                "--quantity", quantity,
+                "--price", "85",
+                "--trade-date", ON.isoformat(),
+                "--actor", "recon",
+            ],
+        )  # fmt: skip
+
+    same = report("2")
+    assert same.exit_code == 0, same.output
+    assert f"already recorded, as {winner}" in same.output
+    other = report("3")
+    assert other.exit_code == 1
+    assert "conflict" in other.output
+    assert "quantity 2 booked, 3 now" in other.output
+    assert holding(ledger, "R-1") == Decimal("2")  # nothing booked by either

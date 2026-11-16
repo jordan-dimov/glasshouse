@@ -7,6 +7,7 @@ fragment is a fragment.
 import datetime as dt
 import re
 from decimal import Decimal
+from pathlib import Path
 from types import SimpleNamespace
 
 from starlette.datastructures import QueryParams
@@ -31,19 +32,20 @@ from glasshouse.api.schemas import (
     VersionMark,
     WitnessBinding,
 )
-from glasshouse.commit import MODEL_FILE
+from glasshouse.commit import MODEL_FILE, GlasshouseClient
 from glasshouse.imports import ImportReport, RowOutcome
 from glasshouse.imports.curves import COLUMNS as CURVE_COLUMNS
 from glasshouse.imports.trades import COLUMNS as TRADE_COLUMNS
 from glasshouse.projections.runner import ProjectorProgress
 from glasshouse.verify import Leg, VerifyReport
-from glasshouse.web.routes import limit_summary
+from glasshouse.web.routes import _unanswered_breaches, limit_summary
 from glasshouse.web.templating import (
     BREACH_KINDS_IN_PLAIN_WORDS,
     RULES_IN_PLAIN_WORDS,
     _ago,
     templates,
 )
+from tests.support import fake_binary
 
 T0 = dt.datetime(2026, 7, 1, tzinfo=dt.UTC)
 
@@ -850,3 +852,40 @@ def test_room_left_allows_for_what_open_instructions_hold() -> None:
         Decimal("3"),
         Decimal("22"),
     )
+
+
+def test_unreadable_breaches_are_unknown_never_none(tmp_path: Path) -> None:
+    # An empty list says there are no unanswered breaches; a ledger that
+    # could not answer says nothing of the kind. The two must not meet.
+    dead = fake_binary(tmp_path, "", stderr="error: database unreachable", exit_code=1)
+    client = GlasshouseClient("model.morph", "postgres:///x", binary=str(dead))
+    assert _unanswered_breaches(client, "acme-energy", None) is None
+    html = _render(
+        "positions.html",
+        org="acme-energy",
+        org_options=["acme-energy"],
+        active="positions",
+        book=None,
+        market=None,
+        start="",
+        end="",
+        positions=[],
+        valuations=[],
+        breaches=None,
+    )
+    assert 'role="alert"' in html
+    assert "cannot say there are none" in html
+    quiet = _render(
+        "positions.html",
+        org="acme-energy",
+        org_options=["acme-energy"],
+        active="positions",
+        book=None,
+        market=None,
+        start="",
+        end="",
+        positions=[],
+        valuations=[],
+        breaches=[],
+    )
+    assert "Breaches to answer" not in quiet
