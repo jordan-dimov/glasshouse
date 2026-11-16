@@ -10,6 +10,7 @@ from decimal import Decimal
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
 from starlette.datastructures import QueryParams
 
 from glasshouse.api.schemas import (
@@ -115,6 +116,8 @@ def test_blotter_renders_exact_decimals_and_the_chrome() -> None:
     assert f"Morpholog {MORPHOLOG_VERSION}" in html
     assert 'class="system-time"' in html
     assert " UTC</time>" in html
+    assert ">Loaded " in html  # the time the page was rendered, said as such
+    assert "Evaluation demo" not in html  # only the hosted demo says it
     assert "public API query" not in html
     assert 'class="numeric' in html
     assert 'title="record txn-0123456789abcdef"' in html  # the record id one hover away
@@ -909,3 +912,10 @@ def test_a_delivery_window_writes_its_date_once_when_it_can() -> None:
     day = dt.datetime(2026, 7, 1, 7, tzinfo=dt.UTC)
     assert _window(day, day + dt.timedelta(hours=4)) == "2026-07-01 07:00 - 11:00Z"
     assert _window(day, day + dt.timedelta(hours=17)) == "2026-07-01 07:00 - 2026-07-02 00:00Z"
+
+
+def test_the_hosted_demo_says_what_it_is_quietly(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("GLASSHOUSE_ENVIRONMENT", "demo")
+    html = _render("orgs.html", orgs=["acme-energy"])
+    assert "Evaluation demo · L0" in html
+    assert "SCOPE.md#production-readiness" in html

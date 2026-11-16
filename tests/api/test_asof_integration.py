@@ -156,6 +156,12 @@ def test_the_screens_say_which_moment_they_show(
     assert "No trades match this view." in blotter.text
     assert "T-001" not in blotter.text
     assert "The book as it stood at" in positions.text
+    # The facts read from the ledger as it is now (limits, open
+    # instructions, breaches) are left out of a past moment, so nothing
+    # on the screen mixes then and now; it says so.
+    assert "Against the limits" not in positions.text
+    assert "Breaches to answer" not in positions.text
+    assert "Limits, open instructions and breaches are shown for now only" in positions.text
     # Moving between screens stays in the mode; leaving it is one link.
     assert "/ui/positions?org=acme-energy&amp;as_of=" in blotter.text
     assert "Back to now" in blotter.text
