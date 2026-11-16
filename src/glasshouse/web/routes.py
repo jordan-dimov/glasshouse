@@ -30,7 +30,7 @@ from fastapi import APIRouter, File, Form, Query, Request, Response, UploadFile
 from fastapi.responses import RedirectResponse, StreamingResponse
 from pydantic import BaseModel
 
-from glasshouse.api import asof, fills, health, instructions, queries, refusals
+from glasshouse.api import asof, business_day, fills, health, instructions, queries, refusals
 from glasshouse.api import audit as audit_queries
 from glasshouse.api import curves as curve_queries
 from glasshouse.api.auth import authenticated_actor
@@ -45,14 +45,19 @@ from glasshouse.api.deps import (
     ProjectorDep,
     StoreDep,
 )
-from glasshouse.api.schemas import BreachRow, CurveVersion, InstructionRow, PositionHour
+from glasshouse.api.schemas import (
+    BreachRow,
+    CurveVersion,
+    InstructionRow,
+    OverviewSummary,
+    PositionHour,
+)
 from glasshouse.commit import (
     GlasshouseClient,
     MorphologError,
     MorphologRequestError,
     models,
 )
-from glasshouse.compute.marking import business_date_of
 from glasshouse.compute.store import StoreError
 from glasshouse.config import get_settings
 from glasshouse.imports import (
@@ -167,9 +172,10 @@ def home(
         if len(orgs) == 1:
             return RedirectResponse(f"/ui?org={quote(orgs[0])}", status_code=303)
         return templates.TemplateResponse(request, "orgs.html", {"orgs": orgs})
+    summary, ledger_answered = _overview(engine, client, org)
     context = _chrome(engine, org, "overview") | {
-        "summary": queries.overview(engine, org=org),
-        "business_date": _business_date(client, org),
+        "summary": summary,
+        "ledger_answered": ledger_answered,
         # The projector's own progress, where it runs in this process: a
         # cursor advances only when the ledger moves, so cursor age alone
         # cannot tell an idle projector from a stuck one.
@@ -301,11 +307,23 @@ def limit_summary(
     return summary
 
 
-def _business_date(client: GlasshouseClient, org: str) -> dt.date | None:
-    """The organisation's business date, or None if it has none yet or
-    the ledger could not answer; the tile says which it cannot tell."""
+def _overview(
+    engine: sa.Engine, client: GlasshouseClient, org: str
+) -> tuple[OverviewSummary, bool]:
+    """The overview with the business date's valuations, and whether the
+    ledger answered. When it did not, the books still show (they are the
+    read model's) and the date and values say they could not be read:
+    the latest marks are never shown as today's."""
+    summary = queries.overview(engine, org=org)
     try:
-        return business_date_of(client, org=org)
+        return business_day.onto(summary, client), True
+    except MorphologError:
+        return summary.model_copy(update={"valuations": []}), False
+
+
+def _current_marks(client: GlasshouseClient, org: str) -> set[tuple[str, str, str]] | None:
+    try:
+        return business_day.read(client, org=org).current()
     except MorphologError:
         return None
 
@@ -1001,6 +1019,11 @@ def positions(
             ),
             "instructions": open_instructions,
             "breaches": _unanswered_breaches(client, org, book),
+            # Which of the marks below are the business date's: a trade
+            # valued only on an earlier day is marked so, and never read
+            # as today's. Unknown (None) for a past moment, or if the
+            # ledger cannot answer.
+            "current_marks": None if past else _current_marks(client, org),
             # The one filter bar governs both sections: the marks narrow
             # by the same book and market as the positions above them.
             "valuations": queries.list_valuations(

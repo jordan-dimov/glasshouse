@@ -912,22 +912,36 @@ def test_a_delivery_window_writes_its_date_once_when_it_can() -> None:
 
 
 def test_the_overview_shows_the_business_date_or_says_it_is_not_set() -> None:
-    def overview(**extra: object) -> str:
+    def overview(answered: bool = True, **fields: object) -> str:
+        summary = OverviewSummary(
+            org="acme-energy",
+            books=[],
+            valuations=[],
+            projection=ProjectionCursor(committed_at=T0, transition_id="txn-1"),
+        ).model_copy(update=fields)
         return _render(
             "overview.html",
             org="acme-energy",
             org_options=["acme-energy"],
             active="overview",
-            summary=OverviewSummary(
-                org="acme-energy",
-                books=[],
-                valuations=[],
-                projection=ProjectionCursor(committed_at=T0, transition_id="txn-1"),
-            ),
+            summary=summary,
+            ledger_answered=answered,
             health={"morpholog": "ok", "database": "ok", "commit": "ok", "projector": "ok"},
             projector=ProjectorProgress(polled_at=_now(), applied_at=T0, applied_total=1),
-            **extra,
         )
 
-    assert ">2026-07-01</p>" in overview(business_date=dt.date(2026, 7, 1))
-    assert "Valuations wait until a business date is rolled." in overview(business_date=None)
+    today = overview(
+        business_date=dt.date(2026, 7, 1),
+        valuations=[
+            ValuationSummary(currency="EUR", trade_count=2, valued_at=None, total_mtm=Decimal("5"))
+        ],
+        not_valued_for_business_date=1,
+    )
+    assert ">2026-07-01</p>" in today
+    assert "Values for 2026-07-01" in today
+    assert "1 trade not yet valued for this day." in today
+    assert "Valuations wait until a business date is rolled." in overview()
+    # A ledger that did not answer shows no value at all, never an old one.
+    silent = overview(answered=False)
+    assert "could not be read" in silent
+    assert "Values for" not in silent

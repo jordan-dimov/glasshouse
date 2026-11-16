@@ -158,7 +158,7 @@
           <td>{{ mark.book }}</td>
           {{ num_cell(mark.mtm) }}
           <td>{{ mark.currency }}</td>
-          <td class="mono">{{ mark.curve_version }}</td>
+          <td class="mono">{{ mark.curve_version }}{% if current_marks is not none and (mark.trade, mark.curve_version, mark.terms_version) not in current_marks %} {{ badge("superseded", "earlier day") }}{% endif %}</td>
           <td class="mono">{{ mark.terms_version }}</td>
           <td title="record {{ mark.transition_id }}">{{ mark.valued_at | utc }}</td>
           <td>{{ mark.actor }}</td>

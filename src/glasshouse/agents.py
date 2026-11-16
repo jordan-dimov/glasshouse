@@ -39,12 +39,13 @@ from mcp.server import MCPServer
 from mcp.server.mcpserver.exceptions import ToolError
 from pydantic import BaseModel, Field
 
-from glasshouse.api import asof, instructions, queries, refusals
+from glasshouse.api import asof, business_day, instructions, queries, refusals
 from glasshouse.api import audit as audit_queries
 from glasshouse.api.routers.explain import flatten_rejection
 from glasshouse.api.schemas import (
     AuditEntry,
     BlotterTrade,
+    BusinessDay,
     ExactDecimal,
     InstructionRow,
     PositionHour,
@@ -255,6 +256,21 @@ def build_server(desk: Callable[[], Desk]) -> MCPServer:
                 if declared.org == at.org
             ),
             key=lambda market: market.market,
+        )
+
+    @server.tool()
+    def business_date() -> BusinessDay:
+        """The organisation's business date: the day its valuations are
+        for, and how many trades are valued for that day so far. Values
+        struck for an earlier day are not today's. Read only: rolling the
+        date is a desk's act, not an agent's."""
+        at = desk()
+        day = business_day.read(at.client, org=at.org)
+        return BusinessDay(
+            org=at.org,
+            business_date=day.date,
+            valued=len(day.current()),
+            not_valued=day.unvalued(),
         )
 
     @server.tool()

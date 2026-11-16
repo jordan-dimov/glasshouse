@@ -1514,6 +1514,64 @@ class InstructionStandingClaim:
 
 
 @dataclass(frozen=True)
+class ValuationOnBusinessDateClaim:
+    """One admitted `ValuationOnBusinessDate` claim, decoded by declared kind."""
+
+    PREDICATE: ClassVar[str] = "ValuationOnBusinessDate"
+
+    org: str
+    trade: str
+    market: str
+    business_date: date
+    curve_version: str
+    terms_version: str
+    valued: bool
+    mtm: Decimal
+    currency: str
+
+    @classmethod
+    def from_named(cls, args: dict[str, object]) -> ValuationOnBusinessDateClaim:
+        values.named_fields(
+            "ValuationOnBusinessDate",
+            args,
+            (
+                "org",
+                "trade",
+                "market",
+                "business_date",
+                "curve_version",
+                "terms_version",
+                "valued",
+                "mtm",
+                "currency",
+            ),
+        )
+        return cls(
+            org=values.named_text("ValuationOnBusinessDate.org", args["org"]),
+            trade=values.named_text("ValuationOnBusinessDate.trade", args["trade"]),
+            market=values.named_text("ValuationOnBusinessDate.market", args["market"]),
+            business_date=values.named_date(
+                "ValuationOnBusinessDate.business_date",
+                args["business_date"],
+            ),
+            curve_version=values.named_text(
+                "ValuationOnBusinessDate.curve_version",
+                args["curve_version"],
+            ),
+            terms_version=values.named_text(
+                "ValuationOnBusinessDate.terms_version",
+                args["terms_version"],
+            ),
+            valued=values.named_bool("ValuationOnBusinessDate.valued", args["valued"]),
+            mtm=values.named_decimal("ValuationOnBusinessDate.mtm", args["mtm"]),
+            currency=values.named_text(
+                "ValuationOnBusinessDate.currency",
+                args["currency"],
+            ),
+        )
+
+
+@dataclass(frozen=True)
 class UnansweredBreachClaim:
     """One admitted `UnansweredBreach` claim, decoded by declared kind."""
 

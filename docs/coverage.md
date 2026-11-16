@@ -32,7 +32,7 @@ Every new function arrives one of three ways: as rules in [the one rule file](..
 |---|---|---|
 | Price curves with versions and corrections | Has | Hourly. A correction adds a version; the old one and every valuation made from it are kept. |
 | Each market priced in its own currency | Has | EUR, GBP, NOK, SEK, DKK, PLN, RON. Never added together. |
-| A business date, so a curve can be registered every day | Has | Each organisation rolls its business date forward by an act (`roll-business-date`); valuations use that day's official curves, and a mark against another day's curve is refused. The Overview shows the date. |
+| A business date, so a curve can be registered every day | Has | Each organisation rolls its business date forward by an act (`roll-business-date`); valuations use that day's official curves, and a mark against another day's curve is refused. The Overview shows the date and totals only that day's values. Restating a past day under corrected prices is not built. |
 | Published index prices (day-ahead and the like) | Planned | Part of [#124](https://github.com/jordan-dimov/glasshouse/issues/124). |
 | Live market data feeds | Will not do | A market data platform is its own product. Prices arrive as files or through the API. |
 

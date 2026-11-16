@@ -12,6 +12,7 @@ Self-provisioned module slate.
 """
 
 import datetime as dt
+from concurrent.futures import ThreadPoolExecutor
 from decimal import Decimal
 
 import pytest
@@ -19,7 +20,15 @@ import sqlalchemy as sa
 from typer.testing import CliRunner
 
 from glasshouse import cli
-from glasshouse.commit import MODEL_FILE, Committed, GlasshouseClient, Rejected, models
+from glasshouse.api import business_day
+from glasshouse.commit import (
+    MODEL_FILE,
+    Committed,
+    GlasshouseClient,
+    MorphologRequestError,
+    Rejected,
+    models,
+)
 from glasshouse.commit.morpholog_client.envelopes import AtomicCommitted
 from glasshouse.compute.curves import HourlyCurve
 from glasshouse.compute.marking import (
@@ -225,3 +234,137 @@ def test_the_cli_rolls_the_business_date(
     badly = CliRunner().invoke(cli.app, ["roll-business-date", *common, "--date", "tomorrow"])
     assert badly.exit_code == 2
     assert "ISO date" in badly.output
+
+
+def _second_trade(client: GlasshouseClient, org: str) -> None:
+    committed(
+        client,
+        models.CaptureTradeRequest(
+            org=org,
+            book=BOOK,
+            trade=f"{org}/DB-2",
+            counterparty="cp",
+            market=MARKET,
+            direction="sell",
+            version=terms_version_id(f"{org}/DB-2", 1),
+            quantity=Decimal("3"),
+            price=Decimal("90"),
+            delivery_start=DAY_ONE + dt.timedelta(hours=12),
+            delivery_end=DAY_ONE + dt.timedelta(hours=14),
+            trade_date=TRADE_DATE,
+        ),
+        "alice",
+    )
+
+
+def test_after_a_roll_yesterdays_values_are_not_todays(
+    stack: tuple[GlasshouseClient, CurveStore, sa.Engine],
+) -> None:
+    client, store, _ = stack
+    org = "date-stale"
+    _desk(client, store, org)
+    _second_trade(client, org)
+    committed(client, models.RollBusinessDateRequest(org=org, date=DAY_ONE.date()), "ops")
+    for trade in ("DB-1", "DB-2"):
+        valued = value_trade(
+            client, store, actor="risk-engine", org=org, book=BOOK, trade=f"{org}/{trade}"
+        )
+        assert isinstance(valued, Committed)
+    monday = business_day.read(client, org=org)
+    assert (monday.date, monday.unvalued(), len(monday.current())) == (DAY_ONE.date(), 0, 2)
+    (monday_total,) = monday.totals()
+
+    # Rolled, nothing revalued: no value is today's, and none is counted.
+    committed(client, models.RollBusinessDateRequest(org=org, date=DAY_TWO.date()), "ops")
+    tuesday = business_day.read(client, org=org)
+    assert (tuesday.date, tuesday.totals(), tuesday.unvalued()) == (DAY_TWO.date(), [], 2)
+    assert tuesday.current() == set()
+
+    # One of two revalued: the total is that one alone, never a mix of
+    # Monday's and Tuesday's marks.
+    value_trade(client, store, actor="risk-engine", org=org, book=BOOK, trade=f"{org}/DB-1")
+    partly = business_day.read(client, org=org)
+    (total,) = partly.totals()
+    assert (total.trade_count, partly.unvalued()) == (1, 1)
+    (row,) = [r for r in partly.rows if r.valued]
+    assert (row.trade, total.total_mtm) == (f"{org}/DB-1", row.mtm)
+    assert monday_total.trade_count == 2
+
+
+def test_correcting_a_past_day_moves_neither_today_nor_that_days_record(
+    stack: tuple[GlasshouseClient, CurveStore, sa.Engine],
+) -> None:
+    client, store, _ = stack
+    org = "date-restate"
+    _desk(client, store, org)
+    committed(client, models.RollBusinessDateRequest(org=org, date=DAY_ONE.date()), "ops")
+    value_trade(client, store, actor="risk-engine", org=org, book=BOOK, trade=f"{org}/DB-1")
+    committed(client, models.RollBusinessDateRequest(org=org, date=DAY_TWO.date()), "ops")
+    value_trade(client, store, actor="risk-engine", org=org, book=BOOK, trade=f"{org}/DB-1")
+    before = business_day.read(client, org=org).totals()
+    marks_before = {
+        (v.curve_version, v.mtm) for v in client.read(models.TradeValuedClaim) if v.org == org
+    }
+    corrected = correct_and_remark(
+        client,
+        store,
+        curve_actor="carol",
+        valuation_actor="risk-engine",
+        org=org,
+        market=MARKET,
+        as_of=DAY_ONE.date(),
+        prior_version=f"{org}/jul1",
+        new_version=f"{org}/jul1-fix",
+        curve=_day_curve(DAY_ONE, base=95),
+    )
+    assert isinstance(corrected, AtomicCommitted)
+    assert len(corrected.acts) == 1  # the correction alone: nothing re-marked
+    # Today's total is untouched, and Monday's mark as struck is still on
+    # record. Restating Monday under the corrected prices is not built.
+    assert business_day.read(client, org=org).totals() == before
+    marks_after = {
+        (v.curve_version, v.mtm) for v in client.read(models.TradeValuedClaim) if v.org == org
+    }
+    assert marks_after == marks_before
+
+
+def test_a_roll_racing_a_mark_never_admits_a_mark_for_a_day_already_left(
+    stack: tuple[GlasshouseClient, CurveStore, sa.Engine],
+) -> None:
+    # The curve is chosen in Python, the decision is the ledger's. A mark
+    # against day one racing the roll to day two either commits first (on
+    # day one, lawfully) or is refused; it never lands after the roll.
+    client, store, _ = stack
+    org = "date-race"
+    _desk(client, store, org)
+    committed(client, models.RollBusinessDateRequest(org=org, date=DAY_ONE.date()), "ops")
+    mark = models.AdmitValuationRequest(
+        org=org,
+        book=BOOK,
+        trade=f"{org}/DB-1",
+        curve_version=f"{org}/jul1",
+        terms_version=f"{org}/DB-1/v1",
+        mtm=Decimal("1"),
+    )
+    roll = models.RollBusinessDateRequest(org=org, date=DAY_TWO.date())
+
+    def submit(job: tuple[object, str]) -> object:
+        request, actor = job
+        own = GlasshouseClient(str(MODEL_FILE), DB, binary=str(BINARY))
+        for _ in range(5):
+            try:
+                return own.submit(request, actor=actor)  # type: ignore[arg-type]
+            except MorphologRequestError as raced:
+                if not raced.retriable:
+                    raise
+        raise AssertionError("still racing after five attempts")
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        marked, rolled = pool.map(submit, [(mark, "risk-engine"), (roll, "ops")])
+    assert isinstance(rolled, Committed)
+    if isinstance(marked, Committed):
+        order = [row.transition_id for row in client.audit_named(mentions=org)]
+        assert order.index(marked.transition_id) < order.index(rolled.transition_id)
+    else:
+        assert isinstance(marked, Rejected)
+        assert marked.rule == "valued_against_official_curve_and_terms_in_force"

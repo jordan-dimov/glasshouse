@@ -9,8 +9,10 @@
 <div class="tiles">
   <section class="tile">
     <h2>Business date</h2>
-    {% if business_date %}
-    <p class="tile__figure">{{ business_date }}</p>
+    {% if ledger_answered is defined and not ledger_answered %}
+    <p>{{ badge("quarantined", "could not be read") }}</p>
+    {% elif summary.business_date %}
+    <p class="tile__figure">{{ summary.business_date }}</p>
     <p class="tile__note">Valuations use this day's official curves.</p>
     {% else %}
     {{ empty_state("Not set. Valuations wait until a business date is rolled.") }}
@@ -34,8 +36,10 @@
 
   <section class="tile">
     <h2>Value of the trades</h2>
-    {% if summary.valuations %}
-    {# One total per currency. Amounts in different currencies are never added together. #}
+    {% if ledger_answered is defined and not ledger_answered %}
+    <p>{{ badge("quarantined", "could not be read") }} The ledger did not answer, so no value is shown rather than an old one.</p>
+    {% elif summary.valuations %}
+    {# One total per currency, for the business date only. Amounts in different currencies are never added together. #}
     <table class="tile-table">
       <tbody>
         {% for marks in summary.valuations %}
@@ -43,9 +47,11 @@
         {% endfor %}
       </tbody>
     </table>
-    <p class="tile__note">Latest value of each trade, summed per currency. <a href="/ui/positions?org={{ org | urlencode }}">Each trade's value</a></p>
+    <p class="tile__note">Values for {{ summary.business_date }}, summed per currency.{% if summary.not_valued_for_business_date %} {{ summary.not_valued_for_business_date }} trade{{ "s" if summary.not_valued_for_business_date != 1 }} not yet valued for this day.{% endif %} <a href="/ui/positions?org={{ org | urlencode }}">Each trade's value</a></p>
+    {% elif summary.business_date %}
+    {{ empty_state("No trade valued for " ~ summary.business_date ~ " yet.") }}
     {% else %}
-    {{ empty_state("No trade has been valued yet.") }}
+    {{ empty_state("No business date yet, so no values.") }}
     {% endif %}
   </section>
 

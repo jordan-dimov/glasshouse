@@ -128,6 +128,8 @@ ACTS_IN_PLAIN_WORDS = {
     "grant_breach_authority": "Allow answering breaches",
     "require_approval": "Require approval in a book",
     "grant_limit_authority": "Allow setting limits",
+    "grant_date_authority": "Allow rolling the business date",
+    "roll_business_date": "Roll the business date",
     "declare_market": "Declare a market",
     "set_position_limit": "Set a position limit",
     "capture_trade": "Enter a trade",

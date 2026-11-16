@@ -111,14 +111,12 @@ class BookSummary(BaseModel):
 
 
 class ValuationSummary(BaseModel):
-    """The latest marks in ONE currency in one line: how many trades
-    carry a mark, when the newest was struck, and the total of each
-    trade's *latest* mark - never a sum over valuation history, which
+    """The marks in ONE currency in one line: how many trades carry a
+    mark and their total - never a sum over valuation history, which
     would double-count every corrected curve, and never a sum across
-    currencies, which would be no amount of anything. There is no
-    valuation-run identity yet: the total may span valuation times and
-    curve versions (a corrected curve leaves the old mark newest until
-    revaluation)."""
+    currencies, which would be no amount of anything. On the overview
+    these are the marks struck for the business date only (the ledger's
+    `ValuationOnBusinessDate`), so `valued_at` is not given there."""
 
     currency: str
     trade_count: int
@@ -145,8 +143,12 @@ class OverviewSummary(BaseModel):
     projection: ProjectionCursor
     # The day the organisation's valuations are for, rolled by an act in
     # the ledger; None before the first roll, or if the ledger could not
-    # be read.
+    # be read. `valuations` are then the marks struck for that day, and
+    # `not_valued_for_business_date` counts the trades with that day's
+    # curve but no mark for it yet. With no business date, `valuations`
+    # is empty: there is no day for a figure to belong to.
     business_date: date | None = None
+    not_valued_for_business_date: int = 0
 
 
 class CurveVersion(BaseModel):
@@ -383,3 +385,14 @@ class BreachRow(BaseModel):
     trade: str  # the trade the fill was booked as
     kind: str  # limit, unapproved, after_end, price or overfill
     execution: str  # the outside firm's identifier for the fill
+
+
+class BusinessDay(BaseModel):
+    """The organisation's business date and what is valued for it: the
+    day its valuations are for (None before the first roll), and how
+    many trades have a mark for that day and how many still want one."""
+
+    org: str
+    business_date: date | None
+    valued: int
+    not_valued: int

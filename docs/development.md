@@ -129,7 +129,8 @@ Each organisation has one business date: the day its valuations are for. It is a
 - A valuation uses the official curve for the business date, and the terms in force on it. The ledger refuses a mark against another day's curve (`valued_against_official_curve_and_terms_in_force`), and refuses any mark before a business date exists (`business_date_is_set`).
 - A desk registering a curve every day has several official curves at once, one per date; the business date picks one.
 - Correcting a curve re-marks the trades only when it is the business date's curve. Correcting a day already rolled past changes that day's prices and leaves today's marks alone.
-- The Overview and `GET /overview` show the date (`business_date`, null before the first roll).
+- The Overview and `GET /overview` show the date (`business_date`, null before the first roll), and total only the values struck for it, per currency, with how many trades still want one; the ledger decides which marks those are (`ValuationOnBusinessDate`). After a roll, a trade valued only on an earlier day is not counted, and Positions marks its value "earlier day".
+- Correcting a past day's prices does not restate that day: its marks stay as they were struck.
 
 ## Instructions
 
