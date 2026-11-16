@@ -53,33 +53,33 @@
       <input type="hidden" name="org" value="{{ org }}">
       {# The screen's own filters ride along: the same book and window at another moment. #}
       {% for key, value in mode.carried %}<input type="hidden" name="{{ key }}" value="{{ value }}">{% endfor %}
-      <label class="org-form__label" for="as-of-input">Show the book as it was at (UTC)</label>
+      <label class="org-form__label" for="as-of-input">As of (UTC)</label>
       <input id="as-of-input" type="datetime-local" name="as_of" step="1" value="{{ mode.picker if mode.at else "" }}">
       <button type="submit">View</button>
     </form>
     {% endif %}
     {% if viewing_as_of %}
-    <span class="as-of-pill as-of-pill--past" title="{{ mode.exact }}">Viewing the past: {{ mode.shown }}</span>
+    <span class="as-of-pill as-of-pill--past" title="{{ mode.exact }}">As of {{ mode.shown }}</span>
     <a class="as-of-return" href="{{ request.url.path }}?org={{ org | urlencode }}{{ carried_query | trim }}">Back to now</a>
     {% else %}
-    <span class="as-of-pill" title="Pick a past time to see the book as it stood then">Viewing: now</span>
+    <span class="as-of-pill" title="Pick a past time to see the book as it stood then">Now</span>
     {% endif %}
-    <span class="l0-badge" title="For trying out and evaluation. Readiness level 0 on the ladder in DESIGN.md.">Demo, not for production use</span>
+    <time class="system-time" datetime="{{ system_time().iso }}" title="System time">{{ system_time().shown }}</time>
   </div>
 </header>
 <main class="page">
 {% if viewing_as_of %}
 {% if active in ("blotter", "positions") %}
-<p class="as-of-banner" role="status">You are viewing the book as it stood at {{ mode.shown }}. Every figure on this screen is from that moment, not from now.</p>
+<p class="as-of-banner" role="status">The book as it stood at {{ mode.shown }}: every figure here is from then, not now.</p>
 {% else %}
-<p class="as-of-banner as-of-banner--current" role="status">This screen always shows the present. Only Trades and Positions can show the past.</p>
+<p class="as-of-banner as-of-banner--current" role="status">This screen shows the present. Only Trades and Positions can show the past.</p>
 {% endif %}
 {% endif %}
 {% block content %}{% endblock %}
 </main>
 <footer class="footer">
   <span>Glasshouse {{ version }}</span>
-  <span>Every number on these screens is a rendering of a public API query.</span>
+  <span>built on <a href="https://github.com/jordan-dimov/morpholog" target="_blank" rel="noopener noreferrer">Morpholog {{ morpholog_version }}</a></span>
 </footer>
 </body>
 </html>

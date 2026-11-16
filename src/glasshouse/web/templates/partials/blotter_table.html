@@ -11,13 +11,10 @@
         <th scope="col">Buy or sell</th>
         <th scope="col" class="numeric">Quantity (MW)</th>
         <th scope="col" class="numeric">Price (per MWh)</th>
-        <th scope="col">Currency</th>
-        <th scope="col">Delivery from (UTC)</th>
-        <th scope="col">Delivery to (UTC)</th>
+        <th scope="col">Delivery (UTC)</th>
         <th scope="col">Trade date</th>
         <th scope="col">Version</th>
-        <th scope="col">Entered at</th>
-        <th scope="col">Entered by</th>
+        <th scope="col">Entered</th>
       </tr>
     </thead>
     <tbody>
@@ -29,14 +26,11 @@
         <td>{{ trade.market }}</td>
         <td>{{ trade.direction }}</td>
         {{ num_cell(trade.quantity) }}
-        {{ num_cell(trade.price) }}
-        <td>{{ trade.currency }}</td>
-        <td>{{ trade.delivery_start | utc }}</td>
-        <td>{{ trade.delivery_end | utc }}</td>
+        <td class="numeric{% if trade.price < 0 %} neg{% endif %}">{{ trade.price }} {{ trade.currency }}</td>
+        <td>{{ trade.delivery_start | window(trade.delivery_end) }}</td>
         <td>{{ trade.trade_date }}</td>
         <td><span class="mono" title="effective from {{ trade.effective_from }}">{{ trade.terms_version }}</span>{% if trade.amendment_count %} {{ badge("amended", "changed " ~ trade.amendment_count ~ " time" ~ ("s" if trade.amendment_count != 1 else "")) }}{% endif %}</td>
-        <td title="record {{ trade.transition_id }}">{{ trade.captured_at | utc }}</td>
-        <td>{{ trade.actor }}</td>
+        <td title="record {{ trade.transition_id }}">{{ trade.actor }}, {{ trade.captured_at | utc }}</td>
       </tr>
       {% endfor %}
     </tbody>

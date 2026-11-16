@@ -3,7 +3,7 @@
 {% block content %}
 <div class="page-header">
   <h1>Imports</h1>
-  <p class="page-header__note">Bring trades or prices in from a CSV file. First you see what would happen to every row. Nothing is recorded until you confirm.</p>
+  <p class="page-header__note">Bring in trades or prices from CSV. You see what would happen to each row before anything is recorded.</p>
 </div>
 
 <div class="tiles">
@@ -13,7 +13,7 @@
     <form method="post" action="/ui/imports/sample" class="upload-form">
       <input type="hidden" name="org" value="{{ org }}">
       {% if not authenticated_actor %}
-      <label>Your name in the system <input type="text" name="actor" value="alice" required></label>
+      <label>Your name <input type="text" name="actor" value="alice" required></label>
       {% endif %}
       <button type="submit">See what would happen</button>
     </form>
@@ -32,14 +32,14 @@
         </select>
       </label>
       {% if not authenticated_actor %}
-      <label>Your name in the system <input type="text" name="actor" placeholder="for example alice" required></label>
+      <label>Your name <input type="text" name="actor" placeholder="for example alice" required></label>
       {% endif %}
       <button type="submit">See what would happen</button>
     </form>
     {% if authenticated_actor %}
-    <p class="tile__note">You are importing as <strong>{{ authenticated_actor }}</strong>, the name the demo login acts under. It is recorded with every change.</p>
+    <p class="tile__note">Importing as <strong>{{ authenticated_actor }}</strong>, the demo login's name, recorded with every change.</p>
     {% else %}
-    <p class="tile__note">The name is recorded with every change. It decides what you may do: in the demo book, alice may enter trades and carol may enter prices. Nobody checks that you are who you say on a local copy.</p>
+    <p class="tile__note">Recorded with every change, and it decides what you may do: in the demo, alice enters trades and carol prices. Not verified on a local copy.</p>
     {% endif %}
   </section>
 

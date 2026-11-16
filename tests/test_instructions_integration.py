@@ -233,7 +233,7 @@ def test_the_api_and_the_positions_screen_show_what_is_held(
     assert "2026-07-01 17:00Z" in row
     for figure in ("20", "2", "25", "3"):
         assert f'class="numeric">{figure}<' in row
-    assert "When it fills, the fill books the trade" in page
+    assert "An instruction is an order not yet filled" in page
     assert "awaiting approval" in page  # spec-de asks for a second person
 
 

@@ -4,7 +4,7 @@
 {% block content %}
 <div class="page-header">
   <h1>Curves</h1>
-  <p class="page-header__note">A price curve is the market's price for each delivery hour, used to value trades. A correction never overwrites: it adds a new version, and the old one is kept.</p>
+  <p class="page-header__note">The market price for each delivery hour, used to value trades. A correction adds a new version; the old one is kept.</p>
 </div>
 
 {% if markets %}
@@ -65,7 +65,7 @@
       </tbody>
     </table>
   </div>
-  <p class="tile__note">"Stored prices: unchanged" means the prices on file still match the fingerprint recorded when the version was added.{% if versions | length > 1 %} <button type="submit">Compare the two versions</button>{% endif %}</p>
+  <p class="tile__note">"Stored prices: unchanged" means the stored prices still match their recorded fingerprint.{% if versions | length > 1 %} <button type="submit">Compare the two versions</button>{% endif %}</p>
 </form>
 {% else %}
 {{ empty_state("No price curves yet. Import one on the Imports screen, or load the demo book with: glasshouse seed --reset") }}

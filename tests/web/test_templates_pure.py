@@ -1,6 +1,6 @@
 """The templates rendered directly with fabricated typed rows: exact
 decimal strings pass through untouched, negatives get the loud class,
-the chrome states its honesty (Viewing: now, not for production), and the
+the chrome states where it stands (now, or a past moment), and the
 fragment is a fragment.
 """
 
@@ -33,6 +33,7 @@ from glasshouse.api.schemas import (
     WitnessBinding,
 )
 from glasshouse.commit import MODEL_FILE, GlasshouseClient
+from glasshouse.commit.morpholog_client import MORPHOLOG_VERSION
 from glasshouse.imports import ImportReport, RowOutcome
 from glasshouse.imports.curves import COLUMNS as CURVE_COLUMNS
 from glasshouse.imports.trades import COLUMNS as TRADE_COLUMNS
@@ -40,9 +41,11 @@ from glasshouse.projections.runner import ProjectorProgress
 from glasshouse.verify import Leg, VerifyReport
 from glasshouse.web.routes import _unanswered_breaches, limit_summary
 from glasshouse.web.templating import (
+    ACTS_IN_PLAIN_WORDS,
     BREACH_KINDS_IN_PLAIN_WORDS,
     RULES_IN_PLAIN_WORDS,
     _ago,
+    _window,
     templates,
 )
 from tests.support import fake_binary
@@ -105,8 +108,14 @@ def test_blotter_renders_exact_decimals_and_the_chrome() -> None:
     assert "86.25" in html  # exact, straight through, no float anywhere
     assert "7.5" in html
     assert "sell" in html
-    assert "Viewing: now" in html
-    assert "not for production use" in html
+    assert ">Now</span>" in html
+    # The footer names what it is built on, opening in a new tab; the
+    # top bar shows the system time, in UTC.
+    assert 'href="https://github.com/jordan-dimov/morpholog" target="_blank"' in html
+    assert f"Morpholog {MORPHOLOG_VERSION}" in html
+    assert 'class="system-time"' in html
+    assert " UTC</time>" in html
+    assert "public API query" not in html
     assert 'class="numeric' in html
     assert 'title="record txn-0123456789abcdef"' in html  # the record id one hover away
     assert 'aria-current="page"' in html
@@ -341,8 +350,8 @@ def test_the_imports_page_derives_identity_from_the_login() -> None:
         authenticated_actor="demo",
     )
     assert 'name="actor"' not in html  # identity never comes from a form when logged in
-    assert "You are importing as <strong>demo</strong>" in html
-    assert "the name the demo login acts under" in html
+    assert "Importing as <strong>demo</strong>" in html
+    assert "the demo login's name" in html
 
 
 def test_the_imports_page_states_the_contracts_truthfully() -> None:
@@ -360,7 +369,7 @@ def test_the_imports_page_states_the_contracts_truthfully() -> None:
     assert set(trades_line.split(",")) == TRADE_COLUMNS
     assert set(curves_line.split(",")) == CURVE_COLUMNS
     assert "morpholog#" not in html  # no note for insiders on a visitor's screen
-    assert "Nobody checks that you are who you say" in html  # identity, said honestly
+    assert "Not verified on a local copy" in html  # identity, said honestly
 
 
 def test_the_preview_page_commits_nothing_and_says_so() -> None:
@@ -465,8 +474,8 @@ def test_the_audit_page_is_scoped_by_default_and_says_so() -> None:
         has_more=False,
         report=None,
     )
-    assert "(2 of 5 in the whole record)" in html
-    assert "Show every organisation" in html  # the whole record is an explicit step
+    assert "All organisations (5)" in html
+    assert "scope=ledger" in html  # the whole record is an explicit step
     assert "Signed in through: gateway (" in html  # attestation, in the row's details
     assert "not recorded" in html  # pre-attestation rows render gracefully
     assert "TradeCaptured(org=acme-energy" in html
@@ -496,7 +505,7 @@ def test_the_audit_pages_ledger_scope_labels_itself() -> None:
         report=None,
     )
     assert "for every organisation" in html
-    assert "Show only" in html
+    assert ">Only " in html
 
 
 def test_the_verify_report_fragment_is_a_fragment_with_loud_failures() -> None:
@@ -517,7 +526,7 @@ def test_the_verify_report_fragment_is_a_fragment_with_loud_failures() -> None:
 def test_the_error_page_needs_no_context() -> None:
     html = templates.env.get_template("error.html").render()
     assert "database is unavailable" in html
-    assert "Viewing: now" in html  # the chrome still stands
+    assert ">Now</span>" in html  # the chrome still stands
 
 
 def test_the_ago_filter_speaks_in_the_coarsest_honest_unit() -> None:
@@ -566,9 +575,9 @@ def test_a_past_moment_is_announced_and_rides_every_link() -> None:
     # banner says which moment, every screen link keeps it, and one link
     # leaves it.
     html = _blotter_at("org=acme-energy&as_of=2026-07-01T10:00")
-    assert "Viewing the past: 2026-07-01 10:00:00 UTC" in html
-    assert "Viewing: now" not in html
-    assert "You are viewing the book as it stood at 2026-07-01 10:00:00 UTC" in html
+    assert "As of 2026-07-01 10:00:00 UTC" in html
+    assert ">Now</span>" not in html
+    assert "The book as it stood at 2026-07-01 10:00:00 UTC" in html
     assert 'href="/ui/positions?org=acme-energy&amp;as_of=2026-07-01T10%3A00%3A00"' in html
     assert "&amp;as_of=2026-07-01T10%3A00%3A00&offset=50" in html  # paging stays in the past
     assert '<input type="hidden" name="as_of" value="2026-07-01T10:00:00">' in html
@@ -581,7 +590,7 @@ def test_the_moment_is_shown_in_utc_however_it_was_written() -> None:
     # with "UTC" appended. A fraction of a second survives in the links
     # and the banner; the picker holds whole seconds.
     html = _blotter_at("org=acme-energy&as_of=2026-07-01T12:00:00.250000%2B02:00")
-    assert "Viewing the past: 2026-07-01 10:00:00 UTC" in html
+    assert "As of 2026-07-01 10:00:00 UTC" in html
     assert "12:00" not in html
     assert "as_of=2026-07-01T10%3A00%3A00.250000" in html
     assert 'name="as_of" step="1" value="2026-07-01T10:00:00"' in html
@@ -603,8 +612,8 @@ def test_changing_the_moment_keeps_the_filters_and_drops_the_page() -> None:
 
 def test_a_moment_nothing_can_read_leaves_the_top_bar_in_the_present() -> None:
     html = _blotter_at("org=acme-energy&as_of=last-tuesday")
-    assert "Viewing: now" in html
-    assert "You are viewing the book as it stood" not in html
+    assert ">Now</span>" in html
+    assert "The book as it stood at" not in html
 
 
 def test_a_screen_that_cannot_answer_for_the_past_says_so() -> None:
@@ -612,8 +621,8 @@ def test_a_screen_that_cannot_answer_for_the_past_says_so() -> None:
         url=SimpleNamespace(path="/ui/audit"), query_params=QueryParams("as_of=2026-07-01T10:00")
     )
     html = templates.env.get_template("error.html").render(request=past, org="acme", active="audit")
-    assert "This screen always shows the present." in html
-    assert "You are viewing the book as it stood" not in html
+    assert "This screen shows the present." in html
+    assert "The book as it stood at" not in html
 
 
 def test_each_book_is_summed_up_against_its_limit() -> None:
@@ -762,9 +771,9 @@ def test_refusals_sit_beside_the_record_and_say_what_they_are() -> None:
     # Absent values are said to be absent, not shown as nothing.
     assert "The values the rule was reading were not captured." in html
     # What the list is, and how far it reaches.
-    assert "not part of the record below" in html
-    assert "at most the latest 20 refusals" in html
-    assert "not as proof" in html
+    assert "not in the record" in html
+    assert "keeps the latest 20" in html
+    assert "a lead, not proof" in html
     # An empty list is not a claim that nothing was ever refused.
     empty = _render(
         "audit.html",
@@ -783,7 +792,7 @@ def test_refusals_sit_beside_the_record_and_say_what_they_are() -> None:
         refused=RefusalLog(caveat="x", limit=20, refusals=[]),
     )
     assert "Nothing refused lately." in empty
-    assert "at most the latest 20 refusals" in empty
+    assert "keeps the latest 20" in empty
 
 
 def test_room_left_allows_for_what_open_instructions_hold() -> None:
@@ -889,3 +898,14 @@ def test_unreadable_breaches_are_unknown_never_none(tmp_path: Path) -> None:
         breaches=[],
     )
     assert "Breaches to answer" not in quiet
+
+
+def test_every_act_has_plain_words_and_no_other() -> None:
+    acts = set(re.findall(r"^transformation (\w+)\(", MODEL_FILE.read_text(), re.MULTILINE))
+    assert set(ACTS_IN_PLAIN_WORDS) == acts
+
+
+def test_a_delivery_window_writes_its_date_once_when_it_can() -> None:
+    day = dt.datetime(2026, 7, 1, 7, tzinfo=dt.UTC)
+    assert _window(day, day + dt.timedelta(hours=4)) == "2026-07-01 07:00 - 11:00Z"
+    assert _window(day, day + dt.timedelta(hours=17)) == "2026-07-01 07:00 - 2026-07-02 00:00Z"

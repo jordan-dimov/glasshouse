@@ -245,7 +245,7 @@ def test_the_same_refusals_are_on_the_api_and_the_audit_screen(
     assert "not the audit history" in api["caveat"]
     assert "Refused lately" in page
     assert "This would take the book past its position limit in that hour." in page
-    assert "at most the latest 20 refusals" in page
+    assert "keeps the latest 20" in page
     # The refused trade is nowhere in the record of changes below it.
     assert "SCREEN-1" not in page[page.index("<h2>Changes") :]
     # A short recent list on the first page, not repeated on every page.

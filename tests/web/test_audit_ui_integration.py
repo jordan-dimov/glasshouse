@@ -41,8 +41,8 @@ def test_the_log_is_newest_first_scoped_by_default_with_attestation(ui: TestClie
     assert page.status_code == 200
     # The default view is scoped to the org and says so; the whole
     # ledger is an explicit auditor-view step.
-    assert "in the whole record)" in page.text
-    assert "Show every organisation" in page.text
+    assert "All organisations (" in page.text
+    assert "scope=ledger" in page.text
     assert len(scoped) <= len(ledger)
     assert all(
         any(c["args"].get("org") == ORG for c in (*e["asserted"], *e["retracted"])) for e in scoped
@@ -64,7 +64,7 @@ def test_the_ledger_scope_shows_every_tenant_and_labels_itself(ui: TestClient) -
         page = client.get("/ui/audit", params={"org": ORG, "scope": "ledger"})
     assert page.status_code == 200
     assert "for every organisation" in page.text
-    assert "Show only" in page.text
+    assert ">Only " in page.text
 
 
 def test_the_verify_panel_renders_six_green_legs(ui: TestClient) -> None:
