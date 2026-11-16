@@ -271,13 +271,13 @@ def test_after_a_roll_yesterdays_values_are_not_todays(
         )
         assert isinstance(valued, Committed)
     monday = business_day.read(client, org=org)
-    assert (monday.date, monday.unvalued(), len(monday.current())) == (DAY_ONE.date(), 0, 2)
+    assert (monday.date, monday.awaiting(), len(monday.current())) == (DAY_ONE.date(), 0, 2)
     (monday_total,) = monday.totals()
 
     # Rolled, nothing revalued: no value is today's, and none is counted.
     committed(client, models.RollBusinessDateRequest(org=org, date=DAY_TWO.date()), "ops")
     tuesday = business_day.read(client, org=org)
-    assert (tuesday.date, tuesday.totals(), tuesday.unvalued()) == (DAY_TWO.date(), [], 2)
+    assert (tuesday.date, tuesday.totals(), tuesday.awaiting()) == (DAY_TWO.date(), [], 2)
     assert tuesday.current() == set()
 
     # One of two revalued: the total is that one alone, never a mix of
@@ -285,7 +285,7 @@ def test_after_a_roll_yesterdays_values_are_not_todays(
     value_trade(client, store, actor="risk-engine", org=org, book=BOOK, trade=f"{org}/DB-1")
     partly = business_day.read(client, org=org)
     (total,) = partly.totals()
-    assert (total.trade_count, partly.unvalued()) == (1, 1)
+    assert (total.trade_count, partly.awaiting()) == (1, 1)
     (row,) = [r for r in partly.rows if r.valued]
     assert (row.trade, total.total_mtm) == (f"{org}/DB-1", row.mtm)
     assert monday_total.trade_count == 2
@@ -368,3 +368,84 @@ def test_a_roll_racing_a_mark_never_admits_a_mark_for_a_day_already_left(
     else:
         assert isinstance(marked, Rejected)
         assert marked.rule == "valued_against_official_curve_and_terms_in_force"
+
+
+def test_a_trade_that_cannot_be_valued_is_counted_not_dropped(
+    stack: tuple[GlasshouseClient, CurveStore, sa.Engine],
+) -> None:
+    # Two trades valued; a third in a market with no curve for the day;
+    # a fourth whose terms are not in force yet. The total is the two, and
+    # the other two are counted, each with its reason, never left out.
+    client, store, _ = stack
+    org = "date-gaps"
+    _desk(client, store, org)
+    _second_trade(client, org)
+    committed(
+        client, models.DeclareMarketRequest(org=org, market="fr-power", currency="EUR"), "bootstrap"
+    )
+    for trade, market, trade_date in (
+        ("NO-CURVE", "fr-power", TRADE_DATE),
+        ("LATER", MARKET, DAY_TWO.date() + dt.timedelta(days=3)),
+    ):
+        committed(
+            client,
+            models.CaptureTradeRequest(
+                org=org,
+                book=BOOK,
+                trade=f"{org}/{trade}",
+                counterparty="cp",
+                market=market,
+                direction="buy",
+                version=terms_version_id(f"{org}/{trade}", 1),
+                quantity=Decimal("1"),
+                price=Decimal("80"),
+                delivery_start=DAY_ONE + dt.timedelta(hours=20),
+                delivery_end=DAY_ONE + dt.timedelta(hours=21),
+                trade_date=trade_date,
+            ),
+            "alice",
+        )
+    committed(client, models.RollBusinessDateRequest(org=org, date=DAY_ONE.date()), "ops")
+    for trade in ("DB-1", "DB-2"):
+        value_trade(client, store, actor="risk-engine", org=org, book=BOOK, trade=f"{org}/{trade}")
+    day = business_day.read(client, org=org)
+    (total,) = day.totals()
+    assert total.trade_count == 2
+    assert (day.awaiting(), day.missing("missing_curve"), day.missing("no_terms_in_force")) == (
+        0,
+        1,
+        1,
+    )
+    reasons = {g.trade: g.reason for g in day.gaps}
+    assert reasons == {f"{org}/NO-CURVE": "missing_curve", f"{org}/LATER": "no_terms_in_force"}
+
+
+def test_a_roll_between_the_reads_cannot_mix_two_days(
+    stack: tuple[GlasshouseClient, CurveStore, sa.Engine],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # The summary is read as of one instant. Force a roll between its
+    # reads: the date and every row still describe the same moment.
+    client, store, _ = stack
+    org = "date-between"
+    _desk(client, store, org)
+    committed(client, models.RollBusinessDateRequest(org=org, date=DAY_ONE.date()), "ops")
+    value_trade(client, store, actor="risk-engine", org=org, book=BOOK, trade=f"{org}/DB-1")
+    other = GlasshouseClient(str(MODEL_FILE), DB, binary=str(BINARY))
+    original = client.derived_named
+    rolled: list[bool] = []
+
+    def roll_first(name: str, **kwargs: object) -> object:
+        if not rolled:
+            committed(other, models.RollBusinessDateRequest(org=org, date=DAY_TWO.date()), "ops")
+            rolled.append(True)
+        return original(name, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(client, "derived_named", roll_first)
+    day = business_day.read(client, org=org)
+    assert rolled == [True]
+    assert day.date == DAY_ONE.date()  # the moment the read began
+    assert all(r.business_date == DAY_ONE.date() for r in day.rows)
+    assert len(day.current()) == 1  # Monday's mark, as Monday's
+    monkeypatch.undo()
+    assert business_day.read(client, org=org).date == DAY_TWO.date()

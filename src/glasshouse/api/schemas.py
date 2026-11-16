@@ -116,11 +116,10 @@ class ValuationSummary(BaseModel):
     would double-count every corrected curve, and never a sum across
     currencies, which would be no amount of anything. On the overview
     these are the marks struck for the business date only (the ledger's
-    `ValuationOnBusinessDate`), so `valued_at` is not given there."""
+    `ValuationOnBusinessDate`)."""
 
     currency: str
     trade_count: int
-    valued_at: datetime | None
     total_mtm: ExactDecimal
 
 
@@ -142,13 +141,15 @@ class OverviewSummary(BaseModel):
     valuations: list[ValuationSummary]
     projection: ProjectionCursor
     # The day the organisation's valuations are for, rolled by an act in
-    # the ledger; None before the first roll, or if the ledger could not
-    # be read. `valuations` are then the marks struck for that day, and
-    # `not_valued_for_business_date` counts the trades with that day's
-    # curve but no mark for it yet. With no business date, `valuations`
-    # is empty: there is no day for a figure to belong to.
+    # the ledger; None before the first roll. `valuations` are the marks
+    # struck for that day, and every other trade is counted by why it has
+    # none: a mark not struck yet, no official curve for the day in its
+    # market, or no terms in force on it yet. With no business date,
+    # `valuations` is empty: there is no day for a figure to belong to.
     business_date: date | None = None
-    not_valued_for_business_date: int = 0
+    awaiting_valuation: int = 0
+    missing_curve: int = 0
+    no_terms_in_force: int = 0
 
 
 class CurveVersion(BaseModel):
@@ -395,4 +396,6 @@ class BusinessDay(BaseModel):
     org: str
     business_date: date | None
     valued: int
-    not_valued: int
+    awaiting_valuation: int
+    missing_curve: int
+    no_terms_in_force: int

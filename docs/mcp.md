@@ -11,7 +11,7 @@ An agent gets no special treatment. Its trade is a proposal like anyone's, and t
 | `list_trades` | Every trade in the book, each with its price and the currency of that price. Takes `as_of` to see the book at a past time. |
 | `list_positions` | Net MW per delivery hour, per book. Takes `as_of` too. |
 | `list_markets` | The markets, each with the currency it is priced in. |
-| `business_date` | The business date (the day valuations are for) and how many trades are valued for it. Read only. |
+| `business_date` | The business date (the day valuations are for), how many trades are valued for it, and why the others are not. Read only. |
 | `position_limits` | The cap on each book's position in any one hour. |
 | `explain_trade` | Asks whether a trade would be accepted. Records nothing. |
 | `propose_trade` | Proposes one trade. The answer is accepted or refused. |

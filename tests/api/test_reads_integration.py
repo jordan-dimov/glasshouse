@@ -285,7 +285,8 @@ def test_overview_summarises_one_coherent_snapshot(api: TestClient) -> None:
     # (crv-v2) is not today's: it is not counted, and the trade is listed
     # as not yet valued for the day, never as 35.00.
     assert summary["valuations"] == []
-    assert summary["not_valued_for_business_date"] == 1
+    assert summary["awaiting_valuation"] == 1
+    assert (summary["missing_curve"], summary["no_terms_in_force"]) == (0, 0)
     assert summary["projection"]["transition_id"]  # the cursor is set after rebuild
     # The business date is the ledger's, rolled by the setup (#44).
     assert summary["business_date"] == AS_OF.isoformat()

@@ -229,6 +229,7 @@ Operational notes, each learned the hard way on the first live deploy:
 - **Regulatory precision**: REMIT II is Regulation (EU) 2024/1106 with a 2026 implementing layer; secondary-sourced dates (e.g. quarterly forward-exposure reporting timing) are not made load-bearing anywhere without the primary text.
 - **Performance honesty**: the commit layer is measured (~1.6s/commit on a 100k ledger; latency harness in-tree upstream) and right for book-of-record volumes; the concurrency law (govern lifecycle events, not ticks) is the stated answer to "will it scale", and the numbers are published, not hidden.
 - **No graveyard**: the first release is narrow but genuinely usable (the Power Trading Core), not a demo, not an architecture sample. Estimated honestly: v0 is 2-3 weeks of focused pair-programming, not one.
+- **An absent result is not a zero.** A derived business view must tell apart a fact that is absent, a result that is incomplete, and a result that is genuinely zero: "no breaches" is not "breaches could not be read", and a portfolio total over the trades that happen to have a curve is not a total over the book. The distinctions belong in the model (derived claims that name what is missing and why), not in defensive Python around it. First applied to valuations on the business date (#44: `ValuationGap` names each trade that cannot be valued that day and why).
 
 ## 15. Open items
 

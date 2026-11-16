@@ -1572,6 +1572,37 @@ class ValuationOnBusinessDateClaim:
 
 
 @dataclass(frozen=True)
+class ValuationGapClaim:
+    """One admitted `ValuationGap` claim, decoded by declared kind."""
+
+    PREDICATE: ClassVar[str] = "ValuationGap"
+
+    org: str
+    trade: str
+    market: str
+    business_date: date
+    reason: str
+
+    @classmethod
+    def from_named(cls, args: dict[str, object]) -> ValuationGapClaim:
+        values.named_fields(
+            "ValuationGap",
+            args,
+            ("org", "trade", "market", "business_date", "reason"),
+        )
+        return cls(
+            org=values.named_text("ValuationGap.org", args["org"]),
+            trade=values.named_text("ValuationGap.trade", args["trade"]),
+            market=values.named_text("ValuationGap.market", args["market"]),
+            business_date=values.named_date(
+                "ValuationGap.business_date",
+                args["business_date"],
+            ),
+            reason=values.named_text("ValuationGap.reason", args["reason"]),
+        )
+
+
+@dataclass(frozen=True)
 class UnansweredBreachClaim:
     """One admitted `UnansweredBreach` claim, decoded by declared kind."""
 

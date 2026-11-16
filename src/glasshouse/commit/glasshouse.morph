@@ -477,6 +477,20 @@ derived ValuationOnBusinessDate(org, trade, market, business_date, curve_version
     value mtm = value TradeValued(org: org, trade: trade, curve_version: curve_version, terms_version: terms_version, mtm: _, ..) default 0
     value currency = value MarketCurrency(org: org, market: market, currency: _)
 
+-- Each trade that cannot be valued for the business date, and why: no
+-- official curve for that day in its market (`#missing_curve`), or no
+-- terms in force on it yet (`#no_terms_in_force`, a trade that starts
+-- later). Together with ValuationOnBusinessDate this covers every
+-- captured trade, so a trade never drops out of the count because what
+-- is needed to value it is missing.
+predicate ValuationGap(org: Subject, trade: Subject, market: Subject, business_date: Date, reason: Subject)
+derived ValuationGap(org, trade, market, business_date):
+    over TradeCaptured(org: org, trade: trade, market: market, ..)
+    and BusinessDate(org: org, date: business_date)
+    and not (OfficialCurve(org: org, market: market, as_of: business_date, ..)
+        and trade_terms_in_force_on(trade: trade, as_of: business_date, org: org, ..))
+    value reason = if(OfficialCurve(org: org, market: market, as_of: business_date, ..), #no_terms_in_force, #missing_curve)
+
 -- The breaches nobody has answered yet, with the fill each came from:
 -- what the Positions screen lists. Worked out by the ledger each time
 -- it is asked, so it can never disagree with the facts it is read from.

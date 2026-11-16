@@ -185,12 +185,9 @@ def test_overview_renders_the_tiles_and_health() -> None:
     summary = OverviewSummary(
         org="acme-energy",
         books=[BookSummary(book="spec-de", trade_count=2)],
-        valuations=[
-            ValuationSummary(
-                currency="EUR", trade_count=2, valued_at=T0, total_mtm=Decimal("-66.25")
-            )
-        ],
+        valuations=[ValuationSummary(currency="EUR", trade_count=2, total_mtm=Decimal("-66.25"))],
         projection=ProjectionCursor(committed_at=T0, transition_id="txn-3"),
+        business_date=dt.date(2026, 7, 1),
     )
     html = _render(
         "overview.html",
@@ -218,11 +215,7 @@ def test_overview_says_when_a_failing_projector_is_failing() -> None:
     summary = OverviewSummary(
         org="acme-energy",
         books=[BookSummary(book="spec-de", trade_count=2)],
-        valuations=[
-            ValuationSummary(
-                currency="EUR", trade_count=2, valued_at=T0, total_mtm=Decimal("-66.25")
-            )
-        ],
+        valuations=[ValuationSummary(currency="EUR", trade_count=2, total_mtm=Decimal("-66.25"))],
         projection=ProjectionCursor(committed_at=T0, transition_id="txn-3"),
     )
     html = _render(
@@ -248,11 +241,7 @@ def test_overview_does_not_invent_a_verdict_for_another_services_projector() -> 
     summary = OverviewSummary(
         org="acme-energy",
         books=[BookSummary(book="spec-de", trade_count=2)],
-        valuations=[
-            ValuationSummary(
-                currency="EUR", trade_count=2, valued_at=T0, total_mtm=Decimal("-66.25")
-            )
-        ],
+        valuations=[ValuationSummary(currency="EUR", trade_count=2, total_mtm=Decimal("-66.25"))],
         projection=ProjectionCursor(committed_at=T0, transition_id="txn-3"),
     )
     html = _render(
@@ -932,15 +921,17 @@ def test_the_overview_shows_the_business_date_or_says_it_is_not_set() -> None:
 
     today = overview(
         business_date=dt.date(2026, 7, 1),
-        valuations=[
-            ValuationSummary(currency="EUR", trade_count=2, valued_at=None, total_mtm=Decimal("5"))
-        ],
-        not_valued_for_business_date=1,
+        valuations=[ValuationSummary(currency="EUR", trade_count=2, total_mtm=Decimal("5"))],
+        awaiting_valuation=1,
+        missing_curve=2,
     )
     assert ">2026-07-01</p>" in today
     assert "Values for 2026-07-01" in today
-    assert "1 trade not yet valued for this day." in today
+    assert (
+        "Not in the total: 1 trade awaiting a value; 2 trades with no curve for the day." in today
+    )
     assert "Valuations wait until a business date is rolled." in overview()
+    assert "No business date yet, so no values." in overview()
     # A ledger that did not answer shows no value at all, never an old one.
     silent = overview(answered=False)
     assert "could not be read" in silent
