@@ -64,7 +64,8 @@
     {% else %}
     <span class="as-of-pill" title="Pick a past time to see the book as it stood then">Now</span>
     {% endif %}
-    <time class="system-time" datetime="{{ system_time().iso }}" title="System time">{{ system_time().shown }}</time>
+    {% set loaded = system_time() %}
+    <time class="system-time" datetime="{{ loaded.iso }}" title="When this page was loaded, by the system's clock">Loaded {{ loaded.shown }}</time>
   </div>
 </header>
 <main class="page">
@@ -80,6 +81,7 @@
 <footer class="footer">
   <span>Glasshouse {{ version }}</span>
   <span>built on <a href="https://github.com/jordan-dimov/morpholog" target="_blank" rel="noopener noreferrer">Morpholog {{ morpholog_version }}</a></span>
+  {% if environment() == "demo" %}<a href="https://github.com/jordan-dimov/glasshouse/blob/main/SCOPE.md#production-readiness" target="_blank" rel="noopener noreferrer">Evaluation demo · L0</a>{% endif %}
 </footer>
 </body>
 </html>

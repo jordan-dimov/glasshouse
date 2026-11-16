@@ -988,7 +988,11 @@ def positions(
         engine, org=org, book=book, start=start_at, end=end_at, past=past
     )
     positions_now = [p for p in every_market if market is None or p.market == market]
-    governed = _limits_and_instructions(client, org)
+    # Limits, open instructions and breaches are read from the ledger as
+    # it stands now; set beside a past moment's positions they would mix
+    # then and now on one screen. For a past moment they are left out
+    # until they can be read as of it.
+    governed = None if past else _limits_and_instructions(client, org)
     caps, open_instructions = governed or ({}, [])
     # The filter bar governs every section: the instructions listed are
     # those in the chosen book that deliver inside the chosen window.
@@ -1009,20 +1013,17 @@ def positions(
             "end": end or "",
             "as_of": asof.canonical(past.at) if past else "",
             "positions": positions_now,
-            # The caps and the open instructions are the ones standing
-            # now, also when the positions shown are a past moment's;
-            # the screen says so.
             "limits": (
                 limit_summary(every_market, caps, open_instructions, start=start_at, end=end_at)
                 if governed
                 else None
             ),
             "instructions": open_instructions,
-            "breaches": _unanswered_breaches(client, org, book),
-            # Which of the marks below are the business date's: a trade
-            # valued only on an earlier day is marked so, and never read
-            # as today's. Unknown (None) for a past moment, or if the
-            # ledger cannot answer.
+            "breaches": [] if past else _unanswered_breaches(client, org, book),
+            # Which of the marks below are the business date's: a mark not
+            # struck against today's official inputs is marked so, and
+            # never read as today's. Unknown (None) for a past moment, or
+            # if the ledger cannot answer.
             "current_marks": None if past else _current_marks(client, org),
             # The one filter bar governs both sections: the marks narrow
             # by the same book and market as the positions above them.
