@@ -36,7 +36,7 @@ from glasshouse.projections import (
     trade_terms_version,
     trade_valuation,
 )
-from tests.support import BINARY, DB, login_role, needs_live_stack, provision
+from tests.support import BINARY, DB, login_role, needs_live_stack, open_business_day, provision
 
 ORG, BOOK, MARKET = "acme-energy", "spec-de", "de-power"
 AS_OF = dt.date(2026, 6, 8)
@@ -86,6 +86,7 @@ def history(morpholog: GlasshouseClient, engine: sa.Engine) -> tuple[int, str]:
         models.GrantValuationAuthorityRequest(principal="risk-engine", org=ORG, book=BOOK),
     ):
         assert isinstance(morpholog.submit(grant, actor="bootstrap"), Committed)
+    open_business_day(morpholog, ORG, AS_OF)
     captured = morpholog.submit(
         models.CaptureTradeRequest(
             org=ORG,
@@ -167,7 +168,7 @@ def history(morpholog: GlasshouseClient, engine: sa.Engine) -> tuple[int, str]:
         value_trade(morpholog, store, actor="risk-engine", org=ORG, book=BOOK, trade="T-001"),
         Committed,
     )
-    return 13, captured.transition_id
+    return 15, captured.transition_id
 
 
 def _rows(engine: sa.Engine) -> dict[str, list[tuple[object, ...]]]:

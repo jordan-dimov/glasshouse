@@ -23,8 +23,8 @@ from typing import Annotated
 
 from fastapi import APIRouter, HTTPException, Query
 
-from glasshouse.api import asof, queries
-from glasshouse.api.deps import AS_OF_ERRORS, UNAVAILABLE, EngineDep, PastDep
+from glasshouse.api import asof, business_day, queries
+from glasshouse.api.deps import AS_OF_ERRORS, UNAVAILABLE, ClientDep, EngineDep, PastDep
 from glasshouse.api.schemas import (
     BlotterTrade,
     BookScope,
@@ -34,6 +34,7 @@ from glasshouse.api.schemas import (
     TradeTermsVersion,
     TradeValuation,
 )
+from glasshouse.commit import MorphologError
 
 router = APIRouter(tags=["reads"], responses=UNAVAILABLE)
 
@@ -50,9 +51,16 @@ def list_orgs(engine: EngineDep) -> list[str]:
     return queries.list_orgs(engine)
 
 
-@router.get("/overview")
-def overview(org: str, engine: EngineDep) -> OverviewSummary:
-    return queries.overview(engine, org=org)
+@router.get("/overview", responses=UNAVAILABLE)
+def overview(org: str, engine: EngineDep, client: ClientDep) -> OverviewSummary:
+    summary = queries.overview(engine, org=org)
+    try:
+        return business_day.onto(summary, client)
+    except MorphologError as unreadable:
+        # The books are the read model's and still true; what the trades
+        # are worth today is the ledger's, and is not guessed from
+        # yesterday's marks.
+        raise HTTPException(status_code=503, detail="the ledger could not be read") from unreadable
 
 
 @router.get("/trades", responses=AS_OF_ERRORS)

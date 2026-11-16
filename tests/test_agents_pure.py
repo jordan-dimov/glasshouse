@@ -31,6 +31,7 @@ TOOLS = {
     "list_trades",
     "list_positions",
     "list_markets",
+    "business_date",
     "position_limits",
     "explain_trade",
     "propose_trade",

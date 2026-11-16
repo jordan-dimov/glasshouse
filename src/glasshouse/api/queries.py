@@ -17,7 +17,6 @@ operational, never an internal error.
 from __future__ import annotations
 
 from datetime import datetime
-from decimal import Decimal
 from typing import Any
 
 import sqlalchemy as sa
@@ -31,7 +30,6 @@ from glasshouse.api.schemas import (
     ProjectionCursor,
     TradeTermsVersion,
     TradeValuation,
-    ValuationSummary,
 )
 from glasshouse.projections.projector import CURSOR
 from glasshouse.projections.tables import (
@@ -268,27 +266,15 @@ def list_valuations(
 
 
 def overview(engine: sa.Engine, *, org: str) -> OverviewSummary:
-    """The operational landing tiles, read in one REPEATABLE READ
-    snapshot so book counts, the current valuation summary and the
-    projection cursor describe one coherent moment."""
+    """The read model's part of the landing tiles, in one REPEATABLE READ
+    snapshot: book counts and the projection cursor. What the trades are
+    worth on the business date is the ledger's to say
+    (`business_day.onto`), so no valuation is totalled here."""
     books_statement = (
         sa.select(blotter_trade.c.book, sa.func.count().label("trade_count"))
         .where(blotter_trade.c.org == org)
         .group_by(blotter_trade.c.book)
         .order_by(blotter_trade.c.book)
-    )
-    latest = _latest_valuations(org).subquery()
-    # One total per currency: amounts in different currencies are never
-    # added together, here or anywhere.
-    valuation_statement = (
-        sa.select(
-            latest.c.currency,
-            sa.func.count().label("trade_count"),
-            sa.func.max(latest.c.valued_at).label("valued_at"),
-            sa.func.sum(latest.c.mtm).label("total_mtm"),
-        )
-        .group_by(latest.c.currency)
-        .order_by(latest.c.currency)
     )
     cursor_statement = sa.select(
         projection_progress.c.committed_at, projection_progress.c.transition_id
@@ -300,7 +286,6 @@ def overview(engine: sa.Engine, *, org: str) -> OverviewSummary:
             connection.begin(),
         ):
             books = connection.execute(books_statement).all()
-            marks = connection.execute(valuation_statement).all()
             cursor = connection.execute(cursor_statement).one_or_none()
     except sa.exc.SQLAlchemyError as exc:
         raise ReadUnavailableError from exc
@@ -308,15 +293,7 @@ def overview(engine: sa.Engine, *, org: str) -> OverviewSummary:
     return OverviewSummary(
         org=org,
         books=[BookSummary(book=book, trade_count=count) for book, count in books],
-        valuations=[
-            ValuationSummary(
-                currency=mark.currency,
-                trade_count=mark.trade_count,
-                valued_at=mark.valued_at,
-                total_mtm=Decimal(mark.total_mtm),
-            )
-            for mark in marks
-        ],
+        valuations=[],
         projection=ProjectionCursor(
             committed_at=cursor.committed_at if cursor else None,
             transition_id=cursor.transition_id if cursor else None,

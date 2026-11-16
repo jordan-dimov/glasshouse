@@ -114,6 +114,12 @@ def canonical(at: dt.datetime) -> str:
     return at.astimezone(dt.UTC).replace(tzinfo=None).isoformat()
 
 
+def unsettled(error: MorphologError) -> bool:
+    """Whether the binary refused an as-of read because the instant is not
+    settled yet (a writer that may be ordered before it is still in flight)."""
+    return _NOT_SETTLED in str(error)
+
+
 def settle(client: GlasshouseClient, at: dt.datetime) -> None:
     """Ask the substrate whether the state as of `at` is final, by its
     own as-of read. Returns when it is; raises `NotSettledError` when a
@@ -122,7 +128,7 @@ def settle(client: GlasshouseClient, at: dt.datetime) -> None:
     try:
         client.claims_named(_SETTLEMENT_PROBE, as_of=at.isoformat())
     except MorphologError as refused:
-        if _NOT_SETTLED in str(refused):
+        if unsettled(refused):
             raise NotSettledError(
                 f"the book as of {canonical(at)} UTC is not final yet: a write placed "
                 "before that moment is still in progress"

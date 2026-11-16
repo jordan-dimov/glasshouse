@@ -216,6 +216,38 @@ class GrantLimitAuthorityRequest:
 
 
 @dataclass(frozen=True)
+class GrantDateAuthorityRequest:
+    """Arguments for `grant_date_authority`."""
+
+    TRANSFORMATION: ClassVar[str] = "grant_date_authority"
+
+    principal: str
+    org: str
+
+    def to_args_named(self) -> dict[str, object]:
+        return {
+            "principal": values.encode_named(self.principal),
+            "org": values.encode_named(self.org),
+        }
+
+
+@dataclass(frozen=True)
+class RollBusinessDateRequest:
+    """Arguments for `roll_business_date`."""
+
+    TRANSFORMATION: ClassVar[str] = "roll_business_date"
+
+    org: str
+    date: date
+
+    def to_args_named(self) -> dict[str, object]:
+        return {
+            "org": values.encode_named(self.org),
+            "date": values.encode_named(self.date),
+        }
+
+
+@dataclass(frozen=True)
 class DeclareMarketRequest:
     """Arguments for `declare_market`."""
 
@@ -764,6 +796,42 @@ class ActorAssertionAuthorityClaim:
                 "ActorAssertionAuthority.login_role",
                 args["login_role"],
             ),
+        )
+
+
+@dataclass(frozen=True)
+class MayRollBusinessDateClaim:
+    """One admitted `MayRollBusinessDate` claim, decoded by declared kind."""
+
+    PREDICATE: ClassVar[str] = "MayRollBusinessDate"
+
+    actor: str
+    org: str
+
+    @classmethod
+    def from_named(cls, args: dict[str, object]) -> MayRollBusinessDateClaim:
+        values.named_fields("MayRollBusinessDate", args, ("actor", "org"))
+        return cls(
+            actor=values.named_text("MayRollBusinessDate.actor", args["actor"]),
+            org=values.named_text("MayRollBusinessDate.org", args["org"]),
+        )
+
+
+@dataclass(frozen=True)
+class BusinessDateClaim:
+    """One admitted `BusinessDate` claim, decoded by declared kind."""
+
+    PREDICATE: ClassVar[str] = "BusinessDate"
+
+    org: str
+    date: date
+
+    @classmethod
+    def from_named(cls, args: dict[str, object]) -> BusinessDateClaim:
+        values.named_fields("BusinessDate", args, ("org", "date"))
+        return cls(
+            org=values.named_text("BusinessDate.org", args["org"]),
+            date=values.named_date("BusinessDate.date", args["date"]),
         )
 
 
@@ -1442,6 +1510,95 @@ class InstructionStandingClaim:
                 "InstructionStanding.approved_by",
                 args["approved_by"],
             ),
+        )
+
+
+@dataclass(frozen=True)
+class ValuationOnBusinessDateClaim:
+    """One admitted `ValuationOnBusinessDate` claim, decoded by declared kind."""
+
+    PREDICATE: ClassVar[str] = "ValuationOnBusinessDate"
+
+    org: str
+    trade: str
+    market: str
+    business_date: date
+    curve_version: str
+    terms_version: str
+    valued: bool
+    mtm: Decimal
+    currency: str
+
+    @classmethod
+    def from_named(cls, args: dict[str, object]) -> ValuationOnBusinessDateClaim:
+        values.named_fields(
+            "ValuationOnBusinessDate",
+            args,
+            (
+                "org",
+                "trade",
+                "market",
+                "business_date",
+                "curve_version",
+                "terms_version",
+                "valued",
+                "mtm",
+                "currency",
+            ),
+        )
+        return cls(
+            org=values.named_text("ValuationOnBusinessDate.org", args["org"]),
+            trade=values.named_text("ValuationOnBusinessDate.trade", args["trade"]),
+            market=values.named_text("ValuationOnBusinessDate.market", args["market"]),
+            business_date=values.named_date(
+                "ValuationOnBusinessDate.business_date",
+                args["business_date"],
+            ),
+            curve_version=values.named_text(
+                "ValuationOnBusinessDate.curve_version",
+                args["curve_version"],
+            ),
+            terms_version=values.named_text(
+                "ValuationOnBusinessDate.terms_version",
+                args["terms_version"],
+            ),
+            valued=values.named_bool("ValuationOnBusinessDate.valued", args["valued"]),
+            mtm=values.named_decimal("ValuationOnBusinessDate.mtm", args["mtm"]),
+            currency=values.named_text(
+                "ValuationOnBusinessDate.currency",
+                args["currency"],
+            ),
+        )
+
+
+@dataclass(frozen=True)
+class ValuationGapClaim:
+    """One admitted `ValuationGap` claim, decoded by declared kind."""
+
+    PREDICATE: ClassVar[str] = "ValuationGap"
+
+    org: str
+    trade: str
+    market: str
+    business_date: date
+    reason: str
+
+    @classmethod
+    def from_named(cls, args: dict[str, object]) -> ValuationGapClaim:
+        values.named_fields(
+            "ValuationGap",
+            args,
+            ("org", "trade", "market", "business_date", "reason"),
+        )
+        return cls(
+            org=values.named_text("ValuationGap.org", args["org"]),
+            trade=values.named_text("ValuationGap.trade", args["trade"]),
+            market=values.named_text("ValuationGap.market", args["market"]),
+            business_date=values.named_date(
+                "ValuationGap.business_date",
+                args["business_date"],
+            ),
+            reason=values.named_text("ValuationGap.reason", args["reason"]),
         )
 
 

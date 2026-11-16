@@ -110,6 +110,10 @@ IGNORED = frozenset(
         "InstructionFill",
         "Breach",
         "BreachAnswered",
+        # The business date and who may roll it: read from governed state
+        # when a valuation is struck, not a projection.
+        "MayRollBusinessDate",
+        "BusinessDate",
     }
 )
 

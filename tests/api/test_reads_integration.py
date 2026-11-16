@@ -21,7 +21,7 @@ from glasshouse.compute.marking import correct_curve_version, register_curve_ver
 from glasshouse.compute.store import CurveStore
 from glasshouse.compute.terms import terms_version_id
 from glasshouse.projections import rebuild
-from tests.support import BINARY, DB, login_role, needs_live_stack, provision
+from tests.support import BINARY, DB, login_role, needs_live_stack, open_business_day, provision
 
 pytestmark = needs_live_stack
 
@@ -52,6 +52,7 @@ def seeded() -> sa.Engine:
         models.GrantValuationAuthorityRequest(principal="risk-engine", org=ORG, book=BOOK),
     ):
         assert isinstance(client.submit(grant, actor="bootstrap"), Committed)
+    open_business_day(client, ORG, AS_OF)
     assert isinstance(
         client.submit(
             models.CaptureTradeRequest(
@@ -279,14 +280,16 @@ def test_overview_summarises_one_coherent_snapshot(api: TestClient) -> None:
         summary = client.get("/overview", params={"org": ORG}).json()
     assert summary["org"] == ORG
     assert summary["books"] == [{"book": BOOK, "trade_count": 1}]
-    # The current total is the latest mark per trade - summing history
-    # (55.00 + 35.00) would double-count the corrected curve.
-    (marks,) = summary["valuations"]  # one currency in this book, so one total
-    assert marks["currency"] == "EUR"
-    assert marks["trade_count"] == 1
-    assert marks["total_mtm"] == "35.00"
-    assert marks["valued_at"] is not None
+    # The total is the business date's marks only. The official curve has
+    # moved on (crv-v3) with no revaluation, so the trade's newest mark
+    # (crv-v2) is not today's: it is not counted, and the trade is listed
+    # as not yet valued for the day, never as 35.00.
+    assert summary["valuations"] == []
+    assert summary["awaiting_valuation"] == 1
+    assert (summary["missing_curve"], summary["no_terms_in_force"]) == (0, 0)
     assert summary["projection"]["transition_id"]  # the cursor is set after rebuild
+    # The business date is the ledger's, rolled by the setup (#44).
+    assert summary["business_date"] == AS_OF.isoformat()
 
 
 def test_overview_for_an_unknown_org_is_empty_not_an_error(api: TestClient) -> None:
@@ -294,6 +297,7 @@ def test_overview_for_an_unknown_org_is_empty_not_an_error(api: TestClient) -> N
         summary = client.get("/overview", params={"org": "someone-else"}).json()
     assert summary["books"] == []
     assert summary["valuations"] == []
+    assert summary["business_date"] is None
 
 
 def test_trades_market_filter_and_pagination(api: TestClient) -> None:

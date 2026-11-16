@@ -39,7 +39,7 @@ from glasshouse.compute.marking import (
 )
 from glasshouse.compute.store import CurveStore, StoreError
 from glasshouse.compute.terms import terms_version_id
-from tests.support import BINARY, DB, login_role, needs_live_stack, provision
+from tests.support import BINARY, DB, login_role, needs_live_stack, open_business_day, provision
 
 ORG, BOOK, MARKET = "acme-energy", "spec-de", "de-power"
 AS_OF = dt.date(2026, 6, 8)
@@ -89,6 +89,7 @@ def monday(morpholog: GlasshouseClient, store: CurveStore) -> None:
         GrantValuationAuthorityRequest(principal="risk-engine", org=ORG, book=BOOK),
     ):
         assert isinstance(morpholog.submit(grant, actor="bootstrap"), Committed)
+    open_business_day(morpholog, ORG, AS_OF)
     assert isinstance(
         morpholog.submit(
             CaptureTradeRequest(

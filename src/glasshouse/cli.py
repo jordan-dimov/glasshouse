@@ -17,6 +17,7 @@ is the separate-worker loop.
 
 from __future__ import annotations
 
+import datetime as dt
 import sys
 from collections.abc import Callable
 from pathlib import Path
@@ -52,6 +53,7 @@ from glasshouse.commit.morpholog_client.models import (
     AnswerBreachRequest,
     LapseOverdueInstructionsRequest,
     PositionLimitClaim,
+    RollBusinessDateRequest,
     SetPositionLimitRequest,
 )
 from glasshouse.compute.store import CurveStore, engine_url
@@ -264,6 +266,30 @@ def set_limit_command(
     print(
         f"position limit for {book} in {org}: {cap_mw} MW{was}; transition {outcome.transition_id}"
     )
+
+
+@app.command(
+    "roll-business-date",
+    help="Roll an organisation's business date forward. From then on its valuations use that "
+    "day's official curves; the days before keep their curves and marks.",
+)
+def roll_business_date_command(
+    org: Annotated[str, typer.Option(help="the organisation")],
+    date: Annotated[str, typer.Option(help="the new business date, ISO, later than the current")],
+    actor: Annotated[str, typer.Option(help="who is rolling it (holds MayRollBusinessDate)")],
+    database_url: DatabaseUrl = "",
+) -> None:
+    client = _client(_db(database_url))
+    on = _readable(lambda: _iso_date(date, "date"))
+    outcome = _committed_or_exit(client, RollBusinessDateRequest(org=org, date=on), actor)
+    print(f"business date for {org}: {on}; transition {outcome.transition_id}")
+
+
+def _iso_date(text: str, name: str) -> dt.date:
+    try:
+        return dt.date.fromisoformat(text)
+    except ValueError:
+        raise ValueError(f"{name} must be an ISO date, like 2026-07-01, got {text!r}") from None
 
 
 @app.command(

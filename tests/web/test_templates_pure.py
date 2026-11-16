@@ -188,12 +188,9 @@ def test_overview_renders_the_tiles_and_health() -> None:
     summary = OverviewSummary(
         org="acme-energy",
         books=[BookSummary(book="spec-de", trade_count=2)],
-        valuations=[
-            ValuationSummary(
-                currency="EUR", trade_count=2, valued_at=T0, total_mtm=Decimal("-66.25")
-            )
-        ],
+        valuations=[ValuationSummary(currency="EUR", trade_count=2, total_mtm=Decimal("-66.25"))],
         projection=ProjectionCursor(committed_at=T0, transition_id="txn-3"),
+        business_date=dt.date(2026, 7, 1),
     )
     html = _render(
         "overview.html",
@@ -221,11 +218,7 @@ def test_overview_says_when_a_failing_projector_is_failing() -> None:
     summary = OverviewSummary(
         org="acme-energy",
         books=[BookSummary(book="spec-de", trade_count=2)],
-        valuations=[
-            ValuationSummary(
-                currency="EUR", trade_count=2, valued_at=T0, total_mtm=Decimal("-66.25")
-            )
-        ],
+        valuations=[ValuationSummary(currency="EUR", trade_count=2, total_mtm=Decimal("-66.25"))],
         projection=ProjectionCursor(committed_at=T0, transition_id="txn-3"),
     )
     html = _render(
@@ -251,11 +244,7 @@ def test_overview_does_not_invent_a_verdict_for_another_services_projector() -> 
     summary = OverviewSummary(
         org="acme-energy",
         books=[BookSummary(book="spec-de", trade_count=2)],
-        valuations=[
-            ValuationSummary(
-                currency="EUR", trade_count=2, valued_at=T0, total_mtm=Decimal("-66.25")
-            )
-        ],
+        valuations=[ValuationSummary(currency="EUR", trade_count=2, total_mtm=Decimal("-66.25"))],
         projection=ProjectionCursor(committed_at=T0, transition_id="txn-3"),
     )
     html = _render(
@@ -912,6 +901,44 @@ def test_a_delivery_window_writes_its_date_once_when_it_can() -> None:
     day = dt.datetime(2026, 7, 1, 7, tzinfo=dt.UTC)
     assert _window(day, day + dt.timedelta(hours=4)) == "2026-07-01 07:00 - 11:00Z"
     assert _window(day, day + dt.timedelta(hours=17)) == "2026-07-01 07:00 - 2026-07-02 00:00Z"
+
+
+def test_the_overview_shows_the_business_date_or_says_it_is_not_set() -> None:
+    def overview(answered: bool = True, **fields: object) -> str:
+        summary = OverviewSummary(
+            org="acme-energy",
+            books=[],
+            valuations=[],
+            projection=ProjectionCursor(committed_at=T0, transition_id="txn-1"),
+        ).model_copy(update=fields)
+        return _render(
+            "overview.html",
+            org="acme-energy",
+            org_options=["acme-energy"],
+            active="overview",
+            summary=summary,
+            ledger_answered=answered,
+            health={"morpholog": "ok", "database": "ok", "commit": "ok", "projector": "ok"},
+            projector=ProjectorProgress(polled_at=_now(), applied_at=T0, applied_total=1),
+        )
+
+    today = overview(
+        business_date=dt.date(2026, 7, 1),
+        valuations=[ValuationSummary(currency="EUR", trade_count=2, total_mtm=Decimal("5"))],
+        awaiting_valuation=1,
+        missing_curve=2,
+    )
+    assert ">2026-07-01</p>" in today
+    assert "Values for 2026-07-01" in today
+    assert (
+        "Not in the total: 1 trade awaiting a value; 2 trades with no curve for the day." in today
+    )
+    assert "Valuations wait until a business date is rolled." in overview()
+    assert "No business date yet, so no values." in overview()
+    # A ledger that did not answer shows no value at all, never an old one.
+    silent = overview(answered=False)
+    assert "could not be read" in silent
+    assert "Values for" not in silent
 
 
 def test_the_hosted_demo_says_what_it_is_quietly(monkeypatch: pytest.MonkeyPatch) -> None:

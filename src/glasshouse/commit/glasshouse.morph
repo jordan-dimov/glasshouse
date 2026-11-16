@@ -57,6 +57,17 @@ predicate MayEstablishOrganisations(actor: Subject)
 predicate ActorAssertionRestricted(actor: Subject)
 predicate ActorAssertionAuthority(actor: Subject, login_role: Subject)
 
+-- Who may roll an organisation's business date.
+predicate MayRollBusinessDate(actor: Subject, org: Subject)
+
+-- The organisation's business date: the day its valuations are for. One
+-- per organisation at a time, moved forward by an act (never back), so
+-- every roll is in the audit history and "which day were we valuing
+-- last Tuesday at 10:00" has one answer. It is a date the desk rolls,
+-- not the clock: the clock is `decided_at`, and the two are never mixed.
+predicate BusinessDate(org: Subject, date: Date)
+    unique by (org)
+
 -- The currency a market's prices and valuations are in. Set once, when
 -- the market is declared, and never changed. This is the one place a
 -- currency comes from: a trade or a curve takes its market's.
@@ -449,6 +460,37 @@ derived InstructionStanding(org, instruction, book, market):
     value approval = if(InstructionApproved(org: org, instruction: instruction, ..), #approved, if(ApprovalRequired(org: org, book: book), #awaiting, #not_required))
     value approved_by = value InstructionApproved(org: org, instruction: instruction, approver: _) default #nobody
 
+-- Each trade's valuation for the organisation's business date: the
+-- official curve for that day in the trade's market, the terms in force
+-- on it, and whether a mark has been struck against those two yet (and
+-- for how much, in the market's currency). After a roll, a trade valued
+-- only on an earlier day reads `valued = false` here, so a screen never
+-- shows yesterday's number as today's. A trade whose market has no
+-- official curve for the day has no row.
+predicate ValuationOnBusinessDate(org: Subject, trade: Subject, market: Subject, business_date: Date, curve_version: Subject, terms_version: Subject, valued: Bool, mtm: Decimal, currency: Subject)
+derived ValuationOnBusinessDate(org, trade, market, business_date, curve_version, terms_version):
+    over TradeCaptured(org: org, trade: trade, market: market, ..)
+    and BusinessDate(org: org, date: business_date)
+    and OfficialCurve(org: org, market: market, as_of: business_date, version: curve_version)
+    and trade_terms_in_force_on(trade: trade, as_of: business_date, org: org, version: terms_version, ..)
+    value valued = if(TradeValued(org: org, trade: trade, curve_version: curve_version, terms_version: terms_version, ..), true, false)
+    value mtm = value TradeValued(org: org, trade: trade, curve_version: curve_version, terms_version: terms_version, mtm: _, ..) default 0
+    value currency = value MarketCurrency(org: org, market: market, currency: _)
+
+-- Each trade that cannot be valued for the business date, and why: no
+-- official curve for that day in its market (`#missing_curve`), or no
+-- terms in force on it yet (`#no_terms_in_force`, a trade that starts
+-- later). Together with ValuationOnBusinessDate this covers every
+-- captured trade, so a trade never drops out of the count because what
+-- is needed to value it is missing.
+predicate ValuationGap(org: Subject, trade: Subject, market: Subject, business_date: Date, reason: Subject)
+derived ValuationGap(org, trade, market, business_date):
+    over TradeCaptured(org: org, trade: trade, market: market, ..)
+    and BusinessDate(org: org, date: business_date)
+    and not (OfficialCurve(org: org, market: market, as_of: business_date, ..)
+        and trade_terms_in_force_on(trade: trade, as_of: business_date, org: org, ..))
+    value reason = if(OfficialCurve(org: org, market: market, as_of: business_date, ..), #no_terms_in_force, #missing_curve)
+
 -- The breaches nobody has answered yet, with the fill each came from:
 -- what the Positions screen lists. Worked out by the ledger each time
 -- it is asked, so it can never disagree with the facts it is read from.
@@ -520,6 +562,20 @@ transformation require_approval(org, book):
 transformation grant_limit_authority(principal, org):
     require may_grant_authority: MayGrantAuthority(actor, org)
     admit MaySetLimit(principal, org)
+
+transformation grant_date_authority(principal, org):
+    require may_grant_authority: MayGrantAuthority(actor, org)
+    admit MayRollBusinessDate(principal, org)
+
+-- Roll the organisation's business date to `date`, later than the one it
+-- replaces (the first can be any date). From then on a valuation uses the
+-- official curve for that date. The days rolled past keep their curves
+-- and their marks; nothing about them changes.
+transformation roll_business_date(org, date):
+    require may_roll_business_date: MayRollBusinessDate(actor, org)
+    require date_moves_forward: (forall current in BusinessDate(org, current): date after current)
+    retract BusinessDate(org: org, ..)
+    admit BusinessDate(org, date)
 
 -- Declare a market and the currency it is priced in. Done once per
 -- market, by whoever may grant permissions in the organisation. Trades
@@ -749,8 +805,9 @@ transformation correct_curve(org, market, as_of, prior_version, new_version, pay
 
 -- Record a mark-to-market. The number is computed outside the ledger.
 -- The ledger checks what it was computed from: the curve version must
--- be the official one for the trade's market right now, and the terms
--- version must be the one in force on that curve's date. A mark against
+-- be the official one for the trade's market on the organisation's
+-- business date, and the terms version must be the one in force on that
+-- date. A mark needs a business date to belong to. A mark against
 -- a stale curve or the wrong terms cannot be recorded.
 -- The mark is in the currency of the trade's market. The ledger looks
 -- that up itself and records it beside the number, so a caller cannot
@@ -759,9 +816,10 @@ transformation correct_curve(org, market, as_of, prior_version, new_version, pay
 -- one pattern (`market`, `as_of`) is only visible within that `require`.
 transformation admit_valuation(org, book, trade, curve_version, terms_version, mtm):
     require may_value_trade: MayValueTrade(actor, org, book)
+    bind business_date_is_set: BusinessDate(org: org, date: business_date)
     require valued_against_official_curve_and_terms_in_force: TradeCaptured(org: org, book: book, trade: trade, market: market, ..)
-    and OfficialCurve(org: org, market: market, as_of: as_of, version: curve_version)
-    and trade_terms_in_force_on(trade: trade, as_of: as_of, org: org, version: terms_version, ..)
+    and OfficialCurve(org: org, market: market, as_of: business_date, version: curve_version)
+    and trade_terms_in_force_on(trade: trade, as_of: business_date, org: org, version: terms_version, ..)
     bind trade_is_captured: TradeCaptured(org: org, book: book, trade: trade, market: traded_in, ..)
     bind market_has_a_currency: MarketCurrency(org: org, market: traded_in, currency: currency)
     require valuation_is_new: not TradeValued(trade: trade, curve_version: curve_version, terms_version: terms_version, ..)

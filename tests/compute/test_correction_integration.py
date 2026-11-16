@@ -18,7 +18,14 @@ from glasshouse.compute.curves import HourlyCurve
 from glasshouse.compute.marking import correct_and_remark, register_curve_version
 from glasshouse.compute.store import CurveStore, StoreError
 from glasshouse.compute.terms import terms_version_id
-from tests.support import BINARY, DB, ensure_ledger_root, needs_live_stack, provision
+from tests.support import (
+    BINARY,
+    DB,
+    ensure_ledger_root,
+    needs_live_stack,
+    open_business_day,
+    provision,
+)
 
 pytestmark = needs_live_stack
 
@@ -55,6 +62,7 @@ def _desk(client: GlasshouseClient, store: CurveStore, org: str) -> None:
         models.GrantValuationAuthorityRequest(principal="risk-engine", org=org, book=BOOK),
     ):
         assert isinstance(client.submit(grant, actor="bootstrap"), Committed)
+    open_business_day(client, org, AS_OF)
     for trade, direction in (("T-1", "buy"), ("T-2", "sell")):
         capture = models.CaptureTradeRequest(
             org=org,
