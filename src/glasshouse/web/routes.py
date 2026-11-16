@@ -30,7 +30,7 @@ from fastapi import APIRouter, File, Form, Query, Request, Response, UploadFile
 from fastapi.responses import RedirectResponse, StreamingResponse
 from pydantic import BaseModel
 
-from glasshouse.api import asof, health, instructions, queries, refusals
+from glasshouse.api import asof, fills, health, instructions, queries, refusals
 from glasshouse.api import audit as audit_queries
 from glasshouse.api import curves as curve_queries
 from glasshouse.api.auth import authenticated_actor
@@ -45,7 +45,7 @@ from glasshouse.api.deps import (
     ProjectorDep,
     StoreDep,
 )
-from glasshouse.api.schemas import CurveVersion, InstructionRow, PositionHour
+from glasshouse.api.schemas import BreachRow, CurveVersion, InstructionRow, PositionHour
 from glasshouse.commit import (
     GlasshouseClient,
     MorphologError,
@@ -251,9 +251,12 @@ def limit_summary(
     `start` and `end` are the delivery window the positions were read
     for. An instruction's hours outside it are left out, so the summary
     is about the same hours as the rows beside it."""
-    net: dict[tuple[str, dt.datetime], Decimal] = {
-        (position.book, position.period_start): position.net_mw for position in positions
-    }
+    # A book's cap is on its whole net in an hour, every market counted,
+    # as the ledger adds it up; positions arrive one row per market.
+    net: dict[tuple[str, dt.datetime], Decimal] = {}
+    for row in positions:
+        key = (row.book, row.period_start)
+        net[key] = net.get(key, Decimal(0)) + row.net_mw
     bought: dict[tuple[str, dt.datetime], Decimal] = {}
     sold: dict[tuple[str, dt.datetime], Decimal] = {}
     for instruction in held or []:
@@ -294,6 +297,21 @@ def limit_summary(
             }
         )
     return summary
+
+
+def _unanswered_breaches(
+    client: GlasshouseClient, org: str, book: str | None
+) -> list[BreachRow] | None:
+    """The breaches nobody has answered, from the ledger's own derived
+    read, in the chosen book; `None` when the ledger cannot answer. An
+    empty list says there are none, and a failed read must never say
+    that: the screen shows the rest with a warning that breaches could
+    not be read, so a risk problem cannot vanish with the binary."""
+    try:
+        return fills.list_breaches(client, org=org, book=book)
+    except MorphologError as unreadable:
+        log.warning("ui.breaches_unreadable", org=org, error=str(unreadable))
+        return None
 
 
 def _limits_and_instructions(
@@ -934,9 +952,13 @@ def positions(
             "and are read as UTC instants.",
         }
         return templates.TemplateResponse(request, "error.html", context, status_code=422)
-    positions_now = queries.list_positions(
-        engine, org=org, book=book, market=market, start=start_at, end=end_at, past=past
+    # Every market's rows, read once: a cap is on the book's whole net in
+    # an hour, so the limit summary needs them all; the table shows the
+    # chosen market's.
+    every_market = queries.list_positions(
+        engine, org=org, book=book, start=start_at, end=end_at, past=past
     )
+    positions_now = [p for p in every_market if market is None or p.market == market]
     governed = _limits_and_instructions(client, org)
     caps, open_instructions = governed or ({}, [])
     # The filter bar governs every section: the instructions listed are
@@ -962,11 +984,12 @@ def positions(
             # now, also when the positions shown are a past moment's;
             # the screen says so.
             "limits": (
-                limit_summary(positions_now, caps, open_instructions, start=start_at, end=end_at)
+                limit_summary(every_market, caps, open_instructions, start=start_at, end=end_at)
                 if governed
                 else None
             ),
             "instructions": open_instructions,
+            "breaches": _unanswered_breaches(client, org, book),
             # The one filter bar governs both sections: the marks narrow
             # by the same book and market as the positions above them.
             "valuations": queries.list_valuations(

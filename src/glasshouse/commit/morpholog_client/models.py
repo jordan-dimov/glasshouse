@@ -152,6 +152,38 @@ class GrantApproveAuthorityRequest:
 
 
 @dataclass(frozen=True)
+class GrantFillAuthorityRequest:
+    """Arguments for `grant_fill_authority`."""
+
+    TRANSFORMATION: ClassVar[str] = "grant_fill_authority"
+
+    principal: str
+    org: str
+
+    def to_args_named(self) -> dict[str, object]:
+        return {
+            "principal": values.encode_named(self.principal),
+            "org": values.encode_named(self.org),
+        }
+
+
+@dataclass(frozen=True)
+class GrantBreachAuthorityRequest:
+    """Arguments for `grant_breach_authority`."""
+
+    TRANSFORMATION: ClassVar[str] = "grant_breach_authority"
+
+    principal: str
+    org: str
+
+    def to_args_named(self) -> dict[str, object]:
+        return {
+            "principal": values.encode_named(self.principal),
+            "org": values.encode_named(self.org),
+        }
+
+
+@dataclass(frozen=True)
 class RequireApprovalRequest:
     """Arguments for `require_approval`."""
 
@@ -372,18 +404,71 @@ class RejectInstructionRequest:
 
 
 @dataclass(frozen=True)
-class MarkInstructionLapsedRequest:
-    """Arguments for `mark_instruction_lapsed`."""
+class LapseOverdueInstructionsRequest:
+    """Arguments for `lapse_overdue_instructions`."""
 
-    TRANSFORMATION: ClassVar[str] = "mark_instruction_lapsed"
+    TRANSFORMATION: ClassVar[str] = "lapse_overdue_instructions"
+
+    org: str
+    book: str
+
+    def to_args_named(self) -> dict[str, object]:
+        return {
+            "org": values.encode_named(self.org),
+            "book": values.encode_named(self.book),
+        }
+
+
+@dataclass(frozen=True)
+class RecordFillRequest:
+    """Arguments for `record_fill`."""
+
+    TRANSFORMATION: ClassVar[str] = "record_fill"
 
     org: str
     instruction: str
+    execution: str
+    trade: str
+    counterparty: str
+    version: str
+    quantity: Decimal
+    # amount in MW (the declaration carries the unit)
+    price: Decimal
+    trade_date: date
 
     def to_args_named(self) -> dict[str, object]:
         return {
             "org": values.encode_named(self.org),
             "instruction": values.encode_named(self.instruction),
+            "execution": values.encode_named(self.execution),
+            "trade": values.encode_named(self.trade),
+            "counterparty": values.encode_named(self.counterparty),
+            "version": values.encode_named(self.version),
+            "quantity": values.encode_named(self.quantity),
+            "price": values.encode_named(self.price),
+            "trade_date": values.encode_named(self.trade_date),
+        }
+
+
+@dataclass(frozen=True)
+class AnswerBreachRequest:
+    """Arguments for `answer_breach`."""
+
+    TRANSFORMATION: ClassVar[str] = "answer_breach"
+
+    org: str
+    trade: str
+    kind: str
+    decision: str
+    note: str
+
+    def to_args_named(self) -> dict[str, object]:
+        return {
+            "org": values.encode_named(self.org),
+            "trade": values.encode_named(self.trade),
+            "kind": values.encode_named(self.kind),
+            "decision": values.encode_named(self.decision),
+            "note": values.encode_named(self.note),
         }
 
 
@@ -445,7 +530,6 @@ class AdmitValuationRequest:
     curve_version: str
     terms_version: str
     mtm: Decimal
-    currency: str
 
     def to_args_named(self) -> dict[str, object]:
         return {
@@ -455,7 +539,6 @@ class AdmitValuationRequest:
             "curve_version": values.encode_named(self.curve_version),
             "terms_version": values.encode_named(self.terms_version),
             "mtm": values.encode_named(self.mtm),
-            "currency": values.encode_named(self.currency),
         }
 
 
@@ -574,6 +657,42 @@ class MayApproveClaim:
             actor=values.named_text("MayApprove.actor", args["actor"]),
             org=values.named_text("MayApprove.org", args["org"]),
             book=values.named_text("MayApprove.book", args["book"]),
+        )
+
+
+@dataclass(frozen=True)
+class MayRecordFillsClaim:
+    """One admitted `MayRecordFills` claim, decoded by declared kind."""
+
+    PREDICATE: ClassVar[str] = "MayRecordFills"
+
+    actor: str
+    org: str
+
+    @classmethod
+    def from_named(cls, args: dict[str, object]) -> MayRecordFillsClaim:
+        values.named_fields("MayRecordFills", args, ("actor", "org"))
+        return cls(
+            actor=values.named_text("MayRecordFills.actor", args["actor"]),
+            org=values.named_text("MayRecordFills.org", args["org"]),
+        )
+
+
+@dataclass(frozen=True)
+class MayAnswerBreachClaim:
+    """One admitted `MayAnswerBreach` claim, decoded by declared kind."""
+
+    PREDICATE: ClassVar[str] = "MayAnswerBreach"
+
+    actor: str
+    org: str
+
+    @classmethod
+    def from_named(cls, args: dict[str, object]) -> MayAnswerBreachClaim:
+        values.named_fields("MayAnswerBreach", args, ("actor", "org"))
+        return cls(
+            actor=values.named_text("MayAnswerBreach.actor", args["actor"]),
+            org=values.named_text("MayAnswerBreach.org", args["org"]),
         )
 
 
@@ -1128,6 +1247,232 @@ class InstructionEndedClaim:
                 args["instruction"],
             ),
             outcome=values.named_text("InstructionEnded.outcome", args["outcome"]),
+        )
+
+
+@dataclass(frozen=True)
+class InstructionFillClaim:
+    """One admitted `InstructionFill` claim, decoded by declared kind."""
+
+    PREDICATE: ClassVar[str] = "InstructionFill"
+
+    org: str
+    instruction: str
+    execution: str
+    trade: str
+
+    @classmethod
+    def from_named(cls, args: dict[str, object]) -> InstructionFillClaim:
+        values.named_fields(
+            "InstructionFill",
+            args,
+            ("org", "instruction", "execution", "trade"),
+        )
+        return cls(
+            org=values.named_text("InstructionFill.org", args["org"]),
+            instruction=values.named_text(
+                "InstructionFill.instruction",
+                args["instruction"],
+            ),
+            execution=values.named_text("InstructionFill.execution", args["execution"]),
+            trade=values.named_text("InstructionFill.trade", args["trade"]),
+        )
+
+
+@dataclass(frozen=True)
+class BreachClaim:
+    """One admitted `Breach` claim, decoded by declared kind."""
+
+    PREDICATE: ClassVar[str] = "Breach"
+
+    org: str
+    book: str
+    trade: str
+    kind: str
+
+    @classmethod
+    def from_named(cls, args: dict[str, object]) -> BreachClaim:
+        values.named_fields("Breach", args, ("org", "book", "trade", "kind"))
+        return cls(
+            org=values.named_text("Breach.org", args["org"]),
+            book=values.named_text("Breach.book", args["book"]),
+            trade=values.named_text("Breach.trade", args["trade"]),
+            kind=values.named_text("Breach.kind", args["kind"]),
+        )
+
+
+@dataclass(frozen=True)
+class BreachAnsweredClaim:
+    """One admitted `BreachAnswered` claim, decoded by declared kind."""
+
+    PREDICATE: ClassVar[str] = "BreachAnswered"
+
+    org: str
+    trade: str
+    kind: str
+    answered_by: str
+    decision: str
+    note: str
+
+    @classmethod
+    def from_named(cls, args: dict[str, object]) -> BreachAnsweredClaim:
+        values.named_fields(
+            "BreachAnswered",
+            args,
+            ("org", "trade", "kind", "answered_by", "decision", "note"),
+        )
+        return cls(
+            org=values.named_text("BreachAnswered.org", args["org"]),
+            trade=values.named_text("BreachAnswered.trade", args["trade"]),
+            kind=values.named_text("BreachAnswered.kind", args["kind"]),
+            answered_by=values.named_text(
+                "BreachAnswered.answered_by",
+                args["answered_by"],
+            ),
+            decision=values.named_text("BreachAnswered.decision", args["decision"]),
+            note=values.named_text("BreachAnswered.note", args["note"]),
+        )
+
+
+@dataclass(frozen=True)
+class InstructionStandingClaim:
+    """One admitted `InstructionStanding` claim, decoded by declared kind."""
+
+    PREDICATE: ClassVar[str] = "InstructionStanding"
+
+    org: str
+    instruction: str
+    book: str
+    market: str
+    direction: str
+    quantity: Decimal
+    # amount in MW (the declaration carries the unit)
+    limit_price: Decimal
+    currency: str
+    delivery_start: datetime
+    delivery_end: datetime
+    placed_on: date
+    valid_until: datetime
+    proposer: str
+    holding: Decimal
+    # amount in MW (the declaration carries the unit)
+    outcome: str
+    approval: str
+    approved_by: str
+
+    @classmethod
+    def from_named(cls, args: dict[str, object]) -> InstructionStandingClaim:
+        values.named_fields(
+            "InstructionStanding",
+            args,
+            (
+                "org",
+                "instruction",
+                "book",
+                "market",
+                "direction",
+                "quantity",
+                "limit_price",
+                "currency",
+                "delivery_start",
+                "delivery_end",
+                "placed_on",
+                "valid_until",
+                "proposer",
+                "holding",
+                "outcome",
+                "approval",
+                "approved_by",
+            ),
+        )
+        return cls(
+            org=values.named_text("InstructionStanding.org", args["org"]),
+            instruction=values.named_text(
+                "InstructionStanding.instruction",
+                args["instruction"],
+            ),
+            book=values.named_text("InstructionStanding.book", args["book"]),
+            market=values.named_text("InstructionStanding.market", args["market"]),
+            direction=values.named_text(
+                "InstructionStanding.direction",
+                args["direction"],
+            ),
+            quantity=values.named_decimal(
+                "InstructionStanding.quantity",
+                args["quantity"],
+            ),
+            limit_price=values.named_decimal(
+                "InstructionStanding.limit_price",
+                args["limit_price"],
+            ),
+            currency=values.named_text(
+                "InstructionStanding.currency",
+                args["currency"],
+            ),
+            delivery_start=values.named_timestamp(
+                "InstructionStanding.delivery_start",
+                args["delivery_start"],
+            ),
+            delivery_end=values.named_timestamp(
+                "InstructionStanding.delivery_end",
+                args["delivery_end"],
+            ),
+            placed_on=values.named_date(
+                "InstructionStanding.placed_on",
+                args["placed_on"],
+            ),
+            valid_until=values.named_timestamp(
+                "InstructionStanding.valid_until",
+                args["valid_until"],
+            ),
+            proposer=values.named_text(
+                "InstructionStanding.proposer",
+                args["proposer"],
+            ),
+            holding=values.named_decimal(
+                "InstructionStanding.holding",
+                args["holding"],
+            ),
+            outcome=values.named_text("InstructionStanding.outcome", args["outcome"]),
+            approval=values.named_text(
+                "InstructionStanding.approval",
+                args["approval"],
+            ),
+            approved_by=values.named_text(
+                "InstructionStanding.approved_by",
+                args["approved_by"],
+            ),
+        )
+
+
+@dataclass(frozen=True)
+class UnansweredBreachClaim:
+    """One admitted `UnansweredBreach` claim, decoded by declared kind."""
+
+    PREDICATE: ClassVar[str] = "UnansweredBreach"
+
+    org: str
+    book: str
+    trade: str
+    kind: str
+    execution: str
+
+    @classmethod
+    def from_named(cls, args: dict[str, object]) -> UnansweredBreachClaim:
+        values.named_fields(
+            "UnansweredBreach",
+            args,
+            ("org", "book", "trade", "kind", "execution"),
+        )
+        return cls(
+            org=values.named_text("UnansweredBreach.org", args["org"]),
+            book=values.named_text("UnansweredBreach.book", args["book"]),
+            trade=values.named_text("UnansweredBreach.trade", args["trade"]),
+            kind=values.named_text("UnansweredBreach.kind", args["kind"]),
+            execution=values.named_text(
+                "UnansweredBreach.execution",
+                args["execution"],
+            ),
         )
 
 

@@ -16,26 +16,17 @@ it; both conditions are rules in the ledger. The approval is recorded.
 It is not enforced on the market: the ledger cannot stop an order
 leaving the building, so a client reads `approval` before it sends.
 
-What an instruction is not, yet: it is not connected to fills. What
-happens when the market reports one is a rule still to come.
+When the market reports a fill, the reconciling service records it
+(`api/fills.py`, `record_fill`): the trade is booked and what the
+instruction holds goes down, ending it as filled when nothing is left.
 """
 
 from __future__ import annotations
 
 import datetime as dt
-from decimal import Decimal, InvalidOperation
 
 from glasshouse.api.schemas import InstructionRow
-from glasshouse.commit import GlasshouseClient, models
-
-_PREDICATES = (
-    "Instruction",
-    "InstructionOpen",
-    "InstructionEnded",
-    "MarketCurrency",
-    "ApprovalRequired",
-    "InstructionApproved",
-)
+from glasshouse.commit import GlasshouseClient, exact_decimals, models
 
 
 def list_instructions(
@@ -46,84 +37,55 @@ def list_instructions(
     open_only: bool = False,
     now: dt.datetime | None = None,
 ) -> list[InstructionRow]:
-    """Every instruction of the organisation, newest validity first
-    within a book, from ONE read of the ledger so the four facts agree.
+    """Every instruction of the organisation, from ONE read: the ledger's
+    own `InstructionStanding`, which works out what each holds, how it
+    ended and whether it is approved, so the facts behind it agree.
 
     `status` is `open` while the instruction is valid and holds room;
     `overdue` once its `valid_until` has passed but nobody has recorded
     the lapse or cancelled it, in which case it STILL holds its room
     (the ledger's limit rule reads no clock, so that a trade can be
-    previewed); otherwise how it ended. `holding_mw` is what counts
-    against the limit right now: the remaining quantity while the
-    instruction has not ended, nothing after. `open_only` keeps the
-    instructions holding room, the overdue ones included."""
+    previewed); otherwise how it ended. Open or overdue is the one thing
+    worked out here, because it is the reader's clock. `holding_mw` is
+    what counts against the limit right now: the remaining quantity
+    while the instruction has not ended, nothing after. `open_only`
+    keeps the instructions holding room, the overdue ones included."""
     at = now or dt.datetime.now(dt.UTC)
-    rows = client.claims_named(*_PREDICATES)
-
-    def of(predicate: str) -> list[dict[str, object]]:
-        return [row.args for row in rows if row.predicate == predicate]
-
-    remaining = {
-        claim.instruction: claim.remaining
-        for claim in map(models.InstructionOpenClaim.from_named, of("InstructionOpen"))
-        if claim.org == org
-    }
-    ended = {
-        claim.instruction: claim.outcome
-        for claim in map(models.InstructionEndedClaim.from_named, of("InstructionEnded"))
-        if claim.org == org
-    }
-    currencies = {
-        (claim.org, claim.market): claim.currency
-        for claim in map(models.MarketCurrencyClaim.from_named, of("MarketCurrency"))
-    }
-    needs_approval = {
-        (claim.org, claim.book)
-        for claim in map(models.ApprovalRequiredClaim.from_named, of("ApprovalRequired"))
-    }
-    approvers = {
-        claim.instruction: claim.approver
-        for claim in map(models.InstructionApprovedClaim.from_named, of("InstructionApproved"))
-        if claim.org == org
-    }
+    where = {"org": org} if book is None else {"org": org, "book": book}
+    standings = [
+        models.InstructionStandingClaim.from_named(row.args)
+        for row in client.derived_named("InstructionStanding", where=where)
+    ]
     listed = []
-    for placed in map(models.InstructionClaim.from_named, of("Instruction")):
-        if placed.org != org or (book is not None and placed.book != book):
-            continue
-        left = remaining.get(placed.instruction)
-        if left is None:
-            # No longer open: how it ended. An instruction always ends
-            # by an act that records the outcome in the same step.
-            status = ended.get(placed.instruction, "ended")
-        else:
-            status = "open" if at <= placed.valid_until else "overdue"
-        if open_only and left is None:
+    for standing in standings:
+        still_open = standing.outcome == "open"
+        if open_only and not still_open:
             continue
         listed.append(
             InstructionRow(
-                org=placed.org,
-                instruction=placed.instruction,
-                book=placed.book,
-                market=placed.market,
-                direction=placed.direction,
-                quantity=placed.quantity,
-                holding_mw=left if left is not None else Decimal(0),
-                limit_price=placed.limit_price,
-                currency=currencies[placed.org, placed.market],
-                delivery_start=placed.delivery_start,
-                delivery_end=placed.delivery_end,
-                placed_on=placed.placed_on,
-                valid_until=placed.valid_until,
-                proposer=placed.proposer,
-                status=status,
-                approval=(
-                    "approved"
-                    if placed.instruction in approvers
-                    else "awaiting"
-                    if (placed.org, placed.book) in needs_approval
-                    else "not required"
+                org=standing.org,
+                instruction=standing.instruction,
+                book=standing.book,
+                market=standing.market,
+                direction=standing.direction,
+                quantity=standing.quantity,
+                holding_mw=standing.holding,
+                limit_price=standing.limit_price,
+                currency=standing.currency,
+                delivery_start=standing.delivery_start,
+                delivery_end=standing.delivery_end,
+                placed_on=standing.placed_on,
+                valid_until=standing.valid_until,
+                proposer=standing.proposer,
+                status=(
+                    ("open" if at <= standing.valid_until else "overdue")
+                    if still_open
+                    else standing.outcome
                 ),
-                approved_by=approvers.get(placed.instruction),
+                # The ledger spells `not_required` and `nobody`; the API
+                # says `not required` and leaves the approver out.
+                approval=standing.approval.replace("_", " "),
+                approved_by=None if standing.approved_by == "nobody" else standing.approved_by,
             )
         )
     return sorted(listed, key=lambda row: (row.book, row.instruction))
@@ -138,14 +100,8 @@ def place_request(
     mistakes. `placed_on` is the caller's to supply because it is not
     the instructing party's to choose: it is the day the instruction is
     placed."""
-    try:
-        quantity = Decimal(fields["quantity"])
-        limit_price = Decimal(fields["limit_price"])
-    except InvalidOperation:
-        raise ValueError(
-            "quantity/limit_price must be exact decimals, got "
-            f"{fields['quantity']!r}/{fields['limit_price']!r}"
-        ) from None
+    numbers = exact_decimals(quantity=fields["quantity"], limit_price=fields["limit_price"])
+    quantity, limit_price = numbers["quantity"], numbers["limit_price"]
     try:
         delivery_start = dt.datetime.fromisoformat(fields["delivery_start"])
         delivery_end = dt.datetime.fromisoformat(fields["delivery_end"])

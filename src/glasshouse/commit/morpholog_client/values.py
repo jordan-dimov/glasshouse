@@ -17,6 +17,8 @@ model encodes it element by element, each item passing through
 
 from __future__ import annotations
 
+import hashlib
+import json
 import re
 from dataclasses import dataclass
 from datetime import date, datetime, timezone
@@ -25,7 +27,8 @@ from typing import TypeVar
 
 # The schema pattern for decimal text, mirrored from the binary's
 # argument codec: optional sign, no leading zeros, optional fraction.
-_DECIMAL_PATTERN = re.compile(r"^-?(0|[1-9]\d*)(\.\d+)?$")
+# ASCII digits only and the whole text, as the binary reads it.
+_DECIMAL_PATTERN = re.compile(r"^-?(0|[1-9]\d*)(\.\d+)?$", re.ASCII)
 # The schema's `date` and `date-time` formats (RFC 3339), and the
 # signed exact-seconds spans the binary writes for a duration.
 _DATE_PATTERN = re.compile(r"^\d{4}-\d{2}-\d{2}$")
@@ -59,10 +62,26 @@ def _expect_str(what: str, value: object) -> str:
 def parse_decimal(text: object) -> Decimal:
     """Wire decimal text -> exact ``Decimal``. Only the wire pattern is
     read: ``NaN``, exponents and leading zeros are refused, not parsed."""
-    text = _expect_str("a decimal", text)
-    if not _DECIMAL_PATTERN.match(text):
+    return Decimal(_wire_decimal(_expect_str("a decimal", text)))
+
+
+def _wire_decimal(text: str) -> str:
+    """The text, if it is a decimal the kernel holds as written: the wire
+    pattern, at most 28 fractional digits, and its digits as one integer
+    below 2^96, trailing zeros counted. Past that the kernel refuses
+    rather than rounds, and so does this client on both directions."""
+    if not _DECIMAL_PATTERN.fullmatch(text):
         raise CodecError(f"decimal {text!r} is outside the wire pattern")
-    return Decimal(text)
+    whole, _, fraction = text.lstrip("-").partition(".")
+    digits = whole + fraction
+    # Thirty written digits cannot fit, and `int` refuses thousands with
+    # its own error; the count keeps the refusal this codec's.
+    if len(fraction) > 28 or len(digits) > 29 or int(digits) >= 1 << 96:
+        raise CodecError(
+            f"decimal {text!r} is not one the kernel holds as written: at most 28 "
+            f"fractional digits, with an unsigned, unscaled coefficient smaller than 2^96"
+        )
+    return text
 
 
 def parse_date(text: object) -> date:
@@ -103,13 +122,15 @@ def encode_decimal(value: Decimal) -> str:
     """``Decimal`` -> wire decimal text. Plain form always -
     ``Decimal.__str__`` goes scientific for some values, which the
     schema pattern (rightly) refuses - and NaN/Inf are not numbers the
-    contract knows."""
-    if not value.is_finite():
-        raise CodecError(f"{value} is not a finite decimal")
-    text = format(value, "f")
-    if not _DECIMAL_PATTERN.match(text):
-        raise CodecError(f"{value} renders as {text!r}, outside the wire pattern")
-    return text
+    contract knows. A value crosses as written or not at all. The limit
+    is read off the digits and exponent before any text is written,
+    since ``format`` writes about as many characters as the exponent."""
+    exponent = value.as_tuple().exponent
+    if not isinstance(exponent, int):
+        raise CodecError(f"{value} is not a decimal the kernel holds")
+    if exponent < -28 or len(value.as_tuple().digits) + max(exponent, 0) > 29:
+        raise CodecError(f"{value} is beyond the decimal the kernel holds as written")
+    return _wire_decimal(format(value, "f"))
 
 
 def encode_timestamp(value: datetime) -> str:
@@ -140,6 +161,79 @@ def encode_named(value: object) -> object:
     if isinstance(value, date):
         return value.isoformat()
     raise CodecError(f"no named-codec encoding for {type(value).__name__}: {value!r}")
+
+
+def digest(*values: object) -> str:
+    """``sha256:<hex>`` over these values in order, the bytes the
+    programme's ``digest(...)`` hashes, so a commitment computed here is
+    the one the record later holds a reveal to.
+
+    Each value is encoded as the record stores it: a ``str`` is a
+    subject, a ``Decimal`` a decimal with its scale trimmed (so
+    ``Decimal("100.00")`` and ``Decimal("100")`` commit alike), a ``bool``
+    a bool, a ``date`` a date and an aware ``datetime`` an instant. An
+    ``int`` or a ``float`` is refused rather than read as a decimal, and
+    so is a naive datetime: a commitment the kernel could not reproduce
+    is worse than none. No database, subprocess or network.
+    """
+    if not values:
+        raise CodecError("digest takes at least one value")
+    preimage = _digest_preimage(values)
+    return "sha256:" + hashlib.sha256(preimage.encode("utf-8")).hexdigest()
+
+
+def _digest_preimage(values: tuple[object, ...]) -> str:
+    # PostgreSQL's jsonb text: ", " between items, non-ASCII as it is,
+    # the short escapes and \u00xx for the other control characters,
+    # which is what json.dumps writes with these settings.
+    keys = [_value_key(value) for value in values]
+    return json.dumps(keys, separators=(", ", ": "), ensure_ascii=False)
+
+
+def _value_key(value: object) -> list[object]:
+    # bool before the rest: it is an int subclass.
+    if isinstance(value, bool):
+        return ["bool", value]
+    if isinstance(value, str):
+        return ["subject", value]
+    if isinstance(value, Decimal):
+        return ["decimal", _trimmed_decimal(value)]
+    if isinstance(value, datetime):
+        # datetime before date: it is a date subclass.
+        return ["timestamp", _trimmed_timestamp(encode_timestamp(value))]
+    if isinstance(value, date):
+        return ["date", value.isoformat()]
+    raise CodecError(
+        "digest takes a str, a Decimal, a bool, a date or an aware datetime, "
+        f"not {type(value).__name__}: {value!r}"
+    )
+
+
+def _trimmed_decimal(value: Decimal) -> str:
+    """``trim_scale(numeric)::text``: no trailing zeros, no exponent, and
+    a zero is ``0`` whatever its sign or scale. Trimmed on the digits
+    before any text is written, so a long scale costs nothing and no
+    non-zero digit is ever dropped; ``Decimal.normalize`` would round to
+    the context's precision instead."""
+    sign, digits, exponent = value.as_tuple()
+    if not isinstance(exponent, int):
+        raise CodecError(f"{value} is not a decimal the kernel holds")
+    if value == 0:
+        return "0"
+    cut = len(digits)
+    while digits[cut - 1] == 0:
+        cut -= 1
+    return encode_decimal(Decimal((sign, digits[:cut], exponent + len(digits) - cut)))
+
+
+def _trimmed_timestamp(text: str) -> str:
+    """The stored instant's text: a fraction only when non-zero, with
+    its trailing zeros trimmed."""
+    if "." not in text:
+        return text
+    whole, fraction = text[:-1].split(".")
+    fraction = fraction.rstrip("0")
+    return f"{whole}.{fraction}Z" if fraction else f"{whole}Z"
 
 
 def decode_tagged(tagged: object) -> object:

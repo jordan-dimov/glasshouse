@@ -127,7 +127,7 @@ def test_before_the_first_capture_the_book_is_empty(
     with app as client:
         assert _get(client, "/trades", moments["before_capture"]) == []
         assert _get(client, "/positions", moments["before_capture"]) == []
-        assert len(_get(client, "/trades")) == 8
+        assert len(_get(client, "/trades")) == 10
 
 
 def test_an_instant_that_is_not_history_is_the_callers_error(app: TestClient) -> None:
@@ -232,7 +232,7 @@ def test_an_instant_a_writer_may_still_precede_is_refused(
     assert refused.headers["Retry-After"] == "1"
     assert page.status_code == 409
     assert "That moment is not final yet" in page.text
-    assert len(settled) == len(after) == 8
+    assert len(settled) == len(after) == 10
 
 
 def test_the_screen_shows_utc_for_a_moment_written_with_an_offset(

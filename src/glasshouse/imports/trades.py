@@ -20,13 +20,13 @@ import csv
 import datetime as dt
 import io
 from collections.abc import Sequence
-from decimal import Decimal, InvalidOperation
 
 from glasshouse.commit import (
     GlasshouseClient,
     MorphologBatchIncomplete,
     MorphologError,
     envelopes,
+    exact_decimals,
     models,
     values,
 )
@@ -87,13 +87,8 @@ def capture_request(row: dict[str, str], org: str) -> models.CaptureTradeRequest
         raise ValueError("row has fewer fields than the header")
     if row.get(None) is not None:  # type: ignore[call-overload]
         raise ValueError("row has more fields than the header")
-    try:
-        quantity = Decimal(row["quantity"])
-        price = Decimal(row["price"])
-    except InvalidOperation:
-        raise ValueError(
-            f"quantity/price must be exact decimals, got {row['quantity']!r}/{row['price']!r}"
-        ) from None
+    numbers = exact_decimals(quantity=row["quantity"], price=row["price"])
+    quantity, price = numbers["quantity"], numbers["price"]
     try:
         trade_date = dt.date.fromisoformat(row["trade_date"])
     except ValueError:

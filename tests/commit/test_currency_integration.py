@@ -1,7 +1,7 @@
 """Currency in the ledger: a market is declared once with the currency
 it is priced in, nothing trades or is priced in an undeclared market, and
-a mark states its currency, which must be its market's. Each refusal is
-named by the rule that made it. Two markets in two currencies in one
+a mark is recorded in its market's currency, which the ledger looks up
+itself. Each refusal is named by the rule that made it. Two markets in two currencies in one
 organisation, side by side.
 """
 
@@ -10,8 +10,8 @@ from decimal import Decimal
 
 import pytest
 
-from glasshouse.commit import MODEL_FILE, Committed, GlasshouseClient, Rejected, models
-from tests.support import BINARY, DB, login_role, needs_live_stack, provision
+from glasshouse.commit import MODEL_FILE, Committed, GlasshouseClient, models
+from tests.support import BINARY, DB, login_role, needs_live_stack, provision, refused
 
 pytestmark = needs_live_stack
 
@@ -37,7 +37,7 @@ def capture(trade: str, book: str, market: str) -> models.CaptureTradeRequest:
     )
 
 
-def mark(trade: str, book: str, curve: str, currency: str) -> models.AdmitValuationRequest:
+def mark(trade: str, book: str, curve: str) -> models.AdmitValuationRequest:
     return models.AdmitValuationRequest(
         org=ORG,
         book=book,
@@ -45,7 +45,6 @@ def mark(trade: str, book: str, curve: str, currency: str) -> models.AdmitValuat
         curve_version=curve,
         terms_version=f"{trade}/v1",
         mtm=Decimal("12.5"),
-        currency=currency,
     )
 
 
@@ -88,21 +87,11 @@ def ledger() -> GlasshouseClient:
     return client
 
 
-def refused(client: GlasshouseClient, request: object, actor: str) -> Rejected:
-    outcome = client.submit(request, actor=actor, explain_on_reject=True)  # type: ignore[arg-type]
-    assert isinstance(outcome, Rejected), outcome
-    return outcome
-
-
-def test_a_mark_must_state_its_markets_currency(ledger: GlasshouseClient) -> None:
-    # The mark is computed outside the ledger, so it says what it is in,
-    # and the ledger checks that against the trade's market. Euros for a
-    # British trade is refused by the rule's own name; pounds is admitted.
-    wrong = refused(ledger, mark("G-1", "gb", "crv-gb", "EUR"), "risk")
-    assert wrong.rule == "mark_is_in_market_currency"
-    wrong_way = refused(ledger, mark("D-1", "de", "crv-de", "GBP"), "risk")
-    assert wrong_way.rule == "mark_is_in_market_currency"
-    for request in (mark("G-1", "gb", "crv-gb", "GBP"), mark("D-1", "de", "crv-de", "EUR")):
+def test_a_mark_is_recorded_in_its_markets_currency(ledger: GlasshouseClient) -> None:
+    # The mark is computed outside the ledger, but its currency is not
+    # the caller's to state: the ledger looks up the trade's market and
+    # records that market's currency beside the number.
+    for request in (mark("G-1", "gb", "crv-gb"), mark("D-1", "de", "crv-de")):
         assert isinstance(ledger.submit(request, actor="risk"), Committed)
     stated = {v.trade: (v.mtm, v.currency) for v in ledger.read(models.TradeValuedClaim)}
     assert stated == {"G-1": (Decimal("12.5"), "GBP"), "D-1": (Decimal("12.5"), "EUR")}
@@ -114,7 +103,7 @@ def test_a_trade_cannot_be_marked_against_another_markets_curve(
     # The older rule, unchanged, is what keeps a trade and its curve in
     # one market, and so in one currency: a British trade against the
     # German curve is refused before any question of currency.
-    crossed = refused(ledger, mark("G-1", "gb", "crv-de", "GBP"), "risk")
+    crossed = refused(ledger, mark("G-1", "gb", "crv-de"), "risk")
     assert crossed.rule == "valued_against_official_curve_and_terms_in_force"
 
 

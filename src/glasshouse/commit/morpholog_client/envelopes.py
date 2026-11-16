@@ -327,6 +327,9 @@ class Committed:
     asserted_claims: list[ClaimInstance]
     retracted_claims: list[ClaimInstance]
     emitted_intents: list[IntentInstance]
+    # What the act drew from `new Subject()`, in draw order. A draw that
+    # reached no admitted claim is still listed.
+    drawn_subjects: list[str]
 
     @classmethod
     def from_json(cls, payload: object) -> Committed:
@@ -340,6 +343,7 @@ class Committed:
                 "asserted_claims",
                 "retracted_claims",
                 "emitted_intents",
+                "drawn_subjects",
             },
         )
         data.constant("status", "committed")
@@ -349,6 +353,7 @@ class Committed:
             asserted_claims=data.array("asserted_claims", ClaimInstance.from_json),
             retracted_claims=data.array("retracted_claims", ClaimInstance.from_json),
             emitted_intents=data.array("emitted_intents", IntentInstance.from_json),
+            drawn_subjects=data.texts("drawn_subjects"),
         )
 
 
@@ -415,17 +420,23 @@ class Rejected:
 @dataclass(frozen=True)
 class Errored:
     """A traced proposal whose transformation raised a kernel error:
-    nothing was committed, and ``code`` is always ``kernel_error``."""
+    nothing was committed, ``code`` is always ``kernel_error``, and
+    ``kind`` says which kernel error it was."""
 
     code: str
     error: str
+    kind: str
 
     @classmethod
     def from_json(cls, payload: object) -> Errored:
-        data = _strict("errored result", payload, {"status", "code", "error"})
+        data = _strict("errored result", payload, {"status", "code", "error", "kind"})
         data.constant("status", "errored")
         data.constant("code", "kernel_error")
-        return cls(code="kernel_error", error=data.text("error"))
+        return cls(
+            code="kernel_error",
+            error=data.text("error"),
+            kind=data.member("kind", KERNEL_ERROR_KINDS),
+        )
 
 
 def parse_run_outcome(payload: object) -> Committed | Rejected:
@@ -461,6 +472,7 @@ class AtomicAct:
                 "asserted_claims",
                 "retracted_claims",
                 "emitted_intents",
+                "drawn_subjects",
             },
         )
         body = {k: v for k, v in data.data.items() if k != "row"}
@@ -758,6 +770,54 @@ class ForStep:
 
 
 @dataclass(frozen=True)
+class ForEachIteration:
+    claim: ClaimInstance
+    trace: list[TraceStep]
+
+    @classmethod
+    def from_json(cls, payload: object) -> ForEachIteration:
+        data = _strict("for each iteration", payload, {"claim", "trace"})
+        return cls(
+            claim=data.nested("claim", ClaimInstance.from_json),
+            trace=data.array("trace", parse_trace_step),
+        )
+
+
+@dataclass(frozen=True)
+class ForEachStep:
+    """A `for` over the claims a pattern matches: one iteration per claim."""
+
+    predicate: str
+    iterations: list[ForEachIteration]
+
+    @classmethod
+    def from_json(cls, payload: object) -> ForEachStep:
+        data = _strict("for each step", payload, {"kind", "predicate", "iterations"})
+        data.constant("kind", "for_each")
+        return cls(
+            predicate=data.text("predicate"),
+            iterations=data.array("iterations", ForEachIteration.from_json),
+        )
+
+
+@dataclass(frozen=True)
+class IfStep:
+    expression: str
+    taken: bool
+    trace: list[TraceStep]
+
+    @classmethod
+    def from_json(cls, payload: object) -> IfStep:
+        data = _strict("if step", payload, {"kind", "expression", "taken", "trace"})
+        data.constant("kind", "if")
+        return cls(
+            expression=data.text("expression"),
+            taken=data.flag("taken"),
+            trace=data.array("trace", parse_trace_step),
+        )
+
+
+@dataclass(frozen=True)
 class InvariantCheckStep:
     name: str
     expression: str
@@ -781,6 +841,8 @@ TraceStep = (
     | RetractStep
     | EmitStep
     | ForStep
+    | ForEachStep
+    | IfStep
     | InvariantCheckStep
 )
 
@@ -797,6 +859,8 @@ def parse_trace_step(payload: object) -> TraceStep:
         "retract": RetractStep.from_json,
         "emit": EmitStep.from_json,
         "for": ForStep.from_json,
+        "for_each": ForEachStep.from_json,
+        "if": IfStep.from_json,
         "invariant_check": InvariantCheckStep.from_json,
     }
     parse = by_kind.get(kind) if isinstance(kind, str) else None
@@ -1027,6 +1091,55 @@ NOTHING_RECORDED_CODES = PROPOSE_ERROR_CODES - {"commit_outcome_unknown"}
 #: not know.
 SESSION_ERROR_CODES = PROPOSE_ERROR_CODES | {"unknown_operation"}
 
+#: Which kernel error a ``kernel_error`` was - the schema's
+#: ``kernel_error_kind``, which a test holds this set to. Match on the
+#: kind, never on the message beside it.
+KERNEL_ERROR_KINDS = frozenset(
+    {
+        "unbound_variable",
+        "type_mismatch",
+        "value_of_zero_matches",
+        "value_of_multiple_matches",
+        "unbound_actor",
+        "unbound_decision_time",
+        "pre_state_unavailable",
+        "subject_source_exhausted",
+        "division_by_zero",
+        "round_quantum_not_positive",
+        "period_span_not_positive",
+        "period_index_not_whole",
+        "round_out_of_range",
+        "arith_out_of_range",
+        "empty_extremum",
+        "unknown_definition",
+        "claim_kind_mismatch",
+        "intent_kind_mismatch",
+        "argument_kind_mismatch",
+    }
+)
+
+
+def _kernel_kind(data: _Fields, code: str) -> str | None:
+    """The ``kind`` a ``kernel_error`` must carry; every other code
+    carries none."""
+    if code == "kernel_error":
+        return data.member("kind", KERNEL_ERROR_KINDS)
+    if "kind" in data:
+        raise EnvelopeError(f"a `{code}` error carries no kind, got {data.raw('kind')!r}")
+    return None
+
+
+def _refused_parameter(data: _Fields, code: str) -> str | None:
+    """The ``parameter`` an ``invalid_arguments`` may name; every other
+    code carries none."""
+    if "parameter" not in data:
+        return None
+    if code != "invalid_arguments":
+        raise EnvelopeError(
+            f"a `{code}` error names no parameter, got {data.raw('parameter')!r}"
+        )
+    return data.text("parameter")
+
 
 @dataclass(frozen=True)
 class RequestError:
@@ -1037,12 +1150,26 @@ class RequestError:
 
     code: str
     error: str
+    #: Which kernel error, on a ``kernel_error`` only.
+    kind: str | None = None
+    #: The one request key an ``invalid_arguments`` points at, when the
+    #: binary could name one. Where decoding failed, never why a rule
+    #: refused a valid value.
+    parameter: str | None = None
 
     @classmethod
     def from_json(cls, payload: object) -> RequestError:
-        data = _strict("request error", payload, {"code", "error", "status"})
+        data = _strict(
+            "request error", payload, {"code", "error", "status"}, {"kind", "parameter"}
+        )
         data.constant("status", "error")
-        return cls(code=data.member("code", PROPOSE_ERROR_CODES), error=data.text("error"))
+        code = data.member("code", PROPOSE_ERROR_CODES)
+        return cls(
+            code=code,
+            error=data.text("error"),
+            kind=_kernel_kind(data, code),
+            parameter=_refused_parameter(data, code),
+        )
 
 
 @dataclass(frozen=True)
@@ -1055,15 +1182,27 @@ class SessionErrorReceipt:
     code: str
     error: str
     row: int
+    #: Which kernel error, on a ``kernel_error`` only.
+    kind: str | None = None
+    #: As on ``RequestError``.
+    parameter: str | None = None
 
     @classmethod
     def from_json(cls, payload: object) -> SessionErrorReceipt:
-        data = _strict("session error receipt", payload, {"code", "error", "row", "status"})
+        data = _strict(
+            "session error receipt",
+            payload,
+            {"code", "error", "row", "status"},
+            {"kind", "parameter"},
+        )
         data.constant("status", "error")
+        code = data.member("code", SESSION_ERROR_CODES)
         return cls(
-            code=data.member("code", SESSION_ERROR_CODES),
+            code=code,
             error=data.text("error"),
             row=data.integer("row", minimum=1),
+            kind=_kernel_kind(data, code),
+            parameter=_refused_parameter(data, code),
         )
 
 
@@ -1074,6 +1213,10 @@ class BatchError:
 
     code: str
     error: str
+    #: Which kernel error, on a ``kernel_error`` only.
+    kind: str | None = None
+    #: As on ``RequestError``.
+    parameter: str | None = None
 
 
 @dataclass(frozen=True)
@@ -1088,9 +1231,15 @@ class BatchReceipt:
         row = _Fields("batch receipt", payload).integer("row", minimum=1)
         body = {k: v for k, v in payload.items() if k != "row"}
         if body.get("status") == "error":
-            data = _strict("batch error receipt", body, {"status", "code", "error"})
+            data = _strict(
+                "batch error receipt", body, {"status", "code", "error"}, {"kind", "parameter"}
+            )
+            code = data.member("code", PROPOSE_ERROR_CODES)
             error = BatchError(
-                code=data.member("code", PROPOSE_ERROR_CODES), error=data.text("error")
+                code=code,
+                error=data.text("error"),
+                kind=_kernel_kind(data, code),
+                parameter=_refused_parameter(data, code),
             )
             return cls(row=row, outcome=error)
         return cls(row=row, outcome=parse_run_outcome(body))
@@ -2077,7 +2226,8 @@ class RehearsalRow:
     ``klass`` is ``different_delta`` (``recorded`` and ``candidate``
     effects), ``would_reject`` (``rule``, ``kind``, ``witness`` absent when
     no binding was pinned, ``compared`` when a comparison failed),
-    ``would_error`` (``error``) or ``unreplayable`` (``because``, one of
+    ``would_error`` (``error``, and ``kind`` the kernel error's name from
+    ``KERNEL_ERROR_KINDS``) or ``unreplayable`` (``because``, one of
     ``no_such_act``, ``arity`` and ``draws``, with the prose ``reason``).
     ``model_hash`` is the programme that admitted the row and
     ``semantics_version`` the semantics, each ``None`` on rows written
@@ -2121,7 +2271,14 @@ class RehearsalRow:
             recorded=data.optional_nested("recorded", RehearsalEffect.from_json),
             candidate=data.optional_nested("candidate", RehearsalEffect.from_json),
             rule=data.optional_text("rule"),
-            kind=data.member("kind", _REHEARSAL_REFUSAL_KINDS) if "kind" in data else None,
+            kind=(
+                data.member(
+                    "kind",
+                    KERNEL_ERROR_KINDS if klass == "would_error" else _REHEARSAL_REFUSAL_KINDS,
+                )
+                if "kind" in data
+                else None
+            ),
             witness=(
                 _non_empty(data, "witness", data.array("witness", WitnessBinding.from_json))
                 if "witness" in data
@@ -2139,7 +2296,7 @@ class RehearsalRow:
 _REHEARSAL_ROW_SHAPES: dict[str, tuple[frozenset[str], frozenset[str]]] = {
     "different_delta": (frozenset({"recorded", "candidate"}), frozenset()),
     "would_reject": (frozenset({"rule", "kind"}), frozenset({"witness", "compared"})),
-    "would_error": (frozenset({"error"}), frozenset()),
+    "would_error": (frozenset({"error", "kind"}), frozenset()),
     "unreplayable": (frozenset({"because", "reason"}), frozenset()),
 }
 _REHEARSAL_ROW_OPTIONAL = frozenset(
@@ -2474,7 +2631,7 @@ class IndexNeed:
         data = _strict("index need", payload, {"program", "kind", "name"})
         return cls(
             program=data.text("program"),
-            kind=data.member("kind", {"invariant", "transformation"}),
+            kind=data.member("kind", {"invariant", "transformation", "derived"}),
             name=data.text("name"),
         )
 
@@ -2589,7 +2746,12 @@ class ProvisionReport:
     def is_current(self) -> bool:
         """Nothing is outstanding: every index is kept or satisfied by
         another, every statistics object kept. What `provision indexes
-        --check` passes."""
+        --check` passes.
+
+        It reads the plan, not the result: an applying run reports what it
+        did, so its actions read `create` and this is false straight after
+        a successful apply. Gate an applying run on `applied` and not
+        `has_conflict`, and a check run on this."""
         return all(i.action in ("keep", "satisfied_externally") for i in self.indexes) and all(
             s.action == "keep" for s in self.statistics
         )
@@ -4277,3 +4439,163 @@ def _plain(value: object) -> object:
     if isinstance(value, date):
         return value.isoformat()
     raise TypeError(f"{type(value).__name__} is not an envelope value: {value!r}")
+
+
+# ---- The generated view surface (`generate views --describe`) ----
+
+
+@dataclass(frozen=True)
+class ViewColumn:
+    """One column of a generated view, in the view's order. A metadata
+    column carries no Morpholog kind or position; a field carries both."""
+
+    name: str
+    role: str
+    sql_type: str
+    kind: str | None = None
+    position: int | None = None
+
+    @classmethod
+    def from_json(cls, payload: object) -> ViewColumn:
+        data = _strict(
+            "view_column", payload, {"name", "role", "sql_type"}, {"kind", "position"}
+        )
+        return cls(
+            name=data.text("name"),
+            role=data.member("role", {"metadata", "field"}),
+            sql_type=data.member(
+                "sql_type",
+                {
+                    "text",
+                    "numeric",
+                    "date",
+                    "timestamptz",
+                    "interval",
+                    "boolean",
+                    "jsonb",
+                    "uuid",
+                    "bigint",
+                    "integer",
+                },
+            ),
+            kind=data.optional_text("kind"),
+            position=data.optional_integer("position", minimum=0),
+        )
+
+
+@dataclass(frozen=True)
+class ViewDescription:
+    """One generated view. ``identity`` lists the field sets the programme
+    declares unique, as declared and possibly empty; whether one serves as
+    a key is the consumer's decision. A ``history`` view holds the
+    operations the audit log records on the predicate, and its identity
+    is the operation's place in the log."""
+
+    predicate: str
+    view: str
+    kind: str
+    columns: list[ViewColumn] = field(default_factory=list)
+    identity: list[list[str]] = field(default_factory=list)
+    source: str | None = None
+
+    @classmethod
+    def from_json(cls, payload: object) -> ViewDescription:
+        data = _strict(
+            "view_description",
+            payload,
+            {"predicate", "view", "kind", "columns", "identity"},
+            {"source"},
+        )
+        source = data.member("source", {"live", "cache"}) if "source" in data else None
+        return cls(
+            predicate=data.text("predicate"),
+            view=data.text("view"),
+            kind=data.member("kind", {"base", "derived", "history"}),
+            columns=data.array("columns", ViewColumn.from_json),
+            identity=data.array("identity", lambda item: parse_list(item, _text_item)),
+            source=source,
+        )
+
+    def single_key(self) -> str | None:
+        """The one field a consumer may take as the row's identity: the
+        field of the only single-field ``identity`` clause, or ``None``
+        when the view has no clause, several single-field clauses, or only
+        composite ones."""
+        singles = [clause[0] for clause in self.identity if len(clause) == 1]
+        return singles[0] if len(singles) == 1 else None
+
+
+@dataclass(frozen=True)
+class ViewSurface:
+    """What `generate views --describe` wrote: the programme and model
+    hash the deployed catalogue must carry, the schema, the catalogue and
+    seal names, and every view."""
+
+    format: int
+    programme: str
+    model_hash: str
+    schema: str
+    catalog: str
+    seal_table: str
+    views: list[ViewDescription] = field(default_factory=list)
+
+    @classmethod
+    def from_json(cls, payload: object) -> ViewSurface:
+        data = _strict(
+            "view_surface",
+            payload,
+            {"format", "programme", "model_hash", "schema", "catalog", "seal_table", "views"},
+        )
+        if data.raw("format") != 3:
+            raise EnvelopeError(
+                f"view_surface: format {data.raw('format')!r} is not the 3 this client reads"
+            )
+        return cls(
+            format=3,
+            programme=data.text("programme"),
+            model_hash=_hash(data, "model_hash"),
+            schema=data.text("schema"),
+            catalog=data.text("catalog"),
+            seal_table=data.text("seal_table"),
+            views=data.array("views", ViewDescription.from_json),
+        )
+
+
+def _text_item(value: object) -> str:
+    return _text("identity field", value)
+
+
+def read_view_surface(path: str) -> ViewSurface:
+    """Read a description `generate views --describe` wrote."""
+    with open(path, encoding="utf-8") as handle:
+        return ViewSurface.from_json(json.load(handle))
+
+
+def catalogue_differences(
+    surface: ViewSurface, catalogue_rows: list[tuple[str, str, str, str]]
+) -> list[str]:
+    """Why the deployed catalogue does not match ``surface``, or an empty
+    list when it does. ``catalogue_rows`` are ``(model_hash,
+    predicate_name, view_name, kind)`` read from ``surface.catalog`` in
+    ``surface.schema``. The check is of identity and inventory: the model
+    hash on every row, and the same views of the same kinds. It says
+    nothing about the deployed definitions, which `morpholog audit verify
+    --views-schema` proves against their seal."""
+    differences: list[str] = []
+    hashes = {row[0] for row in catalogue_rows}
+    if not hashes:
+        differences.append(
+            "the catalogue has no rows, so no deployed model hash can be checked "
+            f"against the description's {surface.model_hash}"
+        )
+    elif hashes != {surface.model_hash}:
+        differences.append(
+            f"catalogue model hash {sorted(hashes)} is not the description's {surface.model_hash}"
+        )
+    deployed = {(row[1], row[2], row[3]) for row in catalogue_rows}
+    described = {(v.predicate, v.view, v.kind) for v in surface.views}
+    for predicate, view, kind in sorted(described - deployed):
+        differences.append(f"described view {view} ({kind} {predicate}) is not in the catalogue")
+    for predicate, view, kind in sorted(deployed - described):
+        differences.append(f"catalogue view {view} ({kind} {predicate}) is not described")
+    return differences

@@ -245,7 +245,6 @@ def test_the_needle_lifecycle(morpholog: GlasshouseClient) -> None:
             curve_version="crv-v0",
             terms_version="T-001/v1",
             mtm=Decimal("99"),
-            currency="EUR",
         ),
         actor="risk-engine",
         explain_on_reject=True,
@@ -268,7 +267,6 @@ def test_the_needle_lifecycle(morpholog: GlasshouseClient) -> None:
             curve_version="crv-v1",
             terms_version="T-001/v1",
             mtm=Decimal("-1250.50"),
-            currency="EUR",
         ),
         actor="risk-engine",
     )
@@ -300,7 +298,6 @@ def test_the_needle_lifecycle(morpholog: GlasshouseClient) -> None:
             curve_version="crv-v1",
             terms_version="T-001/v1",
             mtm=Decimal("0"),
-            currency="EUR",
         ),
         actor="risk-engine",
     )
@@ -313,7 +310,6 @@ def test_the_needle_lifecycle(morpholog: GlasshouseClient) -> None:
             curve_version="crv-v2",
             terms_version="T-001/v1",
             mtm=Decimal("-1180.00"),
-            currency="EUR",
         ),
         actor="risk-engine",
     )
@@ -351,7 +347,6 @@ def test_the_needle_lifecycle(morpholog: GlasshouseClient) -> None:
             curve_version="crv-v2",
             terms_version="T-001/v1",
             mtm=Decimal("0"),
-            currency="EUR",
         ),
         actor="risk-engine",
         explain_on_reject=True,
@@ -367,7 +362,6 @@ def test_the_needle_lifecycle(morpholog: GlasshouseClient) -> None:
             curve_version="crv-v2",
             terms_version="T-001/v2",
             mtm=Decimal("-944.00"),
-            currency="EUR",
         ),
         actor="risk-engine",
     )
@@ -543,7 +537,10 @@ def test_the_needle_lifecycle(morpholog: GlasshouseClient) -> None:
             valid_until=dt.datetime.now(dt.UTC) + dt.timedelta(seconds=valid_for),
         )
 
-    for name, valid_for in (("I-keep", 3600), ("I-brief", 1.5)):
+    # I-brief must still be valid when the sweep below is first tried, and
+    # the steps between take a few seconds of binary calls: six is a
+    # margin, not a guess at their speed.
+    for name, valid_for in (("I-keep", 3600), ("I-brief", 6)):
         assert isinstance(morpholog.submit(instruct(name, valid_for), actor="alice"), Committed)
     # A second pair of eyes: the book requires approval, bob may give it,
     # and alice, who placed the instruction, may not approve her own even
@@ -568,17 +565,76 @@ def test_the_needle_lifecycle(morpholog: GlasshouseClient) -> None:
         models.CancelInstructionRequest(org=ORG, instruction="I-keep"), actor="alice"
     )
     assert isinstance(cancelled, Committed)
-    lapse = models.MarkInstructionLapsedRequest(org=ORG, instruction="I-brief")
+    lapse = models.LapseOverdueInstructionsRequest(org=ORG, book=BOOK)
     too_soon = morpholog.submit(lapse, actor="alice")
     assert isinstance(too_soon, Rejected)
-    assert too_soon.rule == "instruction_has_lapsed"
-    time.sleep(2)
+    assert too_soon.rule == "something_has_lapsed"
+    # Wait out the deadline the ledger holds, not one guessed beforehand.
+    (brief,) = [
+        o for o in morpholog.read(models.InstructionOpenClaim) if o.instruction == "I-brief"
+    ]
+    time.sleep(max(0.0, (brief.valid_until - dt.datetime.now(dt.UTC)).total_seconds()) + 0.5)
     assert isinstance(morpholog.submit(lapse, actor="alice"), Committed)
     assert morpholog.read(models.InstructionOpenClaim) == []
+
+    # A fill the market reports is booked even when it breaks a rule,
+    # and each breach goes on the record in the same act: 31 MW against
+    # a 30 MW cap, for an instruction that held 1 MW, which the book
+    # needed approved and nobody did. Risk answers for one of them.
+    assert isinstance(morpholog.submit(instruct("I-fill", 3600), actor="alice"), Committed)
+    assert isinstance(
+        morpholog.submit(
+            models.GrantFillAuthorityRequest(principal="recon", org=ORG), actor="bootstrap"
+        ),
+        Committed,
+    )
+    assert isinstance(
+        morpholog.submit(
+            models.GrantBreachAuthorityRequest(principal="risk", org=ORG), actor="bootstrap"
+        ),
+        Committed,
+    )
+    filled = morpholog.submit(
+        models.RecordFillRequest(
+            org=ORG,
+            instruction="I-fill",
+            execution="EX-1",
+            trade="T-FILL",
+            counterparty="exchange",
+            version="T-FILL/v1",
+            quantity=Decimal("31"),
+            price=Decimal("80"),
+            trade_date=AS_OF,
+        ),
+        actor="recon",
+    )
+    assert isinstance(filled, Committed)
+    breaches = {(b.trade, b.kind) for b in morpholog.read(models.BreachClaim)}
+    assert breaches == {("T-FILL", "limit"), ("T-FILL", "overfill"), ("T-FILL", "unapproved")}
+    answered = morpholog.submit(
+        models.AnswerBreachRequest(
+            org=ORG,
+            trade="T-FILL",
+            kind="limit",
+            decision="cap_raised",
+            note="cap raised for the week",
+        ),
+        actor="risk",
+    )
+    assert isinstance(answered, Committed)
+    unanswered = [
+        models.UnansweredBreachClaim.from_named(row.args)
+        for row in morpholog.derived_named("UnansweredBreach")
+    ]
+    assert sorted((u.trade, u.kind, u.execution) for u in unanswered) == [
+        ("T-FILL", "overfill", "EX-1"),
+        ("T-FILL", "unapproved", "EX-1"),
+    ]
     assert {e.instruction: e.outcome for e in morpholog.read(models.InstructionEndedClaim)} == {
         "I-keep": "cancelled",
         "I-no": "rejected",
         "I-brief": "lapsed",
+        "I-fill": "filled",
     }
 
     # The coverage surface (upstream #137): by the end of the needle
@@ -586,6 +642,6 @@ def test_the_needle_lifecycle(morpholog: GlasshouseClient) -> None:
     # no invariant's condition has gone unexercised by committed history.
     report = morpholog.coverage()
     in_programme = [t for t in report.transformations if not t.not_in_programme]
-    assert len(in_programme) == 22
+    assert len(in_programme) == 26
     assert all(t.transitions > 0 for t in in_programme)
     assert not [i.invariant for i in report.invariants if i.verdict == "never_fired"]

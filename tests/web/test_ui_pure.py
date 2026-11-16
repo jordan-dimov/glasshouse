@@ -261,7 +261,7 @@ THREE_GOOD_ROWS = "\n".join(
 ONE_RECEIPT = (
     '{"status": "committed", "transition_id": "tr-1", "actor": {"type": "subject", '
     '"value": "alice"}, "asserted_claims": [], "retracted_claims": [], '
-    '"emitted_intents": [], "row": 1}\n'
+    '"emitted_intents": [], "drawn_subjects": [], "row": 1}\n'
 )
 
 

@@ -31,10 +31,9 @@ class AmendmentError(RuntimeError):
     a lineage that disagrees with the timeline)."""
 
 
-def amend_trade(
+def amendment_request(
     morpholog: GlasshouseClient,
     *,
-    actor: str,
     org: str,
     trade: str,
     quantity: Decimal,
@@ -43,10 +42,11 @@ def amend_trade(
     delivery_end: dt.datetime,
     effective_from: dt.date,
     new_version: str | None = None,
-) -> Outcome:
-    """Propose a new version of the trade's terms effective from
-    `effective_from`, superseding the current one. Returns the ledger's
-    verdict; raises `AmendmentError` when there is nothing to amend."""
+) -> AmendTradeRequest:
+    """The proposal superseding the trade's current terms with these,
+    effective from `effective_from`; raises `AmendmentError` when there
+    is nothing to amend. `amend_trade` proposes it alone, and
+    `marking.amend_and_remark` with the trade's new mark."""
     versions = [t for t in morpholog.read(TradeTermsClaim) if t.org == org and t.trade == trade]
     tip = current_terms(versions)
     if tip is None:
@@ -61,17 +61,46 @@ def amend_trade(
             f"the latest terms of trade {trade!r} ({tip.version}) are already superseded: "
             "lineage and timeline disagree"
         )
-    return morpholog.submit(
-        AmendTradeRequest(
-            org=org,
-            trade=trade,
-            prior_version=tip.version,
-            new_version=new_version or next_version_id(trade, versions),
-            quantity=quantity,
-            price=price,
-            delivery_start=delivery_start,
-            delivery_end=delivery_end,
-            effective_from=effective_from,
-        ),
-        actor=actor,
+    return AmendTradeRequest(
+        org=org,
+        trade=trade,
+        prior_version=tip.version,
+        new_version=new_version or next_version_id(trade, versions),
+        quantity=quantity,
+        price=price,
+        delivery_start=delivery_start,
+        delivery_end=delivery_end,
+        effective_from=effective_from,
     )
+
+
+def amend_trade(
+    morpholog: GlasshouseClient,
+    *,
+    actor: str,
+    org: str,
+    trade: str,
+    quantity: Decimal,
+    price: Decimal,
+    delivery_start: dt.datetime,
+    delivery_end: dt.datetime,
+    effective_from: dt.date,
+    new_version: str | None = None,
+) -> Outcome:
+    """Propose a new version of the trade's terms effective from
+    `effective_from`, superseding the current one, and nothing else.
+    Returns the ledger's verdict; raises `AmendmentError` when there is
+    nothing to amend. A trade with a mark to keep current is amended
+    with `marking.amend_and_remark` instead."""
+    request = amendment_request(
+        morpholog,
+        org=org,
+        trade=trade,
+        quantity=quantity,
+        price=price,
+        delivery_start=delivery_start,
+        delivery_end=delivery_end,
+        effective_from=effective_from,
+        new_version=new_version,
+    )
+    return morpholog.submit(request, actor=actor)

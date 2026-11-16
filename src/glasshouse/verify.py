@@ -47,7 +47,6 @@ from glasshouse.commit import (
     VIEWS_SCHEMA,
     GlasshouseClient,
     MorphologError,
-    missing_catalogued_views,
     models,
     views_model_hash,
 )
@@ -231,22 +230,17 @@ def _tree_leg(report: LedgerVerifyReport) -> Leg:
 
 
 def _views_leg(engine: sa.Engine, seal: ViewsVerification | None) -> Leg:
-    # The official inspection model (law 4), three independent checks:
-    # the catalogue stamps the same hash the binary and client name; the
-    # inventory check guards against a dropped or renamed view the hash
-    # alone would miss (the catalogue is itself a view, so a hash read
-    # can succeed while a sibling is gone); and the binary's seal verdict
-    # catches a view redefined in place under the same name, which both
-    # of the local checks are blind to. The local checks are database
-    # reads, so they still give evidence when the shared `verify` call
-    # failed and no seal verdict exists (`seal is None`) - but the leg
-    # cannot claim ok without one, because "ok" now means unredefined.
+    # The official inspection model (law 4), two independent checks: the
+    # catalogue stamps the same hash the binary and client name, and the
+    # binary's seal verdict catches a view dropped, renamed or redefined
+    # in place under the same name (its `missing` and `mismatched`). The
+    # hash is a database read, so it still gives evidence when the shared
+    # `verify` call failed and no seal verdict exists (`seal is None`) -
+    # but the leg cannot claim ok without one, because "ok" means
+    # unredefined.
     deployed = views_model_hash(engine)
     if deployed is None:
         return Leg("views", False, f"the {VIEWS_SCHEMA} inspection model is not applied")
-    missing = missing_catalogued_views(engine)
-    if missing:
-        return Leg("views", False, f"catalogued view(s) missing: {', '.join(missing)}")
     if deployed != MODEL_HASH:
         return Leg(
             "views", False, f"inspection model names {deployed}, committed client {MODEL_HASH}"

@@ -68,18 +68,43 @@ RULES_IN_PLAIN_WORDS = {
     "approval_not_already_required": "That book already requires approval.",
     "instruction_is_new": "An instruction with this id already exists.",
     "instruction_is_still_valid": "The instruction's valid-until time has already passed.",
-    "instruction_has_lapsed": "The instruction is still valid, so it has not lapsed.",
+    "breach_must_shrink": (
+        "While the book is over its cap in this hour, a trade must make the hour's net smaller; "
+        "it may not flip it to the same size on the other side."
+    ),
+    "something_has_lapsed": "No instruction in that book has run out of time yet.",
+    "may_lapse": "This name is not allowed to record lapses in that book.",
+    "may_record_fills": "This name is not allowed to record fills.",
+    "instruction_was_placed": "There is no such instruction.",
+    "execution_is_new": "This fill has already been recorded.",
+    "may_answer_breach": "This name is not allowed to answer breaches.",
+    "answerer_is_not_the_trader": (
+        "The person who placed the instruction cannot answer its breach themselves."
+    ),
+    "breach_not_yet_answered": "This breach has already been answered.",
+    "breach_was_recorded": "There is no such breach on that trade.",
     "may_capture_trade": "This name is not allowed to enter trades in that book.",
     "may_amend_trade": "This name is not allowed to change trades in that book.",
     "may_register_curve": "This name is not allowed to enter prices for that market.",
     "market_has_a_currency": "That market has not been set up yet.",
     "trade_is_new": "A trade with this id is already in the book.",
-    "terms_version_is_new": "A trade with this id is already in the book.",
+    "terms_version_is_new": "This version of the trade's terms already exists.",
     "curve_version_is_new": "A curve version with this name already exists.",
     "no_official_curve_yet": "That market already has prices for that day. Correct them instead.",
     "delivery_is_forward": "Delivery must end after it starts.",
     "delivery_is_whole_hours": "Delivery must start and end on the hour.",
     "delivery_is_at_most_a_year": "Delivery can last at most a year.",
+}
+
+# What each kind of breach means, for the Positions screen. The kinds
+# are the ledger's closed list (`breach_is_of_a_known_kind`); a test
+# holds this table to it.
+BREACH_KINDS_IN_PLAIN_WORDS = {
+    "limit": "took the book past its limit",
+    "unapproved": "filled without the approval its book requires",
+    "after_end": "filled after the instruction had ended",
+    "price": "filled at a worse price than its limit",
+    "overfill": "filled for more than the instruction held",
 }
 
 OUTCOMES_IN_PLAIN_WORDS = {
@@ -145,3 +170,4 @@ templates.env.filters["ago"] = _ago
 templates.env.globals["viewing"] = _viewing
 templates.env.filters["plain_rule"] = _plain_rule
 templates.env.globals["outcome_words"] = OUTCOMES_IN_PLAIN_WORDS
+templates.env.globals["breach_kinds"] = BREACH_KINDS_IN_PLAIN_WORDS

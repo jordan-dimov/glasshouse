@@ -108,10 +108,10 @@ def test_the_nightly_reset_never_kills_a_live_projector(
                     .select_from(blotter_trade)
                     .where(blotter_trade.c.org == SEED_ORG)
                 ).scalar_one()
-            if count == 8:
+            if count == 10:
                 break
             time.sleep(0.2)
-        assert count == 8
+        assert count == 10
         assert thread.is_alive()
         # Progress, not just liveness: the thread survived the reset AND
         # got through afterwards, which is the pair the readiness verdict

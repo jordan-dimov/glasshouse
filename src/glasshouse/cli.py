@@ -18,7 +18,7 @@ is the separate-worker loop.
 from __future__ import annotations
 
 import sys
-from decimal import Decimal
+from collections.abc import Callable
 from pathlib import Path
 from typing import Annotated
 
@@ -28,14 +28,18 @@ from pydantic import ValidationError
 from typer.main import get_command
 
 from glasshouse.agents import Desk, build_server
+from glasshouse.api import fills
 from glasshouse.commit import (
     MODEL_FILE,
     VIEWS_SCHEMA,
+    Committed,
     GlasshouseClient,
     MorphologError,
     Rejected,
     apply_views,
+    exact_decimals,
 )
+from glasshouse.commit.morpholog_client.adapter import Request
 from glasshouse.commit.morpholog_client.envelopes import (
     CheckpointCreated,
     RoleRebindingsEvaluated,
@@ -45,6 +49,8 @@ from glasshouse.commit.morpholog_client.envelopes import (
     TreeUnsupportedPack,
 )
 from glasshouse.commit.morpholog_client.models import (
+    AnswerBreachRequest,
+    LapseOverdueInstructionsRequest,
     PositionLimitClaim,
     SetPositionLimitRequest,
 )
@@ -63,6 +69,7 @@ from glasshouse.logging import configure_logging, get_logger
 from glasshouse.projections import catch_up, follow
 from glasshouse.provision import ProvisionError, run_provision
 from glasshouse.seed import SeedError, run_seed
+from glasshouse.sweep import lapsed, sweep_once
 from glasshouse.verify import verify
 
 log = get_logger("glasshouse.cli")
@@ -112,6 +119,27 @@ def _run_import(
     if project:
         engine = sa.create_engine(engine_url(db))
         print(f"projected: applied {catch_up(client, engine)} transition(s)")
+
+
+def _committed_or_exit(client: GlasshouseClient, request: Request, actor: str) -> Committed:
+    """Propose one act; a refusal is printed in the ledger's own words
+    (`refused: <rule>: ...`) and exits 1, as every single-act command
+    here reports it."""
+    outcome = client.submit(request, actor=actor, explain_on_reject=True)
+    if isinstance(outcome, Rejected):
+        print(f"refused: {why(outcome.explanation)}", file=sys.stderr)
+        raise typer.Exit(code=1)
+    return outcome
+
+
+def _readable[T](build: Callable[[], T]) -> T:
+    """A request built from what was typed, or the caller's own mistake
+    in words and exit 2: nothing is proposed."""
+    try:
+        return build()
+    except ValueError as malformed:
+        print(f"error: {malformed}", file=sys.stderr)
+        raise typer.Exit(code=2) from malformed
 
 
 @app.command(
@@ -221,7 +249,7 @@ def set_limit_command(
     database_url: DatabaseUrl = "",
 ) -> None:
     client = _client(_db(database_url))
-    cap_mw = Decimal(cap)
+    cap_mw = _readable(lambda: exact_decimals(cap=cap)["cap"])
     standing = [
         limit
         for limit in client.read(PositionLimitClaim)
@@ -229,18 +257,127 @@ def set_limit_command(
     ]
     # One act sets a cap or replaces the standing one; the read above is
     # only for telling the operator what stood.
-    outcome = client.submit(
-        SetPositionLimitRequest(org=org, book=book, cap=cap_mw),
-        actor=actor,
-        explain_on_reject=True,
+    outcome = _committed_or_exit(
+        client, SetPositionLimitRequest(org=org, book=book, cap=cap_mw), actor
     )
-    if isinstance(outcome, Rejected):
-        print(f"refused: {why(outcome.explanation)}", file=sys.stderr)
-        raise typer.Exit(code=1)
     was = f" (was {standing[0].cap} MW)" if standing else ""
     print(
         f"position limit for {book} in {org}: {cap_mw} MW{was}; transition {outcome.transition_id}"
     )
+
+
+@app.command(
+    "record-fill",
+    help="Record a fill the market reported against an instruction, and book its trade. A fill "
+    "is booked even when it breaks a rule; the ledger records the breach with it.",
+)
+def record_fill_command(
+    org: Annotated[str, typer.Option(help="the organisation")],
+    instruction: Annotated[str, typer.Option(help="the instruction that filled")],
+    execution: Annotated[str, typer.Option(help="the outside firm's identifier for the fill")],
+    trade: Annotated[str, typer.Option(help="the trade id to book it as")],
+    counterparty: Annotated[str, typer.Option(help="who the trade is with")],
+    quantity: Annotated[str, typer.Option(help="MW filled, as written (never a float)")],
+    price: Annotated[str, typer.Option(help="per MWh, in the market's currency")],
+    trade_date: Annotated[str, typer.Option(help="the trade date, ISO")],
+    actor: Annotated[str, typer.Option(help="the reconciling service (holds MayRecordFills)")],
+    database_url: DatabaseUrl = "",
+) -> None:
+    client = _client(_db(database_url))
+    request = _readable(
+        lambda: fills.fill_request(
+            org=org,
+            instruction=instruction,
+            execution=execution,
+            trade=trade,
+            counterparty=counterparty,
+            quantity=quantity,
+            price=price,
+            trade_date=trade_date,
+        )
+    )
+    already = fills.recorded_as(client, org=org, execution=execution)
+    if already is not None:
+        # A retry after a timeout, or a report seen twice: the ledger
+        # holds one booking per execution, so the same report is an
+        # answer, and a different one under the same id is a conflict.
+        conflicts = fills.repeat_conflicts(client, request, already)
+        if conflicts:
+            print(
+                f"conflict: fill {execution} was booked as {already}, and this report "
+                f"differs: {'; '.join(conflicts)}",
+                file=sys.stderr,
+            )
+            raise typer.Exit(code=1)
+        print(f"fill {execution} is already recorded, as {already}")
+        return
+    outcome = _committed_or_exit(client, request, actor)
+    breaches = sorted(fills.breaches_of(client, org=org, trade=trade))
+    print(
+        f"fill {execution} booked as {trade}; "
+        + (f"breaches: {', '.join(breaches)}" if breaches else "no breach")
+        + f"; transition {outcome.transition_id}"
+    )
+
+
+@app.command(
+    "answer-breach",
+    help="Answer a breach: what was decided and why. Needs the right to answer breaches, and "
+    "is refused for the trader who placed the instruction behind it. An answer records the "
+    "decision, not that it has been carried out.",
+)
+def answer_breach_command(
+    org: Annotated[str, typer.Option(help="the organisation")],
+    trade: Annotated[str, typer.Option(help="the trade the breach is on")],
+    kind: Annotated[str, typer.Option(help="limit, unapproved, after_end, price or overfill")],
+    decision: Annotated[str, typer.Option(help=f"one of: {', '.join(fills.DECISIONS)}")],
+    note: Annotated[str, typer.Option(help="why, in words")],
+    actor: Annotated[str, typer.Option(help="who is answering (holds MayAnswerBreach)")],
+    database_url: DatabaseUrl = "",
+) -> None:
+    client = _client(_db(database_url))
+    outcome = _committed_or_exit(
+        client,
+        AnswerBreachRequest(org=org, trade=trade, kind=kind, decision=decision, note=note),
+        actor,
+    )
+    print(f"breach {kind} on {trade} answered: {decision}; transition {outcome.transition_id}")
+
+
+@app.command(
+    "lapse-instructions",
+    help="Record the lapse of every instruction in a book whose valid_until has passed, and free "
+    "the room each held. Refused when none has passed.",
+)
+def lapse_instructions_command(
+    org: Annotated[str, typer.Option(help="the organisation")],
+    book: Annotated[str, typer.Option(help="the book to sweep")],
+    actor: Annotated[str, typer.Option(help="who is recording it (may instruct, or fills)")],
+    database_url: DatabaseUrl = "",
+) -> None:
+    client = _client(_db(database_url))
+    outcome = _committed_or_exit(client, LapseOverdueInstructionsRequest(org=org, book=book), actor)
+    print(f"{lapsed(outcome)} instruction(s) lapsed in {book}; transition {outcome.transition_id}")
+
+
+@app.command(
+    "sweep",
+    help="Record the lapse of overdue instructions in every book that has one, once: what the "
+    "demo does every minute, for a scheduler to run anywhere else.",
+)
+def sweep_command(
+    actor: Annotated[str, typer.Option(help="the reconciling service")] = "",
+    database_url: DatabaseUrl = "",
+) -> None:
+    client = _client(_db(database_url))
+    outcomes = sweep_once(client, actor=actor or get_settings().sweep_actor)
+    for (org, book), outcome in outcomes.items():
+        if isinstance(outcome, Committed):
+            print(f"{org}/{book}: {lapsed(outcome)} lapsed")
+        else:
+            print(f"{org}/{book}: refused by {outcome.rule}")
+    if not outcomes:
+        print("nothing overdue")
 
 
 @app.command(

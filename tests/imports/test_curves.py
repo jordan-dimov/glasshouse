@@ -72,6 +72,15 @@ def test_naive_and_mixed_instants_quarantine_with_a_reason() -> None:
     assert all(o.detail for o in quarantined)
 
 
+@pytest.mark.parametrize("price", ["NaN", "90." + "1" * 29, "1" * 30])
+def test_a_price_the_ledger_cannot_hold_as_written_quarantines_its_curve(price: str) -> None:
+    text = "\n".join([HEADER, f"de-power,2026-06-08,crv-a,2026-07-01T00:00:00Z,{price}"])
+    curves, quarantined = parse_curves(text)
+    assert not curves
+    (outcome,) = quarantined
+    assert "28 decimal places" in outcome.detail
+
+
 def test_header_mismatch_refuses_the_whole_file() -> None:
     with pytest.raises(ImportFormatError, match="unknown: when"):
         parse_curves(HEADER.replace("as_of", "when") + "\n")

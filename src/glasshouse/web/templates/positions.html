@@ -17,6 +17,40 @@
   <button type="submit">Apply</button>
 </form>
 
+{% if breaches is none %}
+<section role="alert">
+  <h2>Breaches to answer</h2>
+  <p>{{ badge("quarantined", "could not be read") }} The ledger did not answer the question of which breaches are unanswered, so this screen cannot say there are none. The figures below are still current. Try again in a moment; if this stays, check the service's health page.</p>
+</section>
+{% elif breaches %}
+<section>
+  <h2>Breaches to answer</h2>
+  <div class="table-scroll">
+    <table class="data-table" aria-label="Unanswered breaches of {{ org }}">
+      <thead>
+        <tr>
+          <th scope="col">Trade</th>
+          <th scope="col">Book</th>
+          <th scope="col">What happened</th>
+          <th scope="col">Fill (the market's id)</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for row in breaches %}
+        <tr>
+          <td class="mono">{{ row.trade }}</td>
+          <td>{{ row.book }}</td>
+          <td>{{ badge("quarantined", breach_kinds.get(row.kind, row.kind)) }}</td>
+          <td class="mono">{{ row.execution }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  <p class="tile__note">A fill the market reported is booked even when it breaks a rule, because it happened. The breach is recorded with it, and stays here until someone with the right answers it with a decision and a reason. Whoever placed the instruction cannot answer its breach.</p>
+</section>
+{% endif %}
+
 {% if limits %}
 <section>
   <h2>Against the limits</h2>
@@ -96,7 +130,7 @@
       </tbody>
     </table>
   </div>
-  <p class="tile__note">An instruction is an intention that has not happened yet, such as an order sent to market. It holds room under its book's limit until it is cancelled, or until its time has run out and that is recorded. Where a book requires approval, a second person must approve it, and never the one who placed it. It is not connected to fills yet.</p>
+  <p class="tile__note">An instruction is an intention that has not happened yet, such as an order sent to market. It holds room under its book's limit until it is cancelled, or until its time has run out and that is recorded. Where a book requires approval, a second person must approve it, and never the one who placed it. When it fills, the fill books the trade and frees the room it held.</p>
 </section>
 {% endif %}
 

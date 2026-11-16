@@ -24,7 +24,7 @@ from mcp.types import CallToolResult
 
 from glasshouse.agents import Desk, build_server
 from glasshouse.api.app import create_app
-from glasshouse.commit import Committed, Rejected, models
+from glasshouse.commit import Committed, models
 from glasshouse.compute.store import engine_url
 from glasshouse.seed import AGENT, ORG
 from tests.support import BINARY, DB, needs_live_stack, seeded_ledger
@@ -191,10 +191,7 @@ def test_an_overdue_instruction_holds_its_room_until_the_lapse_is_recorded(desk:
     # holds: the limit rule reads no clock. Recording the lapse frees it.
     brief = instruction("LAPSE-1", 16, "5", valid_until=soon(2))
     assert call(desk, "place_instruction", brief)["accepted"]
-    lapse = models.MarkInstructionLapsedRequest(org=ORG, instruction="LAPSE-1")
-    too_soon = desk.client.submit(lapse, actor=AGENT)
-    assert isinstance(too_soon, Rejected)
-    assert too_soon.rule == "instruction_has_lapsed"
+    lapse = models.LapseOverdueInstructionsRequest(org=ORG, book="spec-de")
     time.sleep(2.5)
     (overdue,) = [
         r
@@ -236,7 +233,7 @@ def test_the_api_and_the_positions_screen_show_what_is_held(
     assert "2026-07-01 17:00Z" in row
     for figure in ("20", "2", "25", "3"):
         assert f'class="numeric">{figure}<' in row
-    assert "It is not connected to fills yet" in page
+    assert "When it fills, the fill books the trade" in page
     assert "awaiting approval" in page  # spec-de asks for a second person
 
 

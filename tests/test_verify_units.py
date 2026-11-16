@@ -14,7 +14,6 @@ from glasshouse import verify as verify_module
 from glasshouse.commit import (
     MODEL_HASH,
     GlasshouseClient,
-    missing_catalogued_views,
     views_model_hash,
 )
 from glasshouse.commit.morpholog_client import MORPHOLOG_VERSION
@@ -153,8 +152,6 @@ def test_an_unreachable_database_is_not_an_unapplied_surface() -> None:
     try:
         with pytest.raises(sa.exc.OperationalError):
             views_model_hash(engine)
-        with pytest.raises(sa.exc.OperationalError):
-            missing_catalogued_views(engine)
     finally:
         engine.dispose()
 
@@ -223,7 +220,6 @@ def test_the_views_leg_passes_when_the_catalogue_and_seal_agree(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(verify_module, "views_model_hash", lambda _engine: MODEL_HASH)
-    monkeypatch.setattr(verify_module, "missing_catalogued_views", lambda _engine: ())
     leg = _views_leg(_dead_engine(), INTACT_SEAL)
     assert leg.ok
     assert "seal intact over 11 view(s)" in leg.detail
@@ -233,7 +229,6 @@ def test_the_views_leg_names_both_hashes_on_drift(monkeypatch: pytest.MonkeyPatc
     # The local hash check decides without a seal verdict (the shared
     # verify call may have failed; the drift is evident regardless).
     monkeypatch.setattr(verify_module, "views_model_hash", lambda _engine: "sha256:0000")
-    monkeypatch.setattr(verify_module, "missing_catalogued_views", lambda _engine: ())
     leg = _views_leg(_dead_engine(), None)
     assert not leg.ok
     assert "sha256:0000" in leg.detail
@@ -247,25 +242,12 @@ def test_the_views_leg_reports_an_unapplied_surface(monkeypatch: pytest.MonkeyPa
     assert "not applied" in leg.detail
 
 
-def test_the_views_leg_catches_a_dropped_view_the_hash_would_miss(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    # Hash still names the committed programme, but a catalogued view is
-    # gone: the inventory check fails where the hash alone would pass.
-    monkeypatch.setattr(verify_module, "views_model_hash", lambda _engine: MODEL_HASH)
-    monkeypatch.setattr(verify_module, "missing_catalogued_views", lambda _engine: ("trade_terms",))
-    leg = _views_leg(_dead_engine(), None)
-    assert not leg.ok
-    assert "trade_terms" in leg.detail
-
-
 def test_the_views_leg_cannot_claim_ok_without_a_seal_verdict(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     # Local checks clean but the shared verify call failed: "ok" now
     # means unredefined, which only the seal can attest.
     monkeypatch.setattr(verify_module, "views_model_hash", lambda _engine: MODEL_HASH)
-    monkeypatch.setattr(verify_module, "missing_catalogued_views", lambda _engine: ())
     leg = _views_leg(_dead_engine(), None)
     assert not leg.ok
     assert "seal unverified" in leg.detail
@@ -276,7 +258,6 @@ def test_the_views_leg_fails_an_unsealed_surface(monkeypatch: pytest.MonkeyPatch
     # committed script seals at apply time, so an unsealed live surface
     # is not the committed surface, and one re-apply seals it.
     monkeypatch.setattr(verify_module, "views_model_hash", lambda _engine: MODEL_HASH)
-    monkeypatch.setattr(verify_module, "missing_catalogued_views", lambda _engine: ())
     leg = _views_leg(_dead_engine(), ViewsNotSealed())
     assert not leg.ok
     assert "re-apply the inspection model" in leg.detail
@@ -286,7 +267,6 @@ def test_the_views_leg_names_the_redefined_and_missing_views(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(verify_module, "views_model_hash", lambda _engine: MODEL_HASH)
-    monkeypatch.setattr(verify_module, "missing_catalogued_views", lambda _engine: ())
     leg = _views_leg(
         _dead_engine(), ViewsTampered(mismatched=["trade_terms"], missing=["official_curve"])
     )
