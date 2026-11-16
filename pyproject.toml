@@ -29,10 +29,10 @@ dependencies = [
 dev = [
     "pytest>=9.2.0",
     "pytest-cov>=7.0",
-    "pytest-randomly>=5.0.0",
+    "pytest-randomly>=5.1.0",
     "hypothesis>=6.170.15",
     "httpx2>=2.16.0",
-    "ruff>=0.17.4",
+    "ruff>=0.17.5",
     "mypy>=2.4.1",
 ]
 
