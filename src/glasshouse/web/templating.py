@@ -22,6 +22,7 @@ from starlette.datastructures import QueryParams
 from glasshouse import __version__
 from glasshouse.api import asof
 from glasshouse.commit.morpholog_client import MORPHOLOG_VERSION
+from glasshouse.config import get_settings
 
 
 def _utc(instant: dt.datetime) -> str:
@@ -214,6 +215,8 @@ def _system_time() -> dict[str, str]:
 
 
 templates.env.globals["system_time"] = _system_time
+# The hosted demo says, quietly, what it is: evaluation, readiness L0.
+templates.env.globals["environment"] = lambda: get_settings().environment
 # A stylesheet's address changes when any stylesheet does, so a browser
 # never shows a new page with a stylesheet it cached from the last
 # release.

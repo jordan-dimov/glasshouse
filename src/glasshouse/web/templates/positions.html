@@ -17,6 +17,10 @@
   <button type="submit">Apply</button>
 </form>
 
+{% if as_of %}
+<p class="tile__note">Limits, open instructions and breaches are shown for now only, so they are left out of a past moment.</p>
+{% endif %}
+
 {% if breaches is none %}
 <section role="alert">
   <h2>Breaches to answer</h2>
