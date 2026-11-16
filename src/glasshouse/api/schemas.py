@@ -143,6 +143,10 @@ class OverviewSummary(BaseModel):
     # when nothing is marked yet.
     valuations: list[ValuationSummary]
     projection: ProjectionCursor
+    # The day the organisation's valuations are for, rolled by an act in
+    # the ledger; None before the first roll, or if the ledger could not
+    # be read.
+    business_date: date | None = None
 
 
 class CurveVersion(BaseModel):

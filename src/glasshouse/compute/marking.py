@@ -56,6 +56,7 @@ from glasshouse.commit import (
 from glasshouse.commit.morpholog_client.envelopes import AtomicCommitted, AtomicRejected
 from glasshouse.commit.morpholog_client.models import (
     AdmitValuationRequest,
+    BusinessDateClaim,
     CorrectCurveRequest,
     CurveRegisteredClaim,
     OfficialCurveClaim,
@@ -176,13 +177,16 @@ def value_trade(
         ],
         f"captured trade {trade!r} in {org}/{book}",
     )
-    officials = [
-        o
-        for o in morpholog.read(OfficialCurveClaim)
-        if o.org == org and o.market == captured.market
-    ]
-    _refuse_several_business_dates(officials, org=org, market=captured.market)
-    official = _one(officials, f"official curve for {org}/{captured.market}")
+    on = business_date_of(morpholog, org=org)
+    if on is None:
+        raise MarkingError(
+            f"{org} has no business date: roll one (roll-business-date) before valuing"
+        )
+    official = _official_on(morpholog, org=org, market=captured.market, on=on)
+    if official is None:
+        raise MarkingError(
+            f"no official curve for {org}/{captured.market} on the business date {on}"
+        )
     versions = [t for t in morpholog.read(TradeTermsClaim) if t.org == org and t.trade == trade]
     terms = _in_force(versions, trade=trade, as_of=official.as_of)
     curve = _anchored_curve(morpholog, store, org=org, version=official.version)
@@ -222,15 +226,17 @@ def correct_and_remark(
     The trades are read before the decision, so a trade captured while
     this runs is corrected under but not re-marked - exactly what the
     one-by-one flow does to it, and `value_trade` marks it afterwards.
-    Each trade is re-marked under the terms in force on the correction's
-    business date; a trade none of whose versions is yet in force on it
+    Trades are re-marked only when the corrected curve is for the
+    organisation's business date; a correction of another day's prices is
+    proposed alone. Each trade is re-marked under the terms in force on
+    that date; a trade none of whose versions is yet in force on it
     is skipped and logged, since the ledger's own rule says it is not
     valuable as of that date, and refusing the whole correction would
     punish it for a trade booked after the curve's date."""
-    officials = [
-        o for o in morpholog.read(OfficialCurveClaim) if o.org == org and o.market == market
-    ]
-    _refuse_several_business_dates(officials, org=org, market=market)
+    # A correction re-marks only on the business date: marks are struck
+    # against that day's curve, so correcting another day's prices leaves
+    # today's marks where they are (and that day's marks as history).
+    remark = business_date_of(morpholog, org=org) == as_of
     versions: dict[str, list[TradeTermsClaim]] = {}
     for version in morpholog.read(TradeTermsClaim):
         if version.org == org:
@@ -273,7 +279,7 @@ def correct_and_remark(
                 valuation_actor,
             )
             for c in captured
-            if c.trade in in_force
+            if remark and c.trade in in_force
         ),
     ]
     store.save(org=org, version=new_version, curve=curve)
@@ -309,11 +315,12 @@ def amend_and_remark(
     disagree, and a refused mark leaves the terms unamended.
 
     The mark is struck against the official curve for the trade's
-    market, from the new terms, which the ledger's own gate then checks
-    are the ones in force on the curve's date. When there is nothing to
-    re-mark the amendment is proposed alone: no official curve yet, or
-    new terms that take effect only after the curve's date (the current
-    mark, under the terms still in force then, stays right)."""
+    market on the organisation's business date, from the new terms, which
+    the ledger's own gate then checks are the ones in force on that date.
+    When there is nothing to re-mark the amendment is proposed alone: no
+    business date or no official curve for it yet, or new terms that take
+    effect only after it (the current mark, under the terms still in force
+    then, stays right)."""
     amendment = amendment_request(
         morpholog,
         org=org,
@@ -328,16 +335,13 @@ def amend_and_remark(
         [c for c in morpholog.read(TradeCapturedClaim) if c.org == org and c.trade == trade],
         f"captured trade {trade!r} in {org}",
     )
-    officials = [
-        o
-        for o in morpholog.read(OfficialCurveClaim)
-        if o.org == org and o.market == captured.market
-    ]
-    _refuse_several_business_dates(officials, org=org, market=captured.market)
-    if not officials or effective_from > officials[0].as_of:
-        log.info("marking.amended_without_remark", org=org, trade=trade, officials=len(officials))
+    on = business_date_of(morpholog, org=org)
+    official = (
+        None if on is None else _official_on(morpholog, org=org, market=captured.market, on=on)
+    )
+    if official is None or effective_from > official.as_of:
+        log.info("marking.amended_without_remark", org=org, trade=trade, business_date=on)
         return morpholog.submit(amendment, actor=actor)
-    (official,) = officials
     curve = _anchored_curve(morpholog, store, org=org, version=official.version)
     new_terms = TradeTermsClaim(
         org=org,
@@ -399,21 +403,24 @@ def _mtm(captured: TradeCapturedClaim, terms: TradeTermsClaim, curve: HourlyCurv
     )
 
 
-def _refuse_several_business_dates(
-    officials: list[OfficialCurveClaim], *, org: str, market: str
-) -> None:
-    if len(officials) > 1:
-        # Lawful state the compute path cannot yet consume: one official
-        # curve may stand per (org, market, AS-OF DATE), so several dates
-        # can carry one at once. Selecting between them needs the
-        # governed business date (glasshouse#44); until it exists this is
-        # a named refusal, never a guess.
-        dates = ", ".join(sorted(o.as_of.isoformat() for o in officials))
-        raise MarkingError(
-            f"{len(officials)} official curves stand for {org}/{market} "
-            f"(as-of dates: {dates}); choosing between business dates is not yet "
-            "modelled - see glasshouse#44"
-        )
+def business_date_of(morpholog: GlasshouseClient, *, org: str) -> dt.date | None:
+    """The organisation's business date, the day its valuations are for,
+    or `None` before the first roll. Read by the organisation's key."""
+    rows = morpholog.claims_named("BusinessDate", where={"org": org})
+    dates = [BusinessDateClaim.from_named(row.args).date for row in rows]
+    return dates[0] if dates else None
+
+
+def _official_on(
+    morpholog: GlasshouseClient, *, org: str, market: str, on: dt.date
+) -> OfficialCurveClaim | None:
+    """The official curve for a market on a date: one at most, by the
+    model's current pointer per (org, market, as-of date)."""
+    rows = morpholog.claims_named(
+        "OfficialCurve", where={"org": org, "market": market, "as_of": on.isoformat()}
+    )
+    officials = [OfficialCurveClaim.from_named(row.args) for row in rows]
+    return officials[0] if officials else None
 
 
 def _in_force(versions: list[TradeTermsClaim], *, trade: str, as_of: dt.date) -> TradeTermsClaim:

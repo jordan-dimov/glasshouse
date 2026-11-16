@@ -8,6 +8,16 @@
 
 <div class="tiles">
   <section class="tile">
+    <h2>Business date</h2>
+    {% if business_date %}
+    <p class="tile__figure">{{ business_date }}</p>
+    <p class="tile__note">Valuations use this day's official curves.</p>
+    {% else %}
+    {{ empty_state("Not set. Valuations wait until a business date is rolled.") }}
+    {% endif %}
+  </section>
+
+  <section class="tile">
     <h2>Books</h2>
     {% if summary.books %}
     <table class="tile-table">

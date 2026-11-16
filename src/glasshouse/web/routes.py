@@ -52,6 +52,7 @@ from glasshouse.commit import (
     MorphologRequestError,
     models,
 )
+from glasshouse.compute.marking import business_date_of
 from glasshouse.compute.store import StoreError
 from glasshouse.config import get_settings
 from glasshouse.imports import (
@@ -168,6 +169,7 @@ def home(
         return templates.TemplateResponse(request, "orgs.html", {"orgs": orgs})
     context = _chrome(engine, org, "overview") | {
         "summary": queries.overview(engine, org=org),
+        "business_date": _business_date(client, org),
         # The projector's own progress, where it runs in this process: a
         # cursor advances only when the ledger moves, so cursor age alone
         # cannot tell an idle projector from a stuck one.
@@ -297,6 +299,15 @@ def limit_summary(
             }
         )
     return summary
+
+
+def _business_date(client: GlasshouseClient, org: str) -> dt.date | None:
+    """The organisation's business date, or None if it has none yet or
+    the ledger could not answer; the tile says which it cannot tell."""
+    try:
+        return business_date_of(client, org=org)
+    except MorphologError:
+        return None
 
 
 def _unanswered_breaches(

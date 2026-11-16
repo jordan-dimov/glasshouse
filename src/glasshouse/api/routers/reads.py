@@ -24,7 +24,7 @@ from typing import Annotated
 from fastapi import APIRouter, HTTPException, Query
 
 from glasshouse.api import asof, queries
-from glasshouse.api.deps import AS_OF_ERRORS, UNAVAILABLE, EngineDep, PastDep
+from glasshouse.api.deps import AS_OF_ERRORS, UNAVAILABLE, ClientDep, EngineDep, PastDep
 from glasshouse.api.schemas import (
     BlotterTrade,
     BookScope,
@@ -34,6 +34,8 @@ from glasshouse.api.schemas import (
     TradeTermsVersion,
     TradeValuation,
 )
+from glasshouse.commit import MorphologError
+from glasshouse.compute.marking import business_date_of
 
 router = APIRouter(tags=["reads"], responses=UNAVAILABLE)
 
@@ -51,8 +53,15 @@ def list_orgs(engine: EngineDep) -> list[str]:
 
 
 @router.get("/overview")
-def overview(org: str, engine: EngineDep) -> OverviewSummary:
-    return queries.overview(engine, org=org)
+def overview(org: str, engine: EngineDep, client: ClientDep) -> OverviewSummary:
+    summary = queries.overview(engine, org=org)
+    try:
+        on = business_date_of(client, org=org)
+    except MorphologError:
+        # The rest of the overview is the read model's and still true; the
+        # date is the ledger's, and left out rather than guessed.
+        return summary
+    return summary.model_copy(update={"business_date": on})
 
 
 @router.get("/trades", responses=AS_OF_ERRORS)

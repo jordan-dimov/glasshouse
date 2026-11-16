@@ -160,6 +160,12 @@
   font-weight: 400;
 }
 
+.tile__figure {
+  font-size: var(--size-3);
+  font-variant-numeric: tabular-nums;
+  margin: 0;
+}
+
 .tile__note,
 .omissions {
   color: var(--ink-muted);

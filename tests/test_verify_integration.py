@@ -29,7 +29,7 @@ from glasshouse.compute.terms import terms_version_id
 from glasshouse.projections import catch_up, rebuild, replay
 from glasshouse.projections.tables import metadata as projection_metadata
 from glasshouse.verify import verify
-from tests.support import BINARY, DB, login_role, needs_live_stack, provision
+from tests.support import BINARY, DB, login_role, needs_live_stack, open_business_day, provision
 
 ORG, BOOK, MARKET = "acme-energy", "spec-de", "de-power"
 T0 = dt.datetime(2026, 7, 1, tzinfo=dt.UTC)
@@ -68,6 +68,7 @@ def monday(morpholog: GlasshouseClient, engine: sa.Engine, store: CurveStore) ->
         models.GrantValuationAuthorityRequest(principal="risk-engine", org=ORG, book=BOOK),
     ):
         assert isinstance(morpholog.submit(grant, actor="bootstrap"), Committed)
+    open_business_day(morpholog, ORG, dt.date(2026, 6, 8))
     assert isinstance(
         morpholog.submit(
             models.CaptureTradeRequest(

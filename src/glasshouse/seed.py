@@ -317,6 +317,11 @@ def seed_demo(
         # The reconciling service records what the market reports filled;
         # risk and the demo login answer for breaches.
         models.GrantFillAuthorityRequest(principal=RECONCILER, org=ORG),
+        # Risk and the demo login roll the business date.
+        *(
+            models.GrantDateAuthorityRequest(principal=who, org=ORG)
+            for who in ("risk-manager", "demo")
+        ),
         *(
             models.GrantBreachAuthorityRequest(principal=who, org=ORG)
             for who in ("risk-manager", "demo")
@@ -334,6 +339,11 @@ def seed_demo(
                 models.SetPositionLimitRequest(org=ORG, book=book, cap=cap), actor="risk-manager"
             )
         )
+
+    # The day the story's valuations are for: the curves' date.
+    _committed(
+        client.submit(models.RollBusinessDateRequest(org=ORG, date=AS_OF), actor="risk-manager")
+    )
 
     # The British book first, whole: its trades, its curve, its marks.
     # The German story below then runs to its close uninterrupted.

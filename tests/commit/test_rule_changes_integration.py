@@ -47,7 +47,7 @@ def test_no_invariant_would_refuse_the_history_the_previous_rules_admitted() -> 
     }
     assert refusing == {}
     # Every invariant of the programme was scored, the new ones included.
-    assert len(report.invariants) == 41
+    assert len(report.invariants) == 42
 
 
 def test_the_gates_refuse_only_what_a_rule_change_meant_to_refuse() -> None:
@@ -56,9 +56,10 @@ def test_the_gates_refuse_only_what_a_rule_change_meant_to_refuse() -> None:
     # (#94), so its ten grants by an unestablished root are refused by
     # `may_grant_authority`, which is that change doing its job. It also
     # predates declared markets: its six captures and its first curve
-    # (seven), and its thirteen marks, are refused by
-    # `market_has_a_currency`, because no market in that record was ever
-    # declared (the currency change was made while no
+    # (seven) are refused by `market_has_a_currency`, because no market in
+    # that record was ever declared. And it predates the business date
+    # (#44): its thirteen marks are refused by `business_date_is_set`,
+    # because nothing in it ever rolled one (the currency change was made while no
     # ledger was kept, and has no upgrade path for one). Anything else
     # here is a gate tightened by accident: the limit gate and its
     # whole-hour and forward gates admit every capture and amendment the
@@ -70,7 +71,7 @@ def test_the_gates_refuse_only_what_a_rule_change_meant_to_refuse() -> None:
     assert {(refusal.rule, refusal.would_refuse) for refusal in report.refusals} == {
         ("may_grant_authority", 10),
         ("market_has_a_currency", 7),
-        ("market_has_a_currency", 13),
+        ("business_date_is_set", 13),
     }
     totals = report.totals
     # Every mark in the record replays again: it was proposed without a

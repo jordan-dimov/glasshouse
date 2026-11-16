@@ -23,6 +23,7 @@ so each integration module starts from zero whatever ran before it (the
 modules share one scratch database).
 """
 
+import datetime as dt
 import json
 import os
 import subprocess
@@ -106,6 +107,19 @@ def seeded_ledger(database_url: str = DB) -> tuple[GlasshouseClient, sa.Engine]:
     client = GlasshouseClient(str(MODEL_FILE), database_url, binary=str(BINARY))
     seed_demo(client, CurveStore(engine), engine)
     return client, engine
+
+
+def open_business_day(
+    client: GlasshouseClient, org: str, on: dt.date, *, actor: str = "bootstrap"
+) -> None:
+    """Give `actor` the right to roll `org`'s business date and roll it to
+    `on`: what an organisation needs before any valuation (glasshouse#44).
+    `actor` must hold the organisation's grant authority, as the test
+    ledgers' `bootstrap` does."""
+    grant = models.GrantDateAuthorityRequest(principal=actor, org=org)
+    assert isinstance(client.submit(grant, actor=actor), Committed)
+    roll = models.RollBusinessDateRequest(org=org, date=on)
+    assert isinstance(client.submit(roll, actor=actor), Committed)
 
 
 def committed(client: GlasshouseClient, request: Request, actor: str) -> Committed:

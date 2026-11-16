@@ -793,3 +793,21 @@ Section 38 put v0.0.19 under Glasshouse and adopted none of its language. This p
 **When `explain` has a decision time.** morpholog#791 (`explain` binds its read transaction's start as `decided_at` against a database) is implemented upstream but not released. When it is released and pinned, the time test can move back into the room definition, as section 36 first designed it. Then an overdue instruction stops holding room by the rule itself, and the sweep becomes record-keeping. That waits for the release, and for a measurement of what it costs import previews.
 
 **Counts** (after the review round). Pure 352 passed, 153 skipped. Live: 504 passed in the full run with coverage at 95.4 percent; its one failure was the pinned invariant count (41 with the execution uniqueness), fixed and passing. The suite now takes about eleven minutes locally, two of them the differential test.
+
+## 40. A governed business date: 16/11/2026, model change, no re-pin
+
+**Why (#44).** The model allows one official curve per (organisation, market, as-of date), so a desk registering a curve every day has several official curves at once, and `value_trade` refused from the second day: it had no way to choose. Choosing is a business decision, so it is a fact in the ledger.
+
+**The model.** MODEL_HASH `sha256:caf21a0e…` → `sha256:f83b7685…` (33 predicates, 13 definitions, 42 invariants, 28 transformations, 2 derived claims). `check -v`: compiled, all bound, `1 whole` as before.
+- `BusinessDate(org, date)`, unique by organisation, and `MayRollBusinessDate(actor, org)` with `grant_date_authority`.
+- `roll_business_date(org, date)`: the right, then `date_moves_forward` (`forall current in BusinessDate(org, current): date after current`, vacuous for the first roll), then retract and admit. Every roll is in the audit history, so "which day were we valuing at 10:00 last Tuesday" is an as-of read.
+- `admit_valuation` binds the date first (`business_date_is_set`) and its existing gate now reads the official curve and the terms in force on that date, not on any date. A mark against another day's curve, and any mark before a first roll, are refused by name.
+- Deliberately not `decided_at`: the decision time is the clock; a business date is something a desk rolls, and may lag or lead the clock.
+
+**Our side.** `marking.business_date_of` (a keyed `claims_named` read) and `_official_on`; `value_trade` picks the official curve for the business date, and the interim named refusal (`_refuse_several_business_dates`) is gone; `correct_and_remark` re-marks only when the corrected curve is the business date's (a correction of a day already rolled past is proposed alone); `amend_and_remark` re-marks against the business date's curve. CLI `roll-business-date`. The Overview's business-date tile (deferred since the first slice) and `business_date` on `GET /overview`. The seed grants the right to risk and the demo login and rolls to the story's day before valuing. Test ledgers that value open their day through `tests.support.open_business_day`.
+
+**Tests.** `tests/compute/test_business_date_integration.py` replaces the interim refusal test: no date, no valuation (by the flow and by the rule); only the right's holder rolls; the business date picks between two official curves; the date never moves back or stands still; a correction re-marks only on the business date; the CLI rolls it and refuses a non-date. The bitemporal amendment test now values on an earlier day, rolls forward, and values again. The rule-changes rehearsal counts the old history's thirteen marks as refused by `business_date_is_set` (that history never rolled a date).
+
+**Not done.** No screen to roll the date (CLI and API reads only), and no automatic roll; a desk's daily roll is its own act, on purpose. The MCP tools do not expose the date.
+
+**Counts.** Pure 353 passed, 155 skipped. Live: 506 passed in the full run with coverage at 95.3 percent; its two failures were count pins (34 views, and the seed's 78 rows with its date grants and roll), fixed and passing.

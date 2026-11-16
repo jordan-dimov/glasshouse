@@ -909,3 +909,25 @@ def test_a_delivery_window_writes_its_date_once_when_it_can() -> None:
     day = dt.datetime(2026, 7, 1, 7, tzinfo=dt.UTC)
     assert _window(day, day + dt.timedelta(hours=4)) == "2026-07-01 07:00 - 11:00Z"
     assert _window(day, day + dt.timedelta(hours=17)) == "2026-07-01 07:00 - 2026-07-02 00:00Z"
+
+
+def test_the_overview_shows_the_business_date_or_says_it_is_not_set() -> None:
+    def overview(**extra: object) -> str:
+        return _render(
+            "overview.html",
+            org="acme-energy",
+            org_options=["acme-energy"],
+            active="overview",
+            summary=OverviewSummary(
+                org="acme-energy",
+                books=[],
+                valuations=[],
+                projection=ProjectionCursor(committed_at=T0, transition_id="txn-1"),
+            ),
+            health={"morpholog": "ok", "database": "ok", "commit": "ok", "projector": "ok"},
+            projector=ProjectorProgress(polled_at=_now(), applied_at=T0, applied_total=1),
+            **extra,
+        )
+
+    assert ">2026-07-01</p>" in overview(business_date=dt.date(2026, 7, 1))
+    assert "Valuations wait until a business date is rolled." in overview(business_date=None)

@@ -84,6 +84,13 @@ RULES_IN_PLAIN_WORDS = {
     "something_has_lapsed": "No instruction in that book has run out of time yet.",
     "may_lapse": "This name is not allowed to record lapses in that book.",
     "may_record_fills": "This name is not allowed to record fills.",
+    "may_roll_business_date": "This name is not allowed to roll the business date.",
+    "date_moves_forward": "The business date only moves forward.",
+    "business_date_is_set": "No business date is set yet, so nothing can be valued.",
+    "valued_against_official_curve_and_terms_in_force": (
+        "A valuation must use the official curve for the business date, "
+        "and the terms in force then."
+    ),
     "instruction_was_placed": "There is no such instruction.",
     "execution_is_new": "This fill has already been recorded.",
     "may_answer_breach": "This name is not allowed to answer breaches.",

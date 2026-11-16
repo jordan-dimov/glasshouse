@@ -11,7 +11,15 @@ from decimal import Decimal
 import pytest
 
 from glasshouse.commit import MODEL_FILE, Committed, GlasshouseClient, models
-from tests.support import BINARY, DB, login_role, needs_live_stack, provision, refused
+from tests.support import (
+    BINARY,
+    DB,
+    login_role,
+    needs_live_stack,
+    open_business_day,
+    provision,
+    refused,
+)
 
 pytestmark = needs_live_stack
 
@@ -84,6 +92,7 @@ def ledger() -> GlasshouseClient:
     ):
         outcome = client.submit(request, actor=actor)
         assert isinstance(outcome, Committed), (request, outcome)
+    open_business_day(client, ORG, AS_OF)
     return client
 
 

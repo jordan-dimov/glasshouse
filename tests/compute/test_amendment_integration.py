@@ -31,7 +31,14 @@ from glasshouse.compute.marking import (
 )
 from glasshouse.compute.store import CurveStore
 from glasshouse.compute.terms import terms_version_id
-from tests.support import BINARY, DB, ensure_ledger_root, needs_live_stack, provision
+from tests.support import (
+    BINARY,
+    DB,
+    ensure_ledger_root,
+    needs_live_stack,
+    open_business_day,
+    provision,
+)
 
 pytestmark = needs_live_stack
 
@@ -57,7 +64,12 @@ def stack() -> tuple[GlasshouseClient, CurveStore]:
 
 
 def _desk(
-    client: GlasshouseClient, store: CurveStore, org: str, *, trade_date: dt.date = TRADE_DATE
+    client: GlasshouseClient,
+    store: CurveStore,
+    org: str,
+    *,
+    trade_date: dt.date = TRADE_DATE,
+    business_day: dt.date = AS_OF,
 ) -> None:
     """Grants, a buy and a sell on the market (10 MW over two hours at
     80), and an official curve for AS_OF."""
@@ -70,6 +82,7 @@ def _desk(
         models.GrantValuationAuthorityRequest(principal="risk-engine", org=org, book=BOOK),
     ):
         assert isinstance(client.submit(grant, actor="bootstrap"), Committed)
+    open_business_day(client, org, business_day)
     for trade, direction in (("T-1", "buy"), ("T-2", "sell")):
         capture = models.CaptureTradeRequest(
             org=org,
@@ -213,9 +226,11 @@ def test_the_ledger_is_bitemporal_about_terms(
     # A curve for a business date BETWEEN the trade date and the
     # amendment: on that date the first version governs, on the later
     # date the amendment does, and the ledger admits exactly those pairs.
+    # The desk values on BETWEEN first, then rolls its business date to
+    # AS_OF: a mark is admitted only against the business date's curve.
     client, store = stack
     org = "amend-bitemporal"
-    _desk(client, store, org)
+    _desk(client, store, org, business_day=BETWEEN)
     assert isinstance(_amend(client, org, "20", AS_OF), Committed)
     assert isinstance(
         register_curve_version(
@@ -232,12 +247,17 @@ def test_the_ledger_is_bitemporal_about_terms(
     )
     assert isinstance(_mark(client, org, f"{org}/crv-between", f"{org}/T-1/v1"), Committed)
     assert isinstance(_mark(client, org, f"{org}/crv-between", f"{org}/T-1/v2"), Rejected)
+    # AS_OF's curve is official too, but not the business date's yet.
+    assert isinstance(_mark(client, org, f"{org}/crv-v1", f"{org}/T-1/v2"), Rejected)
+    roll = models.RollBusinessDateRequest(org=org, date=AS_OF)
+    assert isinstance(client.submit(roll, actor="bootstrap"), Committed)
     assert isinstance(_mark(client, org, f"{org}/crv-v1", f"{org}/T-1/v2"), Committed)
     assert isinstance(_mark(client, org, f"{org}/crv-v1", f"{org}/T-1/v1"), Rejected)
-    # Two official business dates stand: the compute flow still refuses
-    # to choose between them by name (glasshouse#44), unchanged.
-    with pytest.raises(MarkingError, match="glasshouse#44"):
-        value_trade(client, store, actor="risk-engine", org=org, book=BOOK, trade=f"{org}/T-1")
+    # Two official dates stand, and the compute flow chooses the business
+    # date's (glasshouse#44): the amendment, already marked there.
+    again = value_trade(client, store, actor="risk-engine", org=org, book=BOOK, trade=f"{org}/T-1")
+    assert isinstance(again, Rejected)
+    assert again.rule == "valuation_is_new"
 
 
 def test_a_trade_struck_after_the_curve_date_has_no_terms_in_force(
