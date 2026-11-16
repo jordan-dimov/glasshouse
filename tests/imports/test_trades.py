@@ -12,9 +12,9 @@ import pytest
 from hypothesis import given
 from hypothesis import strategies as st
 
-from glasshouse.commit import GlasshouseClient
+from glasshouse.commit import GlasshouseClient, exact_decimal
 from glasshouse.imports import ImportFormatError, ImportIncompleteError, import_trades, parse_trades
-from glasshouse.imports.trades import COLUMNS, exact_decimal
+from glasshouse.imports.trades import COLUMNS
 from tests.support import fake_binary
 
 HEADER = (

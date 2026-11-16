@@ -22,10 +22,12 @@ from collections.abc import Sequence
 from decimal import InvalidOperation
 
 from glasshouse.commit import (
+    EXACT_DECIMALS,
     GlasshouseClient,
     MorphologOutcomeUnknown,
     MorphologRequestError,
     envelopes,
+    exact_decimal,
     models,
 )
 from glasshouse.compute.curves import CurveError, HourlyCurve
@@ -43,7 +45,7 @@ from glasshouse.imports.report import (
     RowOutcome,
     why,
 )
-from glasshouse.imports.trades import EXACT_DECIMALS, ImportFormatError, exact_decimal
+from glasshouse.imports.trades import ImportFormatError
 from glasshouse.logging import get_logger
 
 log = get_logger("glasshouse.imports")

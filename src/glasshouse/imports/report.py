@@ -71,16 +71,23 @@ def comparison(compared: envelopes.Compared) -> str:
 # comparison already shows.
 _BINDER = re.compile(r"\b(?:forall|exists)\s+(\w+)\s+in\s+\w+\s*:")
 
+# The hour a limit rule broke in. The limit gates call definitions that
+# check only the hours where the book changes (`keeps_to_cap` and its
+# siblings in the rule file), and the ledger reports the witness of the
+# definition that refused, where the hour is always bound as `h`. The
+# gate's own text names no quantifier for it, so it is named here.
+LIMIT_HOUR = "h"
+
 
 def witnessed(rule_text: str, witness: list[envelopes.WitnessBinding]) -> str:
     """Where the refused rule failed, for the line a desk reads: of the
     bindings the ledger reports beside the comparison (every variable in
     scope, the proposal's own arguments and the whole hour grid among
-    them), only the binders of the rule's quantifiers over collections -
-    the hour a per-hour limit broke in - rendered as
+    them), only the binders of the rule's quantifiers over collections and
+    the hour a limit broke in (`LIMIT_HOUR`), rendered as
     `(h = 2026-07-01T08:00:00+00:00)`.
     The full witness is on the API for a screen to use."""
-    binders = set(_BINDER.findall(rule_text))
+    binders = set(_BINDER.findall(rule_text)) | {LIMIT_HOUR}
     shown = [b for b in witness if b.var in binders]
     if not shown:
         return ""

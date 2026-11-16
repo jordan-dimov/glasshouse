@@ -35,6 +35,7 @@ from alembic.config import Config
 from alembic import command
 from glasshouse.commit import MODEL_FILE, Committed, GlasshouseClient, Rejected, models
 from glasshouse.commit.morpholog_client import MODEL_HASH, MORPHOLOG_VERSION, PROGRAM
+from glasshouse.commit.morpholog_client.adapter import Request
 from glasshouse.compute.store import CurveStore, engine_url
 from glasshouse.compute.store import metadata as payload_metadata
 from glasshouse.projections.tables import metadata as projection_metadata
@@ -105,6 +106,21 @@ def seeded_ledger(database_url: str = DB) -> tuple[GlasshouseClient, sa.Engine]:
     client = GlasshouseClient(str(MODEL_FILE), database_url, binary=str(BINARY))
     seed_demo(client, CurveStore(engine), engine)
     return client, engine
+
+
+def committed(client: GlasshouseClient, request: Request, actor: str) -> Committed:
+    """Propose one act that must commit; anything else fails the test
+    with the ledger's own refusal in the message."""
+    outcome = client.submit(request, actor=actor, explain_on_reject=True)
+    assert isinstance(outcome, Committed), outcome
+    return outcome
+
+
+def refused(client: GlasshouseClient, request: Request, actor: str) -> Rejected:
+    """Propose one act that must be refused, and return the refusal."""
+    outcome = client.submit(request, actor=actor, explain_on_reject=True)
+    assert isinstance(outcome, Rejected), outcome
+    return outcome
 
 
 def stamps(**overrides: object) -> dict[str, object]:

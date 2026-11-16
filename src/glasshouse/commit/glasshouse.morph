@@ -309,14 +309,19 @@ define booked_in_hour(org, book, as_of, excluded, side, h) = (sum(q | org_terms_
 define net_in_hour(org, book, as_of, excluded, h) = (booked_in_hour(org, book, as_of, excluded, #buy, h)
     - booked_in_hour(org, book, as_of, excluded, #sell, h))
 
--- The book's whole net position in that hour, every trade counted:
--- where the hour stands before the act.
-define standing_in_hour(org, book, as_of, h) = (sum(q | org_terms_in_force_on(org, as_of, t, q, s, e)
-        and TradeCaptured(org: org, book: book, trade: t, direction: #buy, ..)
+-- One trade's own signed quantity in that hour (bought positive, sold
+-- negative), read by the trade: zero for a trade not booked yet.
+define trade_in_hour(org, as_of, trade, h) = (sum(q | org_terms_in_force_on(org, as_of, trade, q, s, e)
+        and TradeCaptured(org: org, trade: trade, direction: #buy, ..)
         and s at_or_before h and h strictly_before e)
-    - sum(q | org_terms_in_force_on(org, as_of, t, q, s, e)
-        and TradeCaptured(org: org, book: book, trade: t, direction: #sell, ..)
+    - sum(q | org_terms_in_force_on(org, as_of, trade, q, s, e)
+        and TradeCaptured(org: org, trade: trade, direction: #sell, ..)
         and s at_or_before h and h strictly_before e))
+
+-- Where the hour stands before the act: the net with every trade
+-- counted, the excluded one too.
+define standing_in_hour(org, book, as_of, excluded, h) = (net_in_hour(org, book, as_of, excluded, h)
+    + trade_in_hour(org, as_of, excluded, h))
 
 -- What open instructions on one side still hold in that hour.
 define held_in_hour(org, book, side, h) = (sum(left | InstructionOpen(org: org, book: book, instruction: i, direction: side, remaining: left, delivery_start: s, delivery_end: e, ..)
@@ -330,9 +335,9 @@ define held_in_hour(org, book, side, h) = (sum(left | InstructionOpen(org: org, 
 -- It is written as one comparison so that a refusal reports its two
 -- figures ("26 MW <= 25 MW does not hold"). Within the cap that reads
 -- exactly as a plain cap check.
-define hour_is_within_cap(org, book, as_of, amended, signed_quantity, h, cap):
-    let after = (net_in_hour(org, book, as_of, amended, h) + signed_quantity)
-    let before = (standing_in_hour(org, book, as_of, h))
+define hour_is_within_cap(org, book, as_of, excluded, signed_quantity, h, cap):
+    let after = (net_in_hour(org, book, as_of, excluded, h) + signed_quantity)
+    let before = (standing_in_hour(org, book, as_of, excluded, h))
     abs(after) <= max(cap, abs(before))
 
 -- The rest of the way back from a breach: in an hour already over its
@@ -344,7 +349,7 @@ define hour_is_within_cap(org, book, as_of, amended, signed_quantity, h, cap):
 -- signed quantity is the instruction itself, as if it filled.
 define breach_shrinks(org, book, as_of, excluded, signed_quantity, h, cap):
     let after = (net_in_hour(org, book, as_of, excluded, h) + signed_quantity)
-    let before = (standing_in_hour(org, book, as_of, h))
+    let before = (standing_in_hour(org, book, as_of, excluded, h))
     abs(before) <= cap or abs(after) < abs(before)
 
 -- Is there still room in hour `h` once open instructions are counted?
@@ -367,12 +372,52 @@ define breach_shrinks(org, book, as_of, excluded, signed_quantity, h, cap):
 -- `more_bought` and `more_sold` are the instruction being placed.
 define hour_has_room_for_instructions(org, book, as_of, excluded, signed_quantity, more_bought, more_sold, h, cap):
     let after = (net_in_hour(org, book, as_of, excluded, h) + signed_quantity)
-    let before = (standing_in_hour(org, book, as_of, h))
+    let before = (standing_in_hour(org, book, as_of, excluded, h))
     let bought = (held_in_hour(org, book, #buy, h))
     let sold = (held_in_hour(org, book, #sell, h))
     let exposure = (max(bought + before, sold - before))
     more_bought + bought <= max(cap, exposure) - after
     and more_sold + sold <= max(cap, exposure) + after
+
+-- The three limit rules, checked over a whole delivery window. A
+-- book's net position, and what its open instructions hold, change only
+-- where some trade or instruction in the book starts or ends. So each
+-- rule is checked at the window's first hour and at every such start
+-- and end inside the window: that proves it for every hour, without
+-- adding up the book once for each of the up to 8784 hours. A refusal
+-- names the hour, the start of the stretch that breaks the rule.
+define keeps_to_cap(org, book, as_of, excluded, signed_quantity, delivery_start, delivery_end, cap):
+    hour_is_within_cap(org, book, as_of, excluded, signed_quantity, delivery_start, cap)
+    and (forall h in TradeTerms(org: org, trade: t, delivery_start: h, ..):
+        (TradeCaptured(org: org, book: book, trade: t, ..) and delivery_start strictly_before h and h strictly_before delivery_end)
+        implies hour_is_within_cap(org, book, as_of, excluded, signed_quantity, h, cap))
+    and (forall h in TradeTerms(org: org, trade: t, delivery_end: h, ..):
+        (TradeCaptured(org: org, book: book, trade: t, ..) and delivery_start strictly_before h and h strictly_before delivery_end)
+        implies hour_is_within_cap(org, book, as_of, excluded, signed_quantity, h, cap))
+
+define shrinks_where_breached(org, book, as_of, excluded, signed_quantity, delivery_start, delivery_end, cap):
+    breach_shrinks(org, book, as_of, excluded, signed_quantity, delivery_start, cap)
+    and (forall h in TradeTerms(org: org, trade: t, delivery_start: h, ..):
+        (TradeCaptured(org: org, book: book, trade: t, ..) and delivery_start strictly_before h and h strictly_before delivery_end)
+        implies breach_shrinks(org, book, as_of, excluded, signed_quantity, h, cap))
+    and (forall h in TradeTerms(org: org, trade: t, delivery_end: h, ..):
+        (TradeCaptured(org: org, book: book, trade: t, ..) and delivery_start strictly_before h and h strictly_before delivery_end)
+        implies breach_shrinks(org, book, as_of, excluded, signed_quantity, h, cap))
+
+define has_room_at_breakpoints(org, book, as_of, excluded, signed_quantity, more_bought, more_sold, delivery_start, delivery_end, cap):
+    hour_has_room_for_instructions(org, book, as_of, excluded, signed_quantity, more_bought, more_sold, delivery_start, cap)
+    and (forall h in TradeTerms(org: org, trade: t, delivery_start: h, ..):
+        (TradeCaptured(org: org, book: book, trade: t, ..) and delivery_start strictly_before h and h strictly_before delivery_end)
+        implies hour_has_room_for_instructions(org, book, as_of, excluded, signed_quantity, more_bought, more_sold, h, cap))
+    and (forall h in TradeTerms(org: org, trade: t, delivery_end: h, ..):
+        (TradeCaptured(org: org, book: book, trade: t, ..) and delivery_start strictly_before h and h strictly_before delivery_end)
+        implies hour_has_room_for_instructions(org, book, as_of, excluded, signed_quantity, more_bought, more_sold, h, cap))
+    and (forall h in InstructionOpen(org: org, book: book, delivery_start: h, ..):
+        (delivery_start strictly_before h and h strictly_before delivery_end)
+        implies hour_has_room_for_instructions(org, book, as_of, excluded, signed_quantity, more_bought, more_sold, h, cap))
+    and (forall h in InstructionOpen(org: org, book: book, delivery_end: h, ..):
+        (delivery_start strictly_before h and h strictly_before delivery_end)
+        implies hour_has_room_for_instructions(org, book, as_of, excluded, signed_quantity, more_bought, more_sold, h, cap))
 
 -- Where each instruction stands, as the Positions screen, the API and
 -- the agent list it: what was intended, what it still holds under the
@@ -507,12 +552,12 @@ transformation capture_trade(org, book, trade, counterparty, market, direction, 
     let hours = periods(delivery_start, delivery_end, duration(PT1H))
     require delivery_is_whole_hours: (delivery_end - delivery_start) / duration(PT1H) = sum(1 | h in hours)
     let signed = if(direction = #buy, quantity, 0 MW - quantity)
-    require hour_within_limit: (forall cap in PositionLimit(org, book, cap): forall h in hours:
-        hour_is_within_cap(org, book, trade_date, trade, signed, h, cap))
-    require breach_must_shrink: (forall cap in PositionLimit(org, book, cap): forall h in hours:
-        breach_shrinks(org, book, trade_date, trade, signed, h, cap))
-    require room_not_held_by_instructions: (forall cap in PositionLimit(org, book, cap): forall h in hours:
-        hour_has_room_for_instructions(org, book, trade_date, trade, signed, 0 MW, 0 MW, h, cap))
+    require hour_within_limit: (forall cap in PositionLimit(org, book, cap):
+        keeps_to_cap(org, book, trade_date, trade, signed, delivery_start, delivery_end, cap))
+    require breach_must_shrink: (forall cap in PositionLimit(org, book, cap):
+        shrinks_where_breached(org, book, trade_date, trade, signed, delivery_start, delivery_end, cap))
+    require room_not_held_by_instructions: (forall cap in PositionLimit(org, book, cap):
+        has_room_at_breakpoints(org, book, trade_date, trade, signed, 0 MW, 0 MW, delivery_start, delivery_end, cap))
     admit TradeCaptured(org, book, trade, counterparty, market, direction)
     admit TradeTerms(org, trade, version, quantity, price, delivery_start, delivery_end, trade_date)
 
@@ -532,12 +577,12 @@ transformation amend_trade(org, trade, prior_version, new_version, quantity, pri
     let hours = periods(delivery_start, delivery_end, duration(PT1H))
     require delivery_is_whole_hours: (delivery_end - delivery_start) / duration(PT1H) = sum(1 | h in hours)
     let signed = if(direction = #buy, quantity, 0 MW - quantity)
-    require hour_within_limit: (forall cap in PositionLimit(org, book, cap): forall h in hours:
-        hour_is_within_cap(org, book, effective_from, trade, signed, h, cap))
-    require breach_must_shrink: (forall cap in PositionLimit(org, book, cap): forall h in hours:
-        breach_shrinks(org, book, effective_from, trade, signed, h, cap))
-    require room_not_held_by_instructions: (forall cap in PositionLimit(org, book, cap): forall h in hours:
-        hour_has_room_for_instructions(org, book, effective_from, trade, signed, 0 MW, 0 MW, h, cap))
+    require hour_within_limit: (forall cap in PositionLimit(org, book, cap):
+        keeps_to_cap(org, book, effective_from, trade, signed, delivery_start, delivery_end, cap))
+    require breach_must_shrink: (forall cap in PositionLimit(org, book, cap):
+        shrinks_where_breached(org, book, effective_from, trade, signed, delivery_start, delivery_end, cap))
+    require room_not_held_by_instructions: (forall cap in PositionLimit(org, book, cap):
+        has_room_at_breakpoints(org, book, effective_from, trade, signed, 0 MW, 0 MW, delivery_start, delivery_end, cap))
     admit TradeTerms(org, trade, new_version, quantity, price, delivery_start, delivery_end, effective_from)
     admit TradeTermsSupersedes(new_version, prior_version)
 
@@ -559,11 +604,11 @@ transformation place_instruction(org, book, instruction, market, direction, quan
     require delivery_is_whole_hours: (delivery_end - delivery_start) / duration(PT1H) = sum(1 | h in hours)
     let bought = if(direction = #buy, quantity, 0 MW)
     let sold = if(direction = #sell, quantity, 0 MW)
-    let as_if_filled = if(direction = #buy, quantity, 0 MW - quantity)
-    require breach_must_shrink: (forall cap in PositionLimit(org, book, cap): forall h in hours:
-        breach_shrinks(org, book, placed_on, instruction, as_if_filled, h, cap))
-    require instruction_fits_under_limit: (forall cap in PositionLimit(org, book, cap): forall h in hours:
-        hour_has_room_for_instructions(org, book, placed_on, instruction, 0 MW, bought, sold, h, cap))
+    let as_if_filled = bought - sold
+    require breach_must_shrink: (forall cap in PositionLimit(org, book, cap):
+        shrinks_where_breached(org, book, placed_on, instruction, as_if_filled, delivery_start, delivery_end, cap))
+    require instruction_fits_under_limit: (forall cap in PositionLimit(org, book, cap):
+        has_room_at_breakpoints(org, book, placed_on, instruction, 0 MW, bought, sold, delivery_start, delivery_end, cap))
     admit Instruction(org, book, instruction, actor, market, direction, quantity, limit_price, delivery_start, delivery_end, placed_on, valid_until)
     admit InstructionOpen(org, book, instruction, direction, quantity, delivery_start, delivery_end, valid_until)
 
@@ -651,10 +696,8 @@ transformation record_fill(org, instruction, execution, trade, counterparty, ver
             admit Breach(org, book, trade, #after_end)
     if (direction = #buy and price > limit_price) or (direction = #sell and price < limit_price):
         admit Breach(org, book, trade, #price)
-    require delivery_is_at_most_a_year: delivery_end - delivery_start no_longer_than duration(PT8784H)
-    let hours = periods(delivery_start, delivery_end, duration(PT1H))
     let signed = if(direction = #buy, quantity, 0 MW - quantity)
-    if exists cap: PositionLimit(org: org, book: book, cap: cap) and not (forall h in hours: hour_is_within_cap(org, book, trade_date, trade, signed, h, cap) and breach_shrinks(org, book, trade_date, trade, signed, h, cap)):
+    if exists cap: PositionLimit(org: org, book: book, cap: cap) and not (keeps_to_cap(org, book, trade_date, trade, signed, delivery_start, delivery_end, cap) and shrinks_where_breached(org, book, trade_date, trade, signed, delivery_start, delivery_end, cap)):
         admit Breach(org, book, trade, #limit)
     if ApprovalRequired(org: org, book: book) and not InstructionApproved(org: org, instruction: instruction, ..):
         admit Breach(org, book, trade, #unapproved)

@@ -304,10 +304,9 @@ def _unanswered_breaches(client: GlasshouseClient, org: str, book: str | None) -
     read, in the chosen book. Empty when the ledger cannot answer: the
     rest of the screen is still worth showing."""
     try:
-        breaches = fills.list_breaches(client, org=org)
+        return fills.list_breaches(client, org=org, book=book)
     except MorphologError:
         return []
-    return [row for row in breaches if book is None or row.book == book]
 
 
 def _limits_and_instructions(
@@ -948,9 +947,13 @@ def positions(
             "and are read as UTC instants.",
         }
         return templates.TemplateResponse(request, "error.html", context, status_code=422)
-    positions_now = queries.list_positions(
-        engine, org=org, book=book, market=market, start=start_at, end=end_at, past=past
+    # Every market's rows, read once: a cap is on the book's whole net in
+    # an hour, so the limit summary needs them all; the table shows the
+    # chosen market's.
+    every_market = queries.list_positions(
+        engine, org=org, book=book, start=start_at, end=end_at, past=past
     )
+    positions_now = [p for p in every_market if market is None or p.market == market]
     governed = _limits_and_instructions(client, org)
     caps, open_instructions = governed or ({}, [])
     # The filter bar governs every section: the instructions listed are
@@ -975,21 +978,8 @@ def positions(
             # The caps and the open instructions are the ones standing
             # now, also when the positions shown are a past moment's;
             # the screen says so.
-            # A cap is on the book's whole net in an hour, every market
-            # counted, so the summary reads every market's rows even when
-            # the table shows one.
             "limits": (
-                limit_summary(
-                    positions_now
-                    if market is None
-                    else queries.list_positions(
-                        engine, org=org, book=book, start=start_at, end=end_at, past=past
-                    ),
-                    caps,
-                    open_instructions,
-                    start=start_at,
-                    end=end_at,
-                )
+                limit_summary(every_market, caps, open_instructions, start=start_at, end=end_at)
                 if governed
                 else None
             ),

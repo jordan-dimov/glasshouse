@@ -10,8 +10,8 @@ from decimal import Decimal
 
 import pytest
 
-from glasshouse.commit import MODEL_FILE, Committed, GlasshouseClient, Rejected, models
-from tests.support import BINARY, DB, login_role, needs_live_stack, provision
+from glasshouse.commit import MODEL_FILE, Committed, GlasshouseClient, models
+from tests.support import BINARY, DB, login_role, needs_live_stack, provision, refused
 
 pytestmark = needs_live_stack
 
@@ -85,12 +85,6 @@ def ledger() -> GlasshouseClient:
         outcome = client.submit(request, actor=actor)
         assert isinstance(outcome, Committed), (request, outcome)
     return client
-
-
-def refused(client: GlasshouseClient, request: object, actor: str) -> Rejected:
-    outcome = client.submit(request, actor=actor, explain_on_reject=True)  # type: ignore[arg-type]
-    assert isinstance(outcome, Rejected), outcome
-    return outcome
 
 
 def test_a_mark_is_recorded_in_its_markets_currency(ledger: GlasshouseClient) -> None:

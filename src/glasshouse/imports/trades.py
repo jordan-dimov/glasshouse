@@ -20,13 +20,13 @@ import csv
 import datetime as dt
 import io
 from collections.abc import Sequence
-from decimal import Decimal, InvalidOperation
 
 from glasshouse.commit import (
     GlasshouseClient,
     MorphologBatchIncomplete,
     MorphologError,
     envelopes,
+    exact_decimals,
     models,
     values,
 )
@@ -68,24 +68,6 @@ class ImportFormatError(ValueError):
     """The file as a whole does not match the column contract."""
 
 
-#: What `exact_decimal` refuses, in the words a refusal shows a desk.
-EXACT_DECIMALS = "exact decimals (at most 28 decimal places and 29 digits)"
-
-
-def exact_decimal(text: str) -> Decimal:
-    """Text to the Decimal it spells, or `InvalidOperation`. Only a
-    finite number the ledger holds exactly as written passes: the
-    ledger refuses rather than rounds past 28 decimal places or 29
-    digits, so a number it cannot hold is refused here, for being that
-    number, and not later by the codec under another field's name."""
-    number = Decimal(text)
-    try:
-        values.encode_decimal(number)
-    except values.CodecError:
-        raise InvalidOperation(text) from None
-    return number
-
-
 def _check_header(fieldnames: Sequence[str] | None) -> None:
     found = set(fieldnames or [])
     if found != COLUMNS:
@@ -105,13 +87,8 @@ def capture_request(row: dict[str, str], org: str) -> models.CaptureTradeRequest
         raise ValueError("row has fewer fields than the header")
     if row.get(None) is not None:  # type: ignore[call-overload]
         raise ValueError("row has more fields than the header")
-    try:
-        quantity = exact_decimal(row["quantity"])
-        price = exact_decimal(row["price"])
-    except InvalidOperation:
-        raise ValueError(
-            f"quantity/price must be {EXACT_DECIMALS}, got {row['quantity']!r}/{row['price']!r}"
-        ) from None
+    numbers = exact_decimals(quantity=row["quantity"], price=row["price"])
+    quantity, price = numbers["quantity"], numbers["price"]
     try:
         trade_date = dt.date.fromisoformat(row["trade_date"])
     except ValueError:

@@ -37,6 +37,11 @@ def overdue_books(client: GlasshouseClient, *, now: dt.datetime) -> list[tuple[s
     return sorted({(c.org, c.book) for c in open_claims if c.valid_until < now})
 
 
+def lapsed(outcome: Committed) -> int:
+    """How many instructions one lapse act ended."""
+    return sum(1 for c in outcome.asserted_claims if c.predicate == "InstructionEnded")
+
+
 def sweep_once(
     client: GlasshouseClient, *, actor: str, now: dt.datetime | None = None
 ) -> dict[tuple[str, str], Committed | Rejected]:
@@ -51,8 +56,7 @@ def sweep_once(
         outcome = client.submit(request, actor=actor)
         outcomes[org, book] = outcome
         if isinstance(outcome, Committed):
-            lapsed = [c for c in outcome.asserted_claims if c.predicate == "InstructionEnded"]
-            log.info("sweep.lapsed", org=org, book=book, instructions=len(lapsed))
+            log.info("sweep.lapsed", org=org, book=book, instructions=lapsed(outcome))
         else:
             log.warning("sweep.refused", org=org, book=book, rule=outcome.rule)
     return outcomes

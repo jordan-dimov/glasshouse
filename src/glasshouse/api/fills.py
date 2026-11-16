@@ -11,12 +11,10 @@ agent tool records one.
 from __future__ import annotations
 
 import datetime as dt
-from decimal import InvalidOperation
 
 from glasshouse.api.schemas import BreachRow
-from glasshouse.commit import GlasshouseClient, models
+from glasshouse.commit import GlasshouseClient, exact_decimals, models
 from glasshouse.compute.terms import terms_version_id
-from glasshouse.imports.trades import EXACT_DECIMALS, exact_decimal
 
 #: What `answer_breach` accepts as a decision, in the ledger's own list
 #: (`breach_decision_is_one_of_four`); the CLI offers these.
@@ -37,13 +35,7 @@ def fill_request(
     """Text fields to one typed proposal, or a ValueError naming what
     could not be honestly converted. The trade's first terms version
     takes the app's id convention, as a capture's does."""
-    try:
-        filled = exact_decimal(quantity)
-        at_price = exact_decimal(price)
-    except InvalidOperation:
-        raise ValueError(
-            f"quantity/price must be {EXACT_DECIMALS}, got {quantity!r}/{price!r}"
-        ) from None
+    numbers = exact_decimals(quantity=quantity, price=price)
     try:
         on = dt.date.fromisoformat(trade_date)
     except ValueError:
@@ -55,16 +47,20 @@ def fill_request(
         trade=trade,
         counterparty=counterparty,
         version=terms_version_id(trade, 1),
-        quantity=filled,
-        price=at_price,
+        quantity=numbers["quantity"],
+        price=numbers["price"],
         trade_date=on,
     )
 
 
-def list_breaches(client: GlasshouseClient, *, org: str) -> list[BreachRow]:
-    """The organisation's unanswered breaches, from the ledger's own
-    derived read: which are unanswered is the ledger's to say."""
-    rows = client.derived_named("UnansweredBreach", where={"org": org})
+def list_breaches(
+    client: GlasshouseClient, *, org: str, book: str | None = None
+) -> list[BreachRow]:
+    """The organisation's unanswered breaches, in one book or all, from
+    the ledger's own derived read: which are unanswered is the ledger's
+    to say."""
+    where = {"org": org} if book is None else {"org": org, "book": book}
+    rows = client.derived_named("UnansweredBreach", where=where)
     breaches = [models.UnansweredBreachClaim.from_named(row.args) for row in rows]
     return sorted(
         (
@@ -73,3 +69,9 @@ def list_breaches(client: GlasshouseClient, *, org: str) -> list[BreachRow]:
         ),
         key=lambda row: (row.book, row.trade, row.kind),
     )
+
+
+def breaches_of(client: GlasshouseClient, *, org: str, trade: str) -> set[str]:
+    """The kinds of breach recorded with one trade's fill, read by name."""
+    rows = client.claims_named("Breach", where={"org": org, "trade": trade})
+    return {models.BreachClaim.from_named(row.args).kind for row in rows}

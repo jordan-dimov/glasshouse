@@ -537,7 +537,10 @@ def test_the_needle_lifecycle(morpholog: GlasshouseClient) -> None:
             valid_until=dt.datetime.now(dt.UTC) + dt.timedelta(seconds=valid_for),
         )
 
-    for name, valid_for in (("I-keep", 3600), ("I-brief", 1.5)):
+    # I-brief must still be valid when the sweep below is first tried, and
+    # the steps between take a few seconds of binary calls: six is a
+    # margin, not a guess at their speed.
+    for name, valid_for in (("I-keep", 3600), ("I-brief", 6)):
         assert isinstance(morpholog.submit(instruct(name, valid_for), actor="alice"), Committed)
     # A second pair of eyes: the book requires approval, bob may give it,
     # and alice, who placed the instruction, may not approve her own even
@@ -566,7 +569,11 @@ def test_the_needle_lifecycle(morpholog: GlasshouseClient) -> None:
     too_soon = morpholog.submit(lapse, actor="alice")
     assert isinstance(too_soon, Rejected)
     assert too_soon.rule == "something_has_lapsed"
-    time.sleep(2)
+    # Wait out the deadline the ledger holds, not one guessed beforehand.
+    (brief,) = [
+        o for o in morpholog.read(models.InstructionOpenClaim) if o.instruction == "I-brief"
+    ]
+    time.sleep(max(0.0, (brief.valid_until - dt.datetime.now(dt.UTC)).total_seconds()) + 0.5)
     assert isinstance(morpholog.submit(lapse, actor="alice"), Committed)
     assert morpholog.read(models.InstructionOpenClaim) == []
 

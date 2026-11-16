@@ -18,7 +18,7 @@ is the separate-worker loop.
 from __future__ import annotations
 
 import sys
-from decimal import Decimal
+from collections.abc import Callable
 from pathlib import Path
 from typing import Annotated
 
@@ -32,11 +32,14 @@ from glasshouse.api import fills
 from glasshouse.commit import (
     MODEL_FILE,
     VIEWS_SCHEMA,
+    Committed,
     GlasshouseClient,
     MorphologError,
     Rejected,
     apply_views,
+    exact_decimals,
 )
+from glasshouse.commit.morpholog_client.adapter import Request
 from glasshouse.commit.morpholog_client.envelopes import (
     CheckpointCreated,
     RoleRebindingsEvaluated,
@@ -66,6 +69,7 @@ from glasshouse.logging import configure_logging, get_logger
 from glasshouse.projections import catch_up, follow
 from glasshouse.provision import ProvisionError, run_provision
 from glasshouse.seed import SeedError, run_seed
+from glasshouse.sweep import lapsed, sweep_once
 from glasshouse.verify import verify
 
 log = get_logger("glasshouse.cli")
@@ -115,6 +119,27 @@ def _run_import(
     if project:
         engine = sa.create_engine(engine_url(db))
         print(f"projected: applied {catch_up(client, engine)} transition(s)")
+
+
+def _committed_or_exit(client: GlasshouseClient, request: Request, actor: str) -> Committed:
+    """Propose one act; a refusal is printed in the ledger's own words
+    (`refused: <rule>: ...`) and exits 1, as every single-act command
+    here reports it."""
+    outcome = client.submit(request, actor=actor, explain_on_reject=True)
+    if isinstance(outcome, Rejected):
+        print(f"refused: {why(outcome.explanation)}", file=sys.stderr)
+        raise typer.Exit(code=1)
+    return outcome
+
+
+def _readable[T](build: Callable[[], T]) -> T:
+    """A request built from what was typed, or the caller's own mistake
+    in words and exit 2: nothing is proposed."""
+    try:
+        return build()
+    except ValueError as malformed:
+        print(f"error: {malformed}", file=sys.stderr)
+        raise typer.Exit(code=2) from malformed
 
 
 @app.command(
@@ -224,7 +249,7 @@ def set_limit_command(
     database_url: DatabaseUrl = "",
 ) -> None:
     client = _client(_db(database_url))
-    cap_mw = Decimal(cap)
+    cap_mw = _readable(lambda: exact_decimals(cap=cap)["cap"])
     standing = [
         limit
         for limit in client.read(PositionLimitClaim)
@@ -232,14 +257,9 @@ def set_limit_command(
     ]
     # One act sets a cap or replaces the standing one; the read above is
     # only for telling the operator what stood.
-    outcome = client.submit(
-        SetPositionLimitRequest(org=org, book=book, cap=cap_mw),
-        actor=actor,
-        explain_on_reject=True,
+    outcome = _committed_or_exit(
+        client, SetPositionLimitRequest(org=org, book=book, cap=cap_mw), actor
     )
-    if isinstance(outcome, Rejected):
-        print(f"refused: {why(outcome.explanation)}", file=sys.stderr)
-        raise typer.Exit(code=1)
     was = f" (was {standing[0].cap} MW)" if standing else ""
     print(
         f"position limit for {book} in {org}: {cap_mw} MW{was}; transition {outcome.transition_id}"
@@ -264,8 +284,8 @@ def record_fill_command(
     database_url: DatabaseUrl = "",
 ) -> None:
     client = _client(_db(database_url))
-    try:
-        request = fills.fill_request(
+    request = _readable(
+        lambda: fills.fill_request(
             org=org,
             instruction=instruction,
             execution=execution,
@@ -275,14 +295,9 @@ def record_fill_command(
             price=price,
             trade_date=trade_date,
         )
-    except ValueError as malformed:
-        print(f"error: {malformed}", file=sys.stderr)
-        raise typer.Exit(code=2) from malformed
-    outcome = client.submit(request, actor=actor, explain_on_reject=True)
-    if isinstance(outcome, Rejected):
-        print(f"refused: {why(outcome.explanation)}", file=sys.stderr)
-        raise typer.Exit(code=1)
-    breaches = sorted(str(c.args[3]) for c in outcome.asserted_claims if c.predicate == "Breach")
+    )
+    outcome = _committed_or_exit(client, request, actor)
+    breaches = sorted(fills.breaches_of(client, org=org, trade=trade))
     print(
         f"fill {execution} booked as {trade}; "
         + (f"breaches: {', '.join(breaches)}" if breaches else "no breach")
@@ -305,14 +320,11 @@ def answer_breach_command(
     database_url: DatabaseUrl = "",
 ) -> None:
     client = _client(_db(database_url))
-    outcome = client.submit(
+    outcome = _committed_or_exit(
+        client,
         AnswerBreachRequest(org=org, trade=trade, kind=kind, decision=decision, note=note),
-        actor=actor,
-        explain_on_reject=True,
+        actor,
     )
-    if isinstance(outcome, Rejected):
-        print(f"refused: {why(outcome.explanation)}", file=sys.stderr)
-        raise typer.Exit(code=1)
     print(f"breach {kind} on {trade} answered: {decision}; transition {outcome.transition_id}")
 
 
@@ -328,14 +340,28 @@ def lapse_instructions_command(
     database_url: DatabaseUrl = "",
 ) -> None:
     client = _client(_db(database_url))
-    outcome = client.submit(
-        LapseOverdueInstructionsRequest(org=org, book=book), actor=actor, explain_on_reject=True
-    )
-    if isinstance(outcome, Rejected):
-        print(f"refused: {why(outcome.explanation)}", file=sys.stderr)
-        raise typer.Exit(code=1)
-    lapsed = [c for c in outcome.asserted_claims if c.predicate == "InstructionEnded"]
-    print(f"{len(lapsed)} instruction(s) lapsed in {book}; transition {outcome.transition_id}")
+    outcome = _committed_or_exit(client, LapseOverdueInstructionsRequest(org=org, book=book), actor)
+    print(f"{lapsed(outcome)} instruction(s) lapsed in {book}; transition {outcome.transition_id}")
+
+
+@app.command(
+    "sweep",
+    help="Record the lapse of overdue instructions in every book that has one, once: what the "
+    "demo does every minute, for a scheduler to run anywhere else.",
+)
+def sweep_command(
+    actor: Annotated[str, typer.Option(help="the reconciling service")] = "",
+    database_url: DatabaseUrl = "",
+) -> None:
+    client = _client(_db(database_url))
+    outcomes = sweep_once(client, actor=actor or get_settings().sweep_actor)
+    for (org, book), outcome in outcomes.items():
+        if isinstance(outcome, Committed):
+            print(f"{org}/{book}: {lapsed(outcome)} lapsed")
+        else:
+            print(f"{org}/{book}: refused by {outcome.rule}")
+    if not outcomes:
+        print("nothing overdue")
 
 
 @app.command(

@@ -24,15 +24,9 @@ instruction holds goes down, ending it as filled when nothing is left.
 from __future__ import annotations
 
 import datetime as dt
-from decimal import InvalidOperation
 
 from glasshouse.api.schemas import InstructionRow
-from glasshouse.commit import GlasshouseClient, models
-from glasshouse.imports.trades import EXACT_DECIMALS, exact_decimal
-
-# How the ledger spells two answers the API spells in words.
-_APPROVAL = {"approved": "approved", "awaiting": "awaiting", "not_required": "not required"}
-_NOBODY = "nobody"
+from glasshouse.commit import GlasshouseClient, exact_decimals, models
 
 
 def list_instructions(
@@ -88,8 +82,10 @@ def list_instructions(
                     if still_open
                     else standing.outcome
                 ),
-                approval=_APPROVAL[standing.approval],
-                approved_by=None if standing.approved_by == _NOBODY else standing.approved_by,
+                # The ledger spells `not_required` and `nobody`; the API
+                # says `not required` and leaves the approver out.
+                approval=standing.approval.replace("_", " "),
+                approved_by=None if standing.approved_by == "nobody" else standing.approved_by,
             )
         )
     return sorted(listed, key=lambda row: (row.book, row.instruction))
@@ -104,14 +100,8 @@ def place_request(
     mistakes. `placed_on` is the caller's to supply because it is not
     the instructing party's to choose: it is the day the instruction is
     placed."""
-    try:
-        quantity = exact_decimal(fields["quantity"])
-        limit_price = exact_decimal(fields["limit_price"])
-    except InvalidOperation:
-        raise ValueError(
-            f"quantity/limit_price must be {EXACT_DECIMALS}, got "
-            f"{fields['quantity']!r}/{fields['limit_price']!r}"
-        ) from None
+    numbers = exact_decimals(quantity=fields["quantity"], limit_price=fields["limit_price"])
+    quantity, limit_price = numbers["quantity"], numbers["limit_price"]
     try:
         delivery_start = dt.datetime.fromisoformat(fields["delivery_start"])
         delivery_end = dt.datetime.fromisoformat(fields["delivery_end"])

@@ -698,7 +698,7 @@ def _rule_names() -> set[str]:
     """Every named gate in the rule file: a gloss for a rule that does
     not exist would be a sentence nobody can ever be shown."""
     text = MODEL_FILE.read_text()
-    return set(re.findall(r"require (\w+):", text))
+    return set(re.findall(r"(?:require|bind) (\w+):", text))
 
 
 def test_a_stylesheets_address_changes_with_its_content() -> None:

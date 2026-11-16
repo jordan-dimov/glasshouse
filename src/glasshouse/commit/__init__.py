@@ -16,6 +16,7 @@ go through this package. No ORM writes, no raw SQL writes, no exceptions.
 from pathlib import Path
 
 from glasshouse.commit.client import GlasshouseClient, NamedClaimModel
+from glasshouse.commit.decimals import EXACT_DECIMALS, exact_decimal, exact_decimals
 from glasshouse.commit.morpholog_client import (
     MODEL_HASH,
     PROGRAM,
@@ -45,6 +46,7 @@ MODEL_FILE = Path(__file__).parent / "glasshouse.morph"
 type Outcome = Committed | Rejected
 
 __all__ = [
+    "EXACT_DECIMALS",
     "MODEL_FILE",
     "MODEL_HASH",
     "PROGRAM",
@@ -61,6 +63,8 @@ __all__ = [
     "Rejected",
     "apply_views",
     "envelopes",
+    "exact_decimal",
+    "exact_decimals",
     "models",
     "values",
     "views_model_hash",

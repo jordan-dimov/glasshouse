@@ -56,7 +56,6 @@ from glasshouse.commit import (
 from glasshouse.commit.morpholog_client.envelopes import AtomicCommitted, AtomicRejected
 from glasshouse.commit.morpholog_client.models import (
     AdmitValuationRequest,
-    AmendTradeRequest,
     CorrectCurveRequest,
     CurveRegisteredClaim,
     OfficialCurveClaim,
@@ -249,8 +248,8 @@ def correct_and_remark(
             log.warning("marking.remark_skipped_not_in_force", org=org, trade=c.trade, as_of=as_of)
             continue
         in_force[c.trade] = terms
-    acts = [
-        _act(
+    acts: list[tuple[CorrectCurveRequest | AdmitValuationRequest, str]] = [
+        (
             CorrectCurveRequest(
                 org=org,
                 market=market,
@@ -262,7 +261,7 @@ def correct_and_remark(
             curve_actor,
         ),
         *(
-            _act(
+            (
                 AdmitValuationRequest(
                     org=org,
                     book=c.book,
@@ -279,7 +278,7 @@ def correct_and_remark(
     ]
     store.save(org=org, version=new_version, curve=curve)
     try:
-        outcome = morpholog.transact(acts)
+        outcome = morpholog.submit_all(acts)
     except MorphologOutcomeUnknown:
         raise  # it may have committed: the payload stays
     except MorphologError:
@@ -350,10 +349,10 @@ def amend_and_remark(
         delivery_end=delivery_end,
         effective_from=effective_from,
     )
-    return morpholog.transact(
+    return morpholog.submit_all(
         [
-            _act(amendment, actor),
-            _act(
+            (amendment, actor),
+            (
                 AdmitValuationRequest(
                     org=org,
                     book=captured.book,
@@ -366,19 +365,6 @@ def amend_and_remark(
             ),
         ]
     )
-
-
-def _act(
-    request: CorrectCurveRequest | AdmitValuationRequest | AmendTradeRequest, actor: str
-) -> dict[str, object]:
-    """One `transact` act in the batch row shape. The generated
-    `transact` takes raw rows where `submit` takes the typed request;
-    the request's own codec still validates every value."""
-    return {
-        "transformation": request.TRANSFORMATION,
-        "actor": actor,
-        "args_named": request.to_args_named(),
-    }
 
 
 def _anchored_curve(

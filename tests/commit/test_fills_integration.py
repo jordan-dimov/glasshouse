@@ -25,10 +25,10 @@ from typer.testing import CliRunner
 
 from glasshouse import cli
 from glasshouse.api import fills
-from glasshouse.commit import MODEL_FILE, Committed, GlasshouseClient, Rejected, models
+from glasshouse.commit import MODEL_FILE, Committed, GlasshouseClient, models
 from glasshouse.compute.terms import terms_version_id
 from glasshouse.sweep import overdue_books, sweep_once
-from tests.support import BINARY, DB, login_role, needs_live_stack
+from tests.support import BINARY, DB, committed, login_role, needs_live_stack, refused
 
 pytestmark = [needs_live_stack, pytest.mark.usefixtures("cli_binary")]
 
@@ -96,16 +96,16 @@ def instruct(
 def fill(
     instruction: str, execution: str, quantity: str, price: str = "85"
 ) -> models.RecordFillRequest:
-    return models.RecordFillRequest(
+    # Through the builder the CLI and the seed use, version id and all.
+    return fills.fill_request(
         org=ORG,
         instruction=instruction,
         execution=execution,
         trade=f"T-{execution}",
         counterparty="eex",
-        version=terms_version_id(f"T-{execution}", 1),
-        quantity=Decimal(quantity),
-        price=Decimal(price),
-        trade_date=ON,
+        quantity=quantity,
+        price=price,
+        trade_date=ON.isoformat(),
     )
 
 
@@ -126,20 +126,8 @@ def capture(book: str, trade: str, direction: str, quantity: str) -> models.Capt
     )
 
 
-def committed(client: GlasshouseClient, request: object, actor: str) -> Committed:
-    outcome = client.submit(request, actor=actor, explain_on_reject=True)  # type: ignore[arg-type]
-    assert isinstance(outcome, Committed), outcome
-    return outcome
-
-
-def refused(client: GlasshouseClient, request: object, actor: str) -> str:
-    outcome = client.submit(request, actor=actor, explain_on_reject=True)  # type: ignore[arg-type]
-    assert isinstance(outcome, Rejected), outcome
-    return str(outcome.rule)
-
-
 def breaches_of(client: GlasshouseClient, trade: str) -> set[str]:
-    return {b.kind for b in client.read(models.BreachClaim) if b.trade == trade}
+    return fills.breaches_of(client, org=ORG, trade=trade)
 
 
 def holding(client: GlasshouseClient, instruction: str) -> Decimal | None:
@@ -165,9 +153,9 @@ def test_a_fill_within_what_was_held_books_the_trade_and_reduces_the_hold(
     booked = {t.trade: t.quantity for t in ledger.read(models.TradeTermsClaim)}
     assert (booked["T-H1"], booked["T-H2"]) == (Decimal("4"), Decimal("2"))
     # The same report twice is booked once.
-    assert refused(ledger, fill("H-1", "H1", "1"), "recon") == "execution_is_new"
+    assert refused(ledger, fill("H-1", "H1", "1"), "recon").rule == "execution_is_new"
     # And only the reconciling service records fills.
-    assert refused(ledger, fill("H-1", "H9", "1"), "trader") == "may_record_fills"
+    assert refused(ledger, fill("H-1", "H9", "1"), "trader").rule == "may_record_fills"
 
 
 def test_a_fill_past_what_was_held_and_past_the_cap_brings_both_breaches(
@@ -222,8 +210,11 @@ def test_a_book_over_its_cap_trades_only_towards_flat(ledger: GlasshouseClient) 
         return "admissible" if answer.admissible else str(answer.rejection.rule)  # type: ignore[union-attr]
 
     # Further out: refused, by trade or by instruction.
-    assert refused(ledger, capture("breached", "B-UP", "buy", "1"), "trader") == "hour_within_limit"
-    assert refused(ledger, instruct("breached", "B-3", "buy", "1"), "trader") == (
+    assert (
+        refused(ledger, capture("breached", "B-UP", "buy", "1"), "trader").rule
+        == "hour_within_limit"
+    )
+    assert refused(ledger, instruct("breached", "B-3", "buy", "1"), "trader").rule == (
         "breach_must_shrink"
     )
     # Flipped to the same size on the other side, +120 to -120: as far
@@ -232,7 +223,7 @@ def test_a_book_over_its_cap_trades_only_towards_flat(ledger: GlasshouseClient) 
     assert asked(capture("breached", "B-FLIP", "sell", "240")) == "breach_must_shrink"
     # (An instruction cannot be asked about: placing one reads the clock,
     # and `explain` has none. A refusal records nothing either.)
-    assert refused(ledger, instruct("breached", "B-FLIP", "sell", "240"), "trader") == (
+    assert refused(ledger, instruct("breached", "B-FLIP", "sell", "240"), "trader").rule == (
         "breach_must_shrink"
     )
     # Across flat but smaller, +120 to -110: admissible.
@@ -242,7 +233,7 @@ def test_a_book_over_its_cap_trades_only_towards_flat(ledger: GlasshouseClient) 
     committed(ledger, instruct("breached", "B-4", "sell", "30"), "trader")
     committed(ledger, capture("breached", "B-DOWN", "sell", "50"), "trader")
     # Past flat and out the other side: -150 against the cap of 100.
-    assert refused(ledger, capture("breached", "B-OVER", "sell", "220"), "trader") == (
+    assert refused(ledger, capture("breached", "B-OVER", "sell", "220"), "trader").rule == (
         "hour_within_limit"
     )
 
@@ -262,11 +253,11 @@ def test_a_breach_is_answered_once_by_risk_and_never_by_its_trader(
         return {(b.trade, b.kind) for b in fills.list_breaches(ledger, org=ORG)}
 
     assert ("T-N1", "price") in unanswered()
-    assert refused(ledger, answer(), "trader") == "answerer_is_not_the_trader"
-    assert refused(ledger, answer("maybe"), "risk") == "breach_decision_is_one_of_four"
+    assert refused(ledger, answer(), "trader").rule == "answerer_is_not_the_trader"
+    assert refused(ledger, answer("maybe"), "risk").rule == "breach_decision_is_one_of_four"
     committed(ledger, answer(), "risk")
     assert ("T-N1", "price") not in unanswered()
-    assert refused(ledger, answer(), "risk") == "breach_not_yet_answered"
+    assert refused(ledger, answer(), "risk").rule == "breach_not_yet_answered"
     (row,) = [b for b in ledger.read(models.BreachAnsweredClaim) if b.trade == "T-N1"]
     assert (row.answered_by, row.decision, row.note) == ("risk", "accepted", "the market moved")
 
@@ -276,7 +267,7 @@ def test_the_sweep_lapses_only_the_books_with_something_overdue(ledger: Glasshou
     committed(ledger, instruct("swept", "S-2", "buy", "1"), "trader")
     committed(ledger, instruct("quiet", "Q-1", "buy", "1"), "trader")
     sweep = models.LapseOverdueInstructionsRequest(org=ORG, book="swept")
-    assert refused(ledger, sweep, "trader") == "something_has_lapsed"
+    assert refused(ledger, sweep, "trader").rule == "something_has_lapsed"
     time.sleep(2)
     assert (ORG, "swept") in overdue_books(ledger, now=dt.datetime.now(dt.UTC))
     assert (ORG, "quiet") not in overdue_books(ledger, now=dt.datetime.now(dt.UTC))
@@ -287,9 +278,12 @@ def test_the_sweep_lapses_only_the_books_with_something_overdue(ledger: Glasshou
     assert holding(ledger, "S-2") == Decimal("1")
     assert (ORG, "swept") not in sweep_once(ledger, actor="recon")
     # A desk without the right cannot sweep a book.
-    assert refused(
-        ledger, models.LapseOverdueInstructionsRequest(org=ORG, book="quiet"), "nobody"
-    ) == ("may_lapse")
+    assert (
+        refused(
+            ledger, models.LapseOverdueInstructionsRequest(org=ORG, book="quiet"), "nobody"
+        ).rule
+        == "may_lapse"
+    )
 
 
 def test_the_cli_records_a_fill_and_answers_its_breach(ledger: GlasshouseClient) -> None:

@@ -30,6 +30,7 @@ from decimal import Decimal
 import sqlalchemy as sa
 
 from alembic import command
+from glasshouse.api import fills
 from glasshouse.commit import (
     MODEL_FILE,
     Committed,
@@ -50,7 +51,7 @@ from glasshouse.compute.marking import (
 from glasshouse.compute.store import CurveStore, engine_url
 from glasshouse.compute.store import metadata as payload_metadata
 from glasshouse.compute.terms import terms_version_id
-from glasshouse.config import Environment, get_settings
+from glasshouse.config import Environment, Settings, get_settings
 from glasshouse.projections import rebuild
 from glasshouse.projections.tables import metadata as projection_metadata
 from glasshouse.provision import ALEMBIC_INI, ProvisionError, alembic_config, reconcile_indexes
@@ -138,7 +139,9 @@ _GB_TRADES: tuple[tuple[str, str, str, str, str, int, int], ...] = (
 # so the ledger books it and records a `price` breach that nobody has
 # answered yet: the Positions screen shows it.
 FILL_BOOK = "hedge-de"
-RECONCILER = "reconciler"
+# The reconciling service: whoever the demo's minute sweep acts as, so
+# the right granted here is the right the sweep uses.
+RECONCILER = Settings.model_fields["sweep_actor"].default
 _FILLS: tuple[tuple[str, str, str, str, str, str], ...] = (
     # (instruction, execution, trade, quantity, limit price, fill price)
     ("I-001", "EEX-0001", "T-007", "3", "82", "81"),
@@ -452,16 +455,15 @@ def seed_demo(
         )
         _committed(
             client.submit(
-                models.RecordFillRequest(
+                fills.fill_request(
                     org=ORG,
                     instruction=instruction,
                     execution=execution,
                     trade=trade,
                     counterparty="eex",
-                    version=terms_version_id(trade, 1),
-                    quantity=Decimal(quantity),
-                    price=Decimal(fill_price),
-                    trade_date=AS_OF,
+                    quantity=quantity,
+                    price=fill_price,
+                    trade_date=AS_OF.isoformat(),
                 ),
                 actor=RECONCILER,
             )
