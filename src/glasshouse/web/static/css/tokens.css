@@ -35,10 +35,12 @@
   /* Type */
   --font-ui: system-ui, "Segoe UI", sans-serif;
   --font-mono: ui-monospace, "SF Mono", "Cascadia Mono", Menlo, Consolas, monospace;
-  --size-0: 0.6875rem;   /* 11px: eyebrows, footers */
-  --size-1: 0.8125rem;   /* 13px: tables, controls */
-  --size-2: 0.9375rem;   /* 15px: body */
-  --size-3: 1.25rem;     /* 20px: page titles */
+  /* Dense tables read at 14px and prose at 16px, the sizes data-heavy
+     design systems settle on; 12px is the floor, for labels only. */
+  --size-0: 0.75rem;     /* 12px: column labels, badges, footer */
+  --size-1: 0.875rem;    /* 14px: tables, controls, notes */
+  --size-2: 1rem;        /* 16px: body */
+  --size-3: 1.375rem;    /* 22px: page titles */
   --leading: 1.45;
 
   /* Rhythm (4px base) */

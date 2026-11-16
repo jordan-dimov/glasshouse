@@ -21,10 +21,19 @@ from starlette.datastructures import QueryParams
 
 from glasshouse import __version__
 from glasshouse.api import asof
+from glasshouse.commit.morpholog_client import MORPHOLOG_VERSION
 
 
 def _utc(instant: dt.datetime) -> str:
     return instant.astimezone(dt.UTC).strftime("%Y-%m-%d %H:%M") + "Z"
+
+
+def _window(start: dt.datetime, end: dt.datetime) -> str:
+    """A delivery window in one cell, its date written once when both
+    ends fall on the same UTC day: `2026-07-01 07:00 - 11:00Z`."""
+    first, last = start.astimezone(dt.UTC), end.astimezone(dt.UTC)
+    to = last.strftime("%H:%M" if last.date() == first.date() else "%Y-%m-%d %H:%M")
+    return f"{first:%Y-%m-%d %H:%M} - {to}Z"
 
 
 def _ago(instant: dt.datetime | None, *, now: dt.datetime | None = None) -> str:
@@ -96,6 +105,38 @@ RULES_IN_PLAIN_WORDS = {
     "delivery_is_at_most_a_year": "Delivery can last at most a year.",
 }
 
+# Each act of the rule file in a few plain words, for the Audit screen;
+# the act's own name stays in the cell's title. A test holds this table
+# to the rule file: every act has words, and no words name a missing act.
+ACTS_IN_PLAIN_WORDS = {
+    "establish_ledger": "Set up the ledger",
+    "establish_organisation": "Create an organisation",
+    "grant_grant_authority": "Allow granting rights",
+    "grant_capture_authority": "Allow entering trades",
+    "grant_curve_authority": "Allow entering prices",
+    "grant_valuation_authority": "Allow valuing trades",
+    "grant_instruct_authority": "Allow placing orders",
+    "grant_approve_authority": "Allow approving orders",
+    "grant_fill_authority": "Allow recording fills",
+    "grant_breach_authority": "Allow answering breaches",
+    "require_approval": "Require approval in a book",
+    "grant_limit_authority": "Allow setting limits",
+    "declare_market": "Declare a market",
+    "set_position_limit": "Set a position limit",
+    "capture_trade": "Enter a trade",
+    "amend_trade": "Amend a trade",
+    "place_instruction": "Place an order",
+    "cancel_instruction": "Cancel an order",
+    "approve_instruction": "Approve an order",
+    "reject_instruction": "Reject an order",
+    "lapse_overdue_instructions": "Lapse overdue orders",
+    "record_fill": "Record a fill",
+    "answer_breach": "Answer a breach",
+    "register_curve": "Enter prices",
+    "correct_curve": "Correct prices",
+    "admit_valuation": "Value a trade",
+}
+
 # What each kind of breach means, for the Positions screen. The kinds
 # are the ledger's closed list (`breach_is_of_a_known_kind`); a test
 # holds this table to it.
@@ -157,6 +198,22 @@ def _viewing(query: QueryParams) -> dict[str, object] | None:
 
 templates = Jinja2Templates(directory=str(Path(__file__).parent / "templates"))
 templates.env.globals["version"] = __version__
+# The Morpholog release the committed client was generated for, which the
+# binary is checked against on first use: the version Glasshouse is built on.
+templates.env.globals["morpholog_version"] = MORPHOLOG_VERSION
+
+
+def _system_time() -> dict[str, str]:
+    """The system's date and time in UTC, as the page is rendered: the
+    one clock every figure on the screen is read against."""
+    now = dt.datetime.now(dt.UTC)
+    return {
+        "iso": now.isoformat(timespec="seconds"),
+        "shown": now.strftime("%a %d %b %Y, %H:%M UTC"),
+    }
+
+
+templates.env.globals["system_time"] = _system_time
 # A stylesheet's address changes when any stylesheet does, so a browser
 # never shows a new page with a stylesheet it cached from the last
 # release.
@@ -166,8 +223,10 @@ templates.env.globals["static_version"] = hashlib.sha256(
     )
 ).hexdigest()[:10]
 templates.env.filters["utc"] = _utc
+templates.env.filters["window"] = _window
 templates.env.filters["ago"] = _ago
 templates.env.globals["viewing"] = _viewing
 templates.env.filters["plain_rule"] = _plain_rule
 templates.env.globals["outcome_words"] = OUTCOMES_IN_PLAIN_WORDS
 templates.env.globals["breach_kinds"] = BREACH_KINDS_IN_PLAIN_WORDS
+templates.env.globals["act_words"] = ACTS_IN_PLAIN_WORDS

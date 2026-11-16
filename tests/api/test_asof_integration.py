@@ -152,17 +152,17 @@ def test_the_screens_say_which_moment_they_show(
         current = client.get("/ui/blotter", params={"org": ORG})
     assert blotter.status_code == positions.status_code == overview.status_code == 200
     # The past is announced, and the empty book of that moment is shown.
-    assert "You are viewing the book as it stood at" in blotter.text
+    assert "The book as it stood at" in blotter.text
     assert "No trades match this view." in blotter.text
     assert "T-001" not in blotter.text
-    assert "You are viewing the book as it stood at" in positions.text
+    assert "The book as it stood at" in positions.text
     # Moving between screens stays in the mode; leaving it is one link.
     assert "/ui/positions?org=acme-energy&amp;as_of=" in blotter.text
     assert "Back to now" in blotter.text
     # A screen that cannot answer for the past says so, never pretends.
-    assert "This screen always shows the present." in overview.text
+    assert "This screen shows the present." in overview.text
     # And the present is still the present.
-    assert "Viewing: now" in current.text
+    assert ">Now</span>" in current.text
     assert "T-001" in current.text
 
 
@@ -173,9 +173,9 @@ def test_a_future_moment_is_a_422_page_not_a_stale_screen(app: TestClient) -> No
     assert "Check the as-of time" in response.text
     # A page that refused the moment is not showing it: no banner and no
     # pill may say the book is being viewed as it stood then.
-    assert "You are viewing the book as it stood" not in response.text
-    assert "Viewing the past" not in response.text
-    assert "Viewing: now" in response.text
+    assert "The book as it stood at" not in response.text
+    assert "as-of-pill--past" not in response.text
+    assert ">Now</span>" in response.text
 
 
 def test_a_window_bound_with_no_offset_reads_the_same_then_and_now(
@@ -243,5 +243,5 @@ def test_the_screen_shows_utc_for_a_moment_written_with_an_offset(
     with app as client:
         page = client.get("/ui/blotter", params={"org": ORG, "as_of": plus_two.isoformat()})
     assert page.status_code == 200
-    assert f"Viewing the past: {at:%Y-%m-%d %H:%M:%S} UTC" in page.text
+    assert f"As of {at:%Y-%m-%d %H:%M:%S} UTC" in page.text
     assert f"{plus_two:%H:%M:%S}+02:00" not in page.text

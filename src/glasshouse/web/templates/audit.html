@@ -5,9 +5,9 @@
 <div class="page-header">
   <h1>Audit</h1>
   {% if scope == "ledger" %}
-  <p class="page-header__note">Every change ever recorded, for every organisation, newest first. Rows about {{ org }} are marked. <a href="/ui/audit?org={{ org | urlencode }}">Show only {{ org }}</a>.</p>
+  <p class="page-header__note">Every change recorded, for every organisation, newest first; rows about {{ org }} are marked. <a href="/ui/audit?org={{ org | urlencode }}">Only {{ org }}</a></p>
   {% else %}
-  <p class="page-header__note">Every change ever recorded for {{ org }}, newest first ({{ total }} of {{ ledger_total }} in the whole record). Nothing in it can be edited or removed. <a href="/ui/audit?org={{ org | urlencode }}&scope=ledger">Show every organisation</a>.</p>
+  <p class="page-header__note">Every change recorded for {{ org }}, newest first. Nothing can be edited or removed. <a href="/ui/audit?org={{ org | urlencode }}&scope=ledger">All organisations ({{ ledger_total }})</a></p>
   {% endif %}
 </div>
 
@@ -25,7 +25,7 @@
       <button type="submit">Run the check</button>
       <span class="htmx-indicator" role="status">Checking...</span>
     </form>
-    <p class="tile__note">Six separate checks that the record, the rules and what these screens show all still agree. It changes nothing and is safe to run at any time. The result appears below.</p>
+    <p class="tile__note">Six checks that the record, the rules and these screens agree. Read-only; the result appears below.</p>
   </section>
   <section class="tile">
     <h2>Take a copy to check elsewhere</h2>
@@ -33,7 +33,7 @@
     <form method="post" action="/ui/audit/checkpoint">
       <button type="submit">Record and download a checkpoint</button>
     </form>
-    <p class="tile__note">A checkpoint is a fingerprint of the record as it is now. With the two files, anyone can confirm on their own machine that the record has not been changed since, with no access to this system: <span class="mono">glasshouse evidence-verify glasshouse-evidence-pack.ndjson --anchor glasshouse-checkpoint-anchor.json</span></p>
+    <p class="tile__note">A checkpoint fingerprints the record as it is now. With both files, anyone can confirm offline that it has not changed since: <span class="mono">glasshouse evidence-verify glasshouse-evidence-pack.ndjson --anchor glasshouse-checkpoint-anchor.json</span></p>
     <p class="tile__note">The download holds the record of every organisation, not only {{ org }}.</p>
   </section>
 </div>
@@ -60,7 +60,7 @@
         {% for refusal in refused.refusals %}
         <tr>
           <td>{{ refusal.rejected_at | utc }}</td>
-          <td class="mono">{{ refusal.transformation }}</td>
+          <td title="{{ refusal.transformation }}">{{ act_words.get(refusal.transformation, refusal.transformation) }}</td>
           <td>{{ refusal.actor }}</td>
           <td>
             {% if refusal.summary | plain_rule %}{{ refusal.summary | plain_rule }}<br>{% endif %}
@@ -83,7 +83,7 @@
   {% else %}
   {{ empty_state("Nothing refused lately.") }}
   {% endif %}
-  <p class="tile__note">A refused proposal changes nothing, so it is not part of the record below. This list is kept separately and is not complete: it shows at most the latest {{ refused.limit }} refusals, and one can occasionally go unrecorded. Treat it as a good lead, not as proof.</p>
+  <p class="tile__note">Refusals change nothing, so they are not in the record. This list keeps the latest {{ refused.limit }} and may miss one: a lead, not proof.</p>
 </section>
 {% endif %}
 
@@ -105,7 +105,7 @@
         {% for entry, ours in rows %}
         <tr {% if ours %}class="audit-row--org"{% endif %}>
           <td>{{ entry.committed_at | utc }}</td>
-          <td class="mono">{{ entry.transformation }}</td>
+          <td title="{{ entry.transformation }}">{{ act_words.get(entry.transformation, entry.transformation) }}</td>
           <td>{{ entry.actor }}</td>
           <td>
             <details>

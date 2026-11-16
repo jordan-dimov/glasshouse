@@ -4,7 +4,6 @@
 {% block content %}
 <div class="page-header">
   <h1>Overview</h1>
-  <p class="page-header__note">{{ org }} at a glance: what is in the books, what it is worth, and whether the system is healthy.</p>
 </div>
 
 <div class="tiles">
@@ -34,7 +33,7 @@
         {% endfor %}
       </tbody>
     </table>
-    <p class="tile__note">The latest valuation of each trade, added up. One total per currency: currencies are never added together. <a href="/ui/positions?org={{ org | urlencode }}">See each trade's value</a>.</p>
+    <p class="tile__note">Latest value of each trade, summed per currency. <a href="/ui/positions?org={{ org | urlencode }}">Each trade's value</a></p>
     {% else %}
     {{ empty_state("No trade has been valued yet.") }}
     {% endif %}

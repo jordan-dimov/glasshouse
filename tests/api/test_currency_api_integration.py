@@ -100,8 +100,12 @@ def test_the_screens_show_the_currency_beside_the_number(app: TestClient) -> Non
     # No heading claims a currency for a column that holds two.
     for page in (blotter, positions):
         assert "(EUR" not in page
-        assert "<td>GBP</td>" in page
-        assert "<td>EUR</td>" in page
+    # Each price carries its own currency in its cell; each value has a
+    # currency column of its own.
+    assert " GBP</td>" in blotter
+    assert " EUR</td>" in blotter
+    assert "<td>GBP</td>" in positions
+    assert "<td>EUR</td>" in positions
     assert "Price (per MWh)" in blotter
 
 

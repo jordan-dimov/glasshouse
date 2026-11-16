@@ -4,7 +4,7 @@
 {% block content %}
 <div class="page-header">
   <h1>Positions</h1>
-  <p class="page-header__note">How much power each book has bought, less what it has sold, in each delivery hour {{ "at that moment" if as_of else "now" }}. Below that, what each trade is worth.</p>
+  <p class="page-header__note">Net position per book and delivery hour{{ " at that moment" if as_of else "" }}, and what each trade is worth.</p>
 </div>
 
 <form class="filter-bar" method="get" action="/ui/positions">
@@ -20,7 +20,7 @@
 {% if breaches is none %}
 <section role="alert">
   <h2>Breaches to answer</h2>
-  <p>{{ badge("quarantined", "could not be read") }} The ledger did not answer the question of which breaches are unanswered, so this screen cannot say there are none. The figures below are still current. Try again in a moment; if this stays, check the service's health page.</p>
+  <p>{{ badge("quarantined", "could not be read") }} The ledger did not answer, so this screen cannot say there are none. Everything else here is current. Try again shortly; if it persists, check the service health.</p>
 </section>
 {% elif breaches %}
 <section>
@@ -47,7 +47,7 @@
       </tbody>
     </table>
   </div>
-  <p class="tile__note">A fill the market reported is booked even when it breaks a rule, because it happened. The breach is recorded with it, and stays here until someone with the right answers it with a decision and a reason. Whoever placed the instruction cannot answer its breach.</p>
+  <p class="tile__note">A market fill is booked even when it breaks a rule. Its breach stays here until someone with the right answers it; the trader behind it cannot.</p>
 </section>
 {% endif %}
 
@@ -85,7 +85,7 @@
       </tbody>
     </table>
   </div>
-  <p class="tile__note">A limit caps a book's position in any single hour, bought or sold. A trade that would take any hour past it is refused. An open instruction (an order not yet filled) holds room as if it will fill in full, so the room left already allows for it.{% if as_of %} The limits and instructions shown are today's.{% endif %}</p>
+  <p class="tile__note">A limit caps a book's net position in any hour. Open instructions hold their room until they fill or end.</p>
 </section>
 {% endif %}
 
@@ -130,7 +130,7 @@
       </tbody>
     </table>
   </div>
-  <p class="tile__note">An instruction is an intention that has not happened yet, such as an order sent to market. It holds room under its book's limit until it is cancelled, or until its time has run out and that is recorded. Where a book requires approval, a second person must approve it, and never the one who placed it. When it fills, the fill books the trade and frees the room it held.</p>
+  <p class="tile__note">An instruction is an order not yet filled. It holds room under the limit until it fills, is cancelled or lapses. Where a book requires approval, a second person approves it.</p>
 </section>
 {% endif %}
 
@@ -167,7 +167,7 @@
       </tbody>
     </table>
   </div>
-  <p class="tile__note">A trade's value is the difference between its price and the market's price curve, for the power it covers. Each value names the curve and the trade version it was worked out from, so you can see where the number came from.</p>
+  <p class="tile__note">Value is the difference between the trade's price and the curve, over the power it covers. Each names the curve and trade version used.</p>
   {% else %}
   {{ empty_state("No trade here has been valued.") }}
   {% endif %}
@@ -198,7 +198,7 @@
       </tbody>
     </table>
   </div>
-  <p class="tile__note">Positive means the book has bought more than it has sold for that hour. Negative, shown in red, means it has sold more.</p>
+  <p class="tile__note">Positive: bought more than sold. Negative (red): sold more.</p>
   {% else %}
   {{ empty_state("No positions in this window.") }}
   {% endif %}
