@@ -59,6 +59,9 @@ from glasshouse.verify import verify
 
 # One session-level advisory lock for the whole seed/reset operation.
 SEED_LOCK_KEY = 423_001
+# How long the closing checkpoint may wait for its transition to enter
+# the audit log's stable prefix (seconds).
+CHECKPOINT_WAIT = 30.0
 
 # The migration bundle the reset path replays - provision.py's constant,
 # re-bound here because the pure tests monkeypatch this seam.
@@ -514,9 +517,10 @@ def seed_demo(
     # the re-mark, so `verify`'s tree leg has something to prove and an
     # evidence pack exported from this ledger has an anchor. The tail
     # above was complete, so the transition is inside the stable prefix;
-    # were it not, the binary refuses (`MorphologNotCovered`, nothing
+    # were it not, the binary asks again for up to CHECKPOINT_WAIT seconds
+    # (v0.0.20 `--wait`) and then refuses (`MorphologNotCovered`, nothing
     # recorded) rather than anchoring a head short of the close.
-    anchored = client.audit_checkpoint(covering=close.transition_id)
+    anchored = client.audit_checkpoint(covering=close.transition_id, wait=CHECKPOINT_WAIT)
     return SeedReport(
         org=ORG,
         books=len(BOOKS) + 1,

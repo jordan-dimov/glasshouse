@@ -24,6 +24,7 @@ instruction holds goes down, ending it as filled when nothing is left.
 from __future__ import annotations
 
 import datetime as dt
+from decimal import Decimal
 
 from glasshouse.api.schemas import InstructionRow
 from glasshouse.commit import GlasshouseClient, exact_decimals, models
@@ -43,13 +44,13 @@ def list_instructions(
 
     `status` is `open` while the instruction is valid and holds room;
     `overdue` once its `valid_until` has passed but nobody has recorded
-    the lapse or cancelled it, in which case it STILL holds its room
-    (the ledger's limit rule reads no clock, so that a trade can be
-    previewed); otherwise how it ended. Open or overdue is the one thing
-    worked out here, because it is the reader's clock. `holding_mw` is
-    what counts against the limit right now: the remaining quantity
-    while the instruction has not ended, nothing after. `open_only`
-    keeps the instructions holding room, the overdue ones included."""
+    the lapse or cancelled it, and from that instant it holds nothing
+    (the ledger's room rule reads the act's decision time); otherwise how
+    it ended. Open or overdue is the one thing worked out here, because
+    it is the reader's clock. `holding_mw` is what counts against the
+    limit at `now`: the remaining quantity while the instruction is
+    open, nothing once it is overdue or has ended. `open_only` keeps the
+    instructions holding room at `now`."""
     at = now or dt.datetime.now(dt.UTC)
     where = {"org": org} if book is None else {"org": org, "book": book}
     standings = [
@@ -58,8 +59,12 @@ def list_instructions(
     ]
     listed = []
     for standing in standings:
-        still_open = standing.outcome == "open"
-        if open_only and not still_open:
+        status = (
+            ("open" if at <= standing.valid_until else "overdue")
+            if standing.outcome == "open"
+            else standing.outcome
+        )
+        if open_only and status != "open":
             continue
         listed.append(
             InstructionRow(
@@ -69,7 +74,7 @@ def list_instructions(
                 market=standing.market,
                 direction=standing.direction,
                 quantity=standing.quantity,
-                holding_mw=standing.holding,
+                holding_mw=standing.holding if status == "open" else Decimal(0),
                 limit_price=standing.limit_price,
                 currency=standing.currency,
                 delivery_start=standing.delivery_start,
@@ -77,11 +82,7 @@ def list_instructions(
                 placed_on=standing.placed_on,
                 valid_until=standing.valid_until,
                 proposer=standing.proposer,
-                status=(
-                    ("open" if at <= standing.valid_until else "overdue")
-                    if still_open
-                    else standing.outcome
-                ),
+                status=status,
                 # The ledger spells `not_required` and `nobody`; the API
                 # says `not required` and leaves the approver out.
                 approval=standing.approval.replace("_", " "),

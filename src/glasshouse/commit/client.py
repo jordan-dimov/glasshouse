@@ -74,7 +74,7 @@ class GlasshouseClient(Morpholog):
         )
 
     def write_checkpoint(
-        self, path: str | Path, *, covering: str | None = None
+        self, path: str | Path, *, covering: str | None = None, wait: float | None = None
     ) -> envelopes.CheckpointCreated | envelopes.CheckpointNoNewRows:
         """Record a checkpoint and write its JSON to `path` as an external
         anchor: the binary prints the checkpoint as JSON, and a later
@@ -84,14 +84,21 @@ class GlasshouseClient(Morpholog):
         outcome. With `covering` (a transition id) the head must contain
         that transition, as on the generated `audit_checkpoint`; the
         refusal arrives on stdout as the `checkpoint_refusal` envelope and
-        is raised as `MorphologNotCovered`, nothing written."""
-        raw = self._invoke(
+        is raised as `MorphologNotCovered`, nothing written. `wait`
+        (seconds, with `covering`) asks again while the transition is
+        withheld, as on the generated method (v0.0.20)."""
+        if wait is not None and (covering is None or wait < 0):
+            raise ValueError("wait needs covering, and cannot be negative")
+        args = [
             "audit",
             "checkpoint",
             "--database-url",
             self.database_url,
             *self._opt("--covering", covering),
-        )
+            *self._opt("--wait", None if wait is None else f"{wait}s"),
+        ]
+        timeout = self.timeout if self.timeout is None or wait is None else self.timeout + wait
+        raw = self._decided(self._run(args, timeout=timeout), args)
         payload = json.loads(raw)
         if isinstance(payload, dict) and payload.get("status") == "error":
             raise MorphologNotCovered(envelopes.CheckpointRefusal.from_json(payload))

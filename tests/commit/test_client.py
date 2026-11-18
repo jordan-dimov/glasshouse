@@ -106,22 +106,23 @@ CHECKPOINT = json.dumps(
 
 def test_both_checkpoint_paths_name_the_subcommand_and_carry_covering(tmp_path: Path) -> None:
     # `write_checkpoint` builds its own argv (it keeps the binary's exact
-    # bytes as the anchor), so the subcommand and `--covering` (v0.0.16)
-    # are pinned here beside the generated method's: a regrouping like
-    # v0.0.8's `morpholog audit` family must fail a pure test, not the
-    # first anchor a deployment writes.
+    # bytes as the anchor), so the subcommand, `--covering` (v0.0.16) and
+    # `--wait` (v0.0.20) are pinned here beside the generated method's: a
+    # regrouping like v0.0.8's `morpholog audit` family must fail a pure
+    # test, not the first anchor a deployment writes.
     client = GlasshouseClient(
         "model.morph", "postgres:///x", binary=str(fake_binary(tmp_path, CHECKPOINT))
     )
-    client.audit_checkpoint(covering="t-close")
+    client.audit_checkpoint(covering="t-close", wait=30)
     generated = (tmp_path / "argv.txt").read_text().splitlines()
 
     anchor = tmp_path / "anchor.json"
-    client.write_checkpoint(anchor, covering="t-close")
+    client.write_checkpoint(anchor, covering="t-close", wait=30)
     ours = (tmp_path / "argv.txt").read_text().splitlines()
     assert ours == generated
     assert ours[:2] == ["audit", "checkpoint"]
     assert ours[ours.index("--covering") + 1] == "t-close"
+    assert ours[ours.index("--wait") + 1] == "30s"
     assert json.loads(anchor.read_text())["tree_size"] == 3
 
 
