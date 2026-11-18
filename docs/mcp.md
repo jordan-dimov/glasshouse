@@ -145,7 +145,7 @@ How to tell the two refusals apart:
 Three things to know:
 
 - **Buys and sells are not set against each other.** An open sale does not make room to buy, because it may never fill. Open buys count towards the bought side and open sells towards the sold side.
-- **An instruction holds its room until it ends.** It ends when it is cancelled. Once its `valid_until` time has passed it is shown as overdue, and it still holds its room until someone cancels it or records that it lapsed.
+- **An instruction holds its room until it ends or its time runs out.** It ends when it is cancelled, rejected or filled. Once its `valid_until` time has passed it holds no room and is shown as overdue until someone cancels it or the sweep records that it lapsed.
 - **Booking the trade that results is still `propose_trade`.** Cancel the instruction first, or its room stays held on top of the trade.
 
 ## Walk through: a second person approves

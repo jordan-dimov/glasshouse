@@ -117,6 +117,17 @@ def test_the_limit_refuses_the_agent_with_the_rule_the_hour_and_the_figures(desk
     assert witness["h"] == HOUR.isoformat()
     assert witness["cap"] == "25 MW"
     assert outcome["summary"].startswith("hour_within_limit:")
+    # The arguments the refusing gate reads (v0.0.20), in the act's order.
+    assert outcome["related_parameters"] == [
+        "org",
+        "book",
+        "trade",
+        "direction",
+        "quantity",
+        "delivery_start",
+        "delivery_end",
+        "trade_date",
+    ]
     # Nothing of the refused trade exists.
     assert f"LIMIT-{len(accepted) + 1}" not in {row["trade"] for row in call(desk, "list_trades")}
 

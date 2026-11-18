@@ -1,10 +1,11 @@
 """Recording lapses on a schedule.
 
-An instruction past its `valid_until` goes on holding its room under the
-limit until its lapse is recorded: the ledger's room rule reads no
-clock, because a rule that reads the clock cannot be previewed, and
-every trade import is previewed. That errs on the safe side, so how
-often the lapse is recorded is a matter of usability, not correctness.
+An instruction past its `valid_until` stops holding room under the limit
+at that instant, by the ledger's own room rule (it reads the act's
+decision time; since Morpholog v0.0.20 a preview can be judged at one).
+Until its lapse is recorded it is still open on the record, so how often
+the sweep runs decides how soon the record says so: bookkeeping, not
+correctness.
 
 The sweep asks the ledger which books hold an overdue instruction and
 proposes `lapse_overdue_instructions` for those books only, one act per

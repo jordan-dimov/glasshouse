@@ -73,9 +73,10 @@ def test_status_and_what_is_held_come_from_the_ledgers_one_read(tmp_path: Path) 
     seen = {row.instruction: (row.status, row.holding_mw) for row in rows}
     assert seen == {
         "I-open": ("open", Decimal("4")),
-        # Past its time, lapse not recorded: it still holds its room. The
-        # clock is the one thing worked out here.
-        "I-overdue": ("overdue", Decimal("4")),
+        # Past its time, lapse not recorded: the ledger's room rule no
+        # longer counts it, so neither does the list. The clock is the one
+        # thing worked out here.
+        "I-overdue": ("overdue", Decimal("0")),
         "I-gone": ("cancelled", Decimal("0")),
     }
     assert {row.currency for row in rows} == {"EUR"}
@@ -92,11 +93,11 @@ def test_status_and_what_is_held_come_from_the_ledgers_one_read(tmp_path: Path) 
     assert argv[argv.index("--where") + 1] == "org=acme-energy"
 
 
-def test_open_only_keeps_everything_still_holding_room(tmp_path: Path) -> None:
+def test_open_only_keeps_what_still_holds_room(tmp_path: Path) -> None:
     holding = instructions.list_instructions(
         client(tmp_path), org="acme-energy", open_only=True, now=NOW
     )
-    assert [row.instruction for row in holding] == ["I-open", "I-overdue"]
+    assert [row.instruction for row in holding] == ["I-open"]
 
 
 def test_a_book_is_narrowed_by_the_binary_too(tmp_path: Path) -> None:

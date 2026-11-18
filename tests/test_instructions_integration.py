@@ -2,9 +2,9 @@
 instruction holds room under its book's position limit, a trade that
 would have fitted is refused BY NAME because the room is held, the
 refusal's figures say so, cancelling frees the room, open instructions
-are never set against the other side, and an overdue instruction goes on
-holding until its lapse is recorded. Through the MCP tools, the API and
-the Positions screen.
+are never set against the other side, and an overdue instruction stops
+holding the moment its time passes, before its lapse is recorded.
+Through the MCP tools, the API and the Positions screen.
 
 spec-de holds 20 MW in the 12:00 hour, 20 MW in 13:00, and its cap is
 25 MW. Each test works in an hour of its own so they do not interfere.
@@ -185,24 +185,30 @@ def test_an_instruction_that_cannot_be_read_is_the_callers_error(desk: Desk) -> 
     assert not [r for r in call(desk, "list_instructions") if r["instruction"].startswith("BAD")]
 
 
-def test_an_overdue_instruction_holds_its_room_until_the_lapse_is_recorded(desk: Desk) -> None:
-    # 16:00 holds 20 MW. An instruction for 5, valid for two seconds,
-    # takes all the room. Once overdue it is listed as such and STILL
-    # holds: the limit rule reads no clock. Recording the lapse frees it.
-    brief = instruction("LAPSE-1", 16, "5", valid_until=soon(2))
+def test_an_overdue_instruction_frees_its_room_when_its_time_passes(desk: Desk) -> None:
+    # 16:00 holds 20 MW. An instruction for 5, valid for a few seconds,
+    # takes all the room, and while it is valid a trade is refused, by
+    # the preview and by the act. Once its time passes the room rule
+    # (which reads the act's decision time) no longer counts it: the
+    # preview says so first (Morpholog v0.0.20 judges `explain` at an
+    # instant), then the trade is booked, all before any lapse is
+    # recorded. The lapse is bookkeeping, and still lands.
+    brief = instruction("LAPSE-1", 16, "5", valid_until=soon(4))
     assert call(desk, "place_instruction", brief)["accepted"]
-    lapse = models.LapseOverdueInstructionsRequest(org=ORG, book="spec-de")
-    time.sleep(2.5)
-    (overdue,) = [
-        r
-        for r in call(desk, "list_instructions", {"open_only": True})
-        if r["instruction"] == "LAPSE-1"
-    ]
-    assert (overdue["status"], overdue["holding_mw"]) == ("overdue", "5")
+    asked = call(desk, "explain_trade", trade("LAPSE-T", 16, "1"))
+    assert asked["refusal"]["rule"] == "room_not_held_by_instructions"
     held = call(desk, "propose_trade", trade("LAPSE-T", 16, "1"))
     assert held["refusal"]["rule"] == "room_not_held_by_instructions"
-    assert isinstance(desk.client.submit(lapse, actor=AGENT), Committed)
+    time.sleep(4.5)
+    (overdue,) = [r for r in call(desk, "list_instructions") if r["instruction"] == "LAPSE-1"]
+    assert (overdue["status"], overdue["holding_mw"]) == ("overdue", "0")
+    assert "LAPSE-1" not in {
+        r["instruction"] for r in call(desk, "list_instructions", {"open_only": True})
+    }
+    assert call(desk, "explain_trade", trade("LAPSE-T", 16, "1"))["admissible"]
     assert call(desk, "propose_trade", trade("LAPSE-T", 16, "1"))["accepted"]
+    lapse = models.LapseOverdueInstructionsRequest(org=ORG, book="spec-de")
+    assert isinstance(desk.client.submit(lapse, actor=AGENT), Committed)
     (ended,) = [r for r in call(desk, "list_instructions") if r["instruction"] == "LAPSE-1"]
     assert (ended["status"], ended["holding_mw"]) == ("lapsed", "0")
 

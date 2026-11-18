@@ -136,10 +136,10 @@ predicate Instruction(org: Subject, book: Subject, instruction: Subject, propose
     unique by (instruction)
     append only
 
--- What an instruction still holds. While this claim stands, the
--- quantity counts against the book's position limit, so nobody else can
--- use that room. It is removed when the instruction ends. Not append
--- only for that reason.
+-- What an instruction still holds. While this claim stands and its
+-- `valid_until` has not passed, the quantity counts against the book's
+-- position limit, so nobody else can use that room. It is removed when
+-- the instruction ends. Not append only for that reason.
 predicate InstructionOpen(org: Subject, book: Subject, instruction: Subject, direction: Subject, remaining: Decimal[MW], delivery_start: Timestamp, delivery_end: Timestamp, valid_until: Timestamp)
     unique by (instruction)
 
@@ -340,9 +340,10 @@ define trade_in_hour(org, as_of, trade, h) = (sum(q | org_terms_in_force_on(org,
 define standing_in_hour(org, book, as_of, excluded, h) = (net_in_hour(org, book, as_of, excluded, h)
     + trade_in_hour(org, as_of, excluded, h))
 
--- What open instructions on one side still hold in that hour.
-define held_in_hour(org, book, side, h) = (sum(left | InstructionOpen(org: org, book: book, instruction: i, direction: side, remaining: left, delivery_start: s, delivery_end: e, ..)
-        and s at_or_before h and h strictly_before e))
+-- What open instructions on one side still hold in that hour, at the
+-- instant `now`: one past its `valid_until` holds nothing.
+define held_in_hour(org, book, side, h, now) = (sum(left | InstructionOpen(org: org, book: book, instruction: i, direction: side, remaining: left, delivery_start: s, delivery_end: e, valid_until: until)
+        and s at_or_before h and h strictly_before e and now at_or_before until))
 
 -- Does the book keep to its cap in hour `h` once the proposed quantity
 -- (negative for a sale) is added? The net must stay within the cap, or,
@@ -381,17 +382,19 @@ define breach_shrinks(org, book, as_of, excluded, signed_quantity, h, cap):
 -- that side (open instructions plus the one being placed), and the room
 -- the booked trades leave on that side. So "7 MW <= 5 MW does not hold"
 -- reads: 7 MW is instructed and only 5 MW of room is left.
--- An instruction holds its room until it ends: filled, cancelled, or
--- recorded as lapsed once its `valid_until` has passed. Time is not
--- read here on purpose. A rule that reads the clock cannot be previewed
--- ("would this be accepted?"), and every trade import is previewed.
+-- An instruction holds its room until it ends (filled, cancelled or
+-- rejected) or until its `valid_until` passes, whichever comes first:
+-- `now` is the act's decision time, so an instruction past its time
+-- stops holding room by this rule, before any sweep records its lapse.
+-- A preview ("would this be accepted?") is judged at the instant it is
+-- asked, so an instruction can run out between a preview and the act.
 -- `excluded` and `signed_quantity` are as in hour_is_within_cap.
 -- `more_bought` and `more_sold` are the instruction being placed.
-define hour_has_room_for_instructions(org, book, as_of, excluded, signed_quantity, more_bought, more_sold, h, cap):
+define hour_has_room_for_instructions(org, book, as_of, excluded, signed_quantity, more_bought, more_sold, h, cap, now):
     let after = (net_in_hour(org, book, as_of, excluded, h) + signed_quantity)
     let before = (standing_in_hour(org, book, as_of, excluded, h))
-    let bought = (held_in_hour(org, book, #buy, h))
-    let sold = (held_in_hour(org, book, #sell, h))
+    let bought = (held_in_hour(org, book, #buy, h, now))
+    let sold = (held_in_hour(org, book, #sell, h, now))
     let exposure = (max(bought + before, sold - before))
     more_bought + bought <= max(cap, exposure) - after
     and more_sold + sold <= max(cap, exposure) + after
@@ -421,20 +424,20 @@ define shrinks_where_breached(org, book, as_of, excluded, signed_quantity, deliv
         (TradeCaptured(org: org, book: book, trade: t, ..) and delivery_start strictly_before h and h strictly_before delivery_end)
         implies breach_shrinks(org, book, as_of, excluded, signed_quantity, h, cap))
 
-define has_room_at_breakpoints(org, book, as_of, excluded, signed_quantity, more_bought, more_sold, delivery_start, delivery_end, cap):
-    hour_has_room_for_instructions(org, book, as_of, excluded, signed_quantity, more_bought, more_sold, delivery_start, cap)
+define has_room_at_breakpoints(org, book, as_of, excluded, signed_quantity, more_bought, more_sold, delivery_start, delivery_end, cap, now):
+    hour_has_room_for_instructions(org, book, as_of, excluded, signed_quantity, more_bought, more_sold, delivery_start, cap, now)
     and (forall h in TradeTerms(org: org, trade: t, delivery_start: h, ..):
         (TradeCaptured(org: org, book: book, trade: t, ..) and delivery_start strictly_before h and h strictly_before delivery_end)
-        implies hour_has_room_for_instructions(org, book, as_of, excluded, signed_quantity, more_bought, more_sold, h, cap))
+        implies hour_has_room_for_instructions(org, book, as_of, excluded, signed_quantity, more_bought, more_sold, h, cap, now))
     and (forall h in TradeTerms(org: org, trade: t, delivery_end: h, ..):
         (TradeCaptured(org: org, book: book, trade: t, ..) and delivery_start strictly_before h and h strictly_before delivery_end)
-        implies hour_has_room_for_instructions(org, book, as_of, excluded, signed_quantity, more_bought, more_sold, h, cap))
+        implies hour_has_room_for_instructions(org, book, as_of, excluded, signed_quantity, more_bought, more_sold, h, cap, now))
     and (forall h in InstructionOpen(org: org, book: book, delivery_start: h, ..):
         (delivery_start strictly_before h and h strictly_before delivery_end)
-        implies hour_has_room_for_instructions(org, book, as_of, excluded, signed_quantity, more_bought, more_sold, h, cap))
+        implies hour_has_room_for_instructions(org, book, as_of, excluded, signed_quantity, more_bought, more_sold, h, cap, now))
     and (forall h in InstructionOpen(org: org, book: book, delivery_end: h, ..):
         (delivery_start strictly_before h and h strictly_before delivery_end)
-        implies hour_has_room_for_instructions(org, book, as_of, excluded, signed_quantity, more_bought, more_sold, h, cap))
+        implies hour_has_room_for_instructions(org, book, as_of, excluded, signed_quantity, more_bought, more_sold, h, cap, now))
 
 -- Where each instruction stands, as the Positions screen, the API and
 -- the agent list it: what was intended, what it still holds under the
@@ -494,10 +497,13 @@ derived ValuationGap(org, trade, market, business_date):
 -- The breaches nobody has answered yet, with the fill each came from:
 -- what the Positions screen lists. Worked out by the ledger each time
 -- it is asked, so it can never disagree with the facts it is read from.
+-- It computes nothing: its rows are the breaches that meet the condition
+-- (a fill is unique by trade, so each breach has one execution), which
+-- also lets it be a live SQL view.
 predicate UnansweredBreach(org: Subject, book: Subject, trade: Subject, kind: Subject, execution: Subject)
-derived UnansweredBreach(org, book, trade, kind):
+derived UnansweredBreach(org, book, trade, kind, execution):
     over Breach(org: org, book: book, trade: trade, kind: kind) and not BreachAnswered(org: org, trade: trade, kind: kind, ..)
-    value execution = value InstructionFill(org: org, trade: trade, execution: _, ..)
+    and InstructionFill(org: org, trade: trade, execution: execution, ..)
 
 -- The acts. Every gate has a name, and a refusal reports that name.
 
@@ -614,12 +620,13 @@ transformation capture_trade(org, book, trade, counterparty, market, direction, 
     let hours = periods(delivery_start, delivery_end, duration(PT1H))
     require delivery_is_whole_hours: (delivery_end - delivery_start) / duration(PT1H) = sum(1 | h in hours)
     let signed = if(direction = #buy, quantity, 0 MW - quantity)
+    let now = decided_at
     require hour_within_limit: (forall cap in PositionLimit(org, book, cap):
         keeps_to_cap(org, book, trade_date, trade, signed, delivery_start, delivery_end, cap))
     require breach_must_shrink: (forall cap in PositionLimit(org, book, cap):
         shrinks_where_breached(org, book, trade_date, trade, signed, delivery_start, delivery_end, cap))
     require room_not_held_by_instructions: (forall cap in PositionLimit(org, book, cap):
-        has_room_at_breakpoints(org, book, trade_date, trade, signed, 0 MW, 0 MW, delivery_start, delivery_end, cap))
+        has_room_at_breakpoints(org, book, trade_date, trade, signed, 0 MW, 0 MW, delivery_start, delivery_end, cap, now))
     admit TradeCaptured(org, book, trade, counterparty, market, direction)
     admit TradeTerms(org, trade, version, quantity, price, delivery_start, delivery_end, trade_date)
 
@@ -639,12 +646,13 @@ transformation amend_trade(org, trade, prior_version, new_version, quantity, pri
     let hours = periods(delivery_start, delivery_end, duration(PT1H))
     require delivery_is_whole_hours: (delivery_end - delivery_start) / duration(PT1H) = sum(1 | h in hours)
     let signed = if(direction = #buy, quantity, 0 MW - quantity)
+    let now = decided_at
     require hour_within_limit: (forall cap in PositionLimit(org, book, cap):
         keeps_to_cap(org, book, effective_from, trade, signed, delivery_start, delivery_end, cap))
     require breach_must_shrink: (forall cap in PositionLimit(org, book, cap):
         shrinks_where_breached(org, book, effective_from, trade, signed, delivery_start, delivery_end, cap))
     require room_not_held_by_instructions: (forall cap in PositionLimit(org, book, cap):
-        has_room_at_breakpoints(org, book, effective_from, trade, signed, 0 MW, 0 MW, delivery_start, delivery_end, cap))
+        has_room_at_breakpoints(org, book, effective_from, trade, signed, 0 MW, 0 MW, delivery_start, delivery_end, cap, now))
     admit TradeTerms(org, trade, new_version, quantity, price, delivery_start, delivery_end, effective_from)
     admit TradeTermsSupersedes(new_version, prior_version)
 
@@ -670,7 +678,7 @@ transformation place_instruction(org, book, instruction, market, direction, quan
     require breach_must_shrink: (forall cap in PositionLimit(org, book, cap):
         shrinks_where_breached(org, book, placed_on, instruction, as_if_filled, delivery_start, delivery_end, cap))
     require instruction_fits_under_limit: (forall cap in PositionLimit(org, book, cap):
-        has_room_at_breakpoints(org, book, placed_on, instruction, 0 MW, bought, sold, delivery_start, delivery_end, cap))
+        has_room_at_breakpoints(org, book, placed_on, instruction, 0 MW, bought, sold, delivery_start, delivery_end, cap, now))
     admit Instruction(org, book, instruction, actor, market, direction, quantity, limit_price, delivery_start, delivery_end, placed_on, valid_until)
     admit InstructionOpen(org, book, instruction, direction, quantity, delivery_start, delivery_end, valid_until)
 
@@ -706,14 +714,14 @@ transformation reject_instruction(org, instruction):
     retract InstructionOpen(org: org, instruction: instruction, ..)
     admit InstructionEnded(org, instruction, #rejected)
 
--- Record every instruction in a book that has run out of time, and
--- free the room each held. One act visits every open instruction in
--- the book and lapses those whose `valid_until` has passed; the rest
--- are left alone. Refused when none has passed, so a sweep that finds
--- nothing writes nothing. Until this runs (or the instruction is
--- cancelled) a lapsed instruction goes on holding its room: the safe
--- side to err on. Whoever may instruct in the book may run it, and so
--- may the reconciling service, which runs it on a schedule.
+-- Record every instruction in a book that has run out of time. One act
+-- visits every open instruction in the book and lapses those whose
+-- `valid_until` has passed; the rest are left alone. Refused when none
+-- has passed, so a sweep that finds nothing writes nothing. The room an
+-- instruction held is already free once its time passes (see
+-- held_in_hour); this act puts the ending on the record. Whoever may
+-- instruct in the book may run it, and so may the reconciling service,
+-- which runs it on a schedule.
 transformation lapse_overdue_instructions(org, book):
     require may_lapse: MayInstruct(actor, org, book) or MayRecordFills(actor, org)
     let now = decided_at

@@ -126,10 +126,14 @@ def _run_import(
 def _committed_or_exit(client: GlasshouseClient, request: Request, actor: str) -> Committed:
     """Propose one act; a refusal is printed in the ledger's own words
     (`refused: <rule>: ...`) and exits 1, as every single-act command
-    here reports it."""
+    here reports it. A named gate's refusal also names the options it
+    reads (v0.0.20 `related_parameters`), so the typist knows where to
+    look."""
     outcome = client.submit(request, actor=actor, explain_on_reject=True)
     if isinstance(outcome, Rejected):
         print(f"refused: {why(outcome.explanation)}", file=sys.stderr)
+        if outcome.related_parameters:
+            print(f"  reads: {', '.join(outcome.related_parameters)}", file=sys.stderr)
         raise typer.Exit(code=1)
     return outcome
 
@@ -486,13 +490,20 @@ def checkpoint_command(
             "refused, with nothing recorded, while it is outside the stable prefix"
         ),
     ] = None,
+    wait: Annotated[
+        float | None,
+        typer.Option(
+            help="with --covering: seconds to keep asking while the transition is still "
+            "outside the stable prefix, before refusing"
+        ),
+    ] = None,
     database_url: DatabaseUrl = "",
 ) -> None:
     client = _client(_db(database_url))
     outcome = (
-        client.write_checkpoint(out, covering=covering)
+        client.write_checkpoint(out, covering=covering, wait=wait)
         if out
-        else client.audit_checkpoint(covering=covering)
+        else client.audit_checkpoint(covering=covering, wait=wait)
     )
     kind = "created" if isinstance(outcome, CheckpointCreated) else "no new rows"
     checkpoint = outcome.checkpoint

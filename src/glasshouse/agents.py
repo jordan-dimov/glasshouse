@@ -107,13 +107,17 @@ class ProposalOutcome(BaseModel):
     """What the rules said to one proposal. `accepted` is the answer.
     Accepted: `transition_id` names its place in the audit history.
     Refused: `summary` says why in one line and `refusal` carries the
-    rule, the comparison that failed and the values it was reading."""
+    rule, the comparison that failed and the values it was reading.
+    `related_parameters` names the arguments of the call that the refusing
+    rule reads (absent for an invariant): where to look first, not a
+    verdict on which one is wrong."""
 
     accepted: bool
     actor: str
     transition_id: str | None = None
     summary: str | None = None
     refusal: Rejection | None = Field(default=None, discriminator="kind")
+    related_parameters: list[str] | None = None
 
 
 class WouldBe(BaseModel):
@@ -191,6 +195,7 @@ def _outcome(at: Desk, outcome: envelopes.Committed | envelopes.Rejected) -> Pro
             actor=at.actor,
             summary=why(explained) or outcome.reason,
             refusal=flatten_rejection(explained.rejection if explained else None),
+            related_parameters=outcome.related_parameters,
         )
     return ProposalOutcome(accepted=True, actor=at.actor, transition_id=outcome.transition_id)
 
@@ -402,8 +407,9 @@ def build_server(desk: Callable[[], Desk]) -> MCPServer:
         text, in the currency of the market. delivery_start,
         delivery_end: UTC instants on the hour with an offset; the end is
         exclusive. valid_until: a UTC instant with an offset; after it
-        the instruction is overdue. An overdue instruction still holds
-        its room until it is cancelled or its lapse is recorded.
+        the instruction is overdue and holds no room, though it stays on
+        the record as open until it is cancelled or its lapse is
+        recorded.
 
         Some books require approval by a second person: check the
         instruction's approval in list_instructions before acting on it.
@@ -475,8 +481,8 @@ def build_server(desk: Callable[[], Desk]) -> MCPServer:
     def list_instructions(book: str | None = None, open_only: bool = False) -> list[InstructionRow]:
         """Instructions in this organisation: what was intended, how much
         each still holds under its book's limit (holding_mw), and its
-        status: open, overdue (past valid_until but still holding room
-        until cancelled or lapsed with lapse_overdue_instructions),
+        status: open, overdue (past valid_until: it holds no room, and
+        its lapse is not yet recorded; see lapse_overdue_instructions),
         filled, cancelled, rejected or lapsed. approval says
         whether a second person has agreed: "not required" in a book
         that does not ask for it, otherwise "awaiting" or "approved"
