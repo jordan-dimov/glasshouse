@@ -50,7 +50,11 @@
         {% endfor %}
       </tbody>
     </table>
-    <p class="tile__note">Values for {{ summary.business_date }}, summed per currency. <a href="/ui/positions?org={{ org | urlencode }}">Each trade's value</a></p>
+    <p class="tile__note">Values for {{ summary.business_date }}, summed per currency by the ledger. <a href="/ui/positions?org={{ org | urlencode }}">Each trade's value</a></p>
+    <form method="post" action="/ui/overview/proof" class="tile__note">
+      <button type="submit">Download a proof of these totals</button>
+      <span>A receipt anyone can check offline with Morpholog, taken at a checkpoint recorded now. It carries the whole record up to that point: treat it as confidential.</span>
+    </form>
     {% else %}
     {{ empty_state("No trade valued for " ~ summary.business_date ~ " yet.") }}
     {% endif %}

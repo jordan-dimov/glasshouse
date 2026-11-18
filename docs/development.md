@@ -59,6 +59,7 @@ Run as `uv run python -m glasshouse.cli <command>`; every command has `--help`.
 | `mcp` | Serve the book to an AI agent over MCP, on standard input and output. `--actor` names who the agent acts as. See [mcp.md](mcp.md). |
 | `evidence-export` | Write the audit history to a file a third party can verify. |
 | `evidence-verify` | Verify such a file offline, with no database. |
+| `prove-totals` | Write a proof of the business-day totals: an audit receipt, the record it was taken over, the rule file and a README. |
 | `apply-views` | Apply the SQL inspection views on their own (`provision` already does). |
 
 ## The API
@@ -131,6 +132,20 @@ Each organisation has one business date: the day its valuations are for. It is a
 - Correcting a curve re-marks the trades only when it is the business date's curve. Correcting a day already rolled past changes that day's prices and leaves today's marks alone.
 - The Overview and `GET /overview` show the date (`business_date`, null before the first roll), and total only the values struck for it, per currency; every other trade is counted by reason (awaiting a value, no curve for the day, not yet in force). The ledger decides which marks those are (`ValuationOnBusinessDate`, `ValuationGap`), and the date and the rows are read as of one instant. After a roll, a trade valued only on an earlier day is not counted, and Positions marks its value "not current".
 - Correcting a past day's prices does not restate that day: its marks stay as they were struck.
+- The totals are the ledger's own read, `BusinessDayTotal` (one row per organisation, business date and currency), worked out from the same definition as `ValuationOnBusinessDate`, so the per-trade rows and the total cannot pick different inputs.
+
+### Proving the totals
+
+A proof is an audit receipt (Morpholog's `audit receipt`): under the rule file (named by its hash), over the record up to a checkpoint, `BusinessDayTotal` gives these rows. `glasshouse prove-totals <dir>` (or the Overview's "Download a proof of these totals", a zip) records a checkpoint, exports the record up to it, issues the receipt, verifies it before handing it over, and writes a README with the one command a third party runs, with no database:
+
+```
+morpholog audit verify-receipt glasshouse.morph --receipt receipt.json --pack evidence-pack.ndjson
+```
+
+It passes only if the record is intact and complete, the checkpoint and rule file are the receipt's, and recomputing the read gives the same answer. What it is not:
+
+- Not a proof of the present: it is taken at its checkpoint, and a write after it is not in it. `--tree-size N` proves at an earlier checkpoint; a moment never checkpointed cannot be proved.
+- Not narrow: the record is the whole ledger up to the checkpoint and the answer covers every organisation in it. Receipts need a complete record, because selected rows prove themselves genuine but not that none are missing (per-key completeness is morpholog#380). Treat a proof as confidential, as the Audit screen's evidence pack.
 
 ## Instructions
 

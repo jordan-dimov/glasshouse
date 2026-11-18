@@ -93,10 +93,10 @@ def test_the_applied_surface_seals_itself(applied: sa.Engine) -> None:
     # The script records each view's stored definition hash at apply
     # time (upstream #190, our #184); the binary's cross-check of
     # catalogue, seal and live views verifies intact over the whole
-    # inventory: fourteen predicate views plus the catalogue itself.
+    # inventory: 31 base and 5 derived predicate views plus the catalogue.
     client = GlasshouseClient(str(MODEL_FILE), DB, binary=str(BINARY))
     verdict = client.audit_verify(views_schema=VIEWS_SCHEMA).views
-    assert verdict == envelopes.ViewsIntact(views_checked=36)
+    assert verdict == envelopes.ViewsIntact(views_checked=37)
 
 
 def test_applying_does_not_leak_autocommit(applied: sa.Engine) -> None:

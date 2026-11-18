@@ -43,7 +43,7 @@ Every new function arrives one of three ways: as rules in [the one rule file](..
 | Position per book and delivery hour | Has | |
 | Valuation against the curve, naming what it used | Has | Every value records the exact curve version and trade version. |
 | The book as it stood at a past moment | Has | Trades, positions and valuations. Other screens: [#41](https://github.com/jordan-dimov/glasshouse/issues/41). |
-| Explain any number back to its sources | Planned | [#121](https://github.com/jordan-dimov/glasshouse/issues/121) |
+| Explain any number back to its sources | Partly | The business-day totals come with a proof anyone can check offline (an audit receipt over the record). Walking back from one trade's figure: [#121](https://github.com/jordan-dimov/glasshouse/issues/121). |
 | Fees and costs, so value is net | Planned | [#122](https://github.com/jordan-dimov/glasshouse/issues/122) |
 | Realised P&L | Planned | [#123](https://github.com/jordan-dimov/glasshouse/issues/123) |
 | Figures out to Excel | Planned | [#118](https://github.com/jordan-dimov/glasshouse/issues/118). The JSON API exists today. |
