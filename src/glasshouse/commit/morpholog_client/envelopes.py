@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import json
 import re
-from dataclasses import asdict, dataclass, field, is_dataclass
+from dataclasses import dataclass, field, fields, is_dataclass
 from datetime import date, datetime
 from decimal import Decimal
 from collections.abc import Set as AbstractSet
@@ -281,13 +281,18 @@ class NamedClaim:
 
 
 @dataclass(frozen=True)
-class ClaimRead:
+class ClaimRead(ClaimInstance):
     """One claim of the claims read, with `asserted_in`: the transition
     whose commit made it present. Read now, that is the database's own
     record, which no audit leaf covers; read `as_of` a transition, it is
-    taken from replaying the audit history."""
+    taken from replaying the audit history.
 
-    predicate: str
+    A ``ClaimInstance``, so a seam typed on the plain row takes it. A
+    ``list`` is invariant: a Protocol returning ``list[ClaimInstance]``
+    still refuses ``list[ClaimRead]``, where ``Sequence[ClaimInstance]``
+    takes it. Equality stays per class."""
+
+    # Redeclared without the base's default, so `asserted_in` can follow.
     args: list[object]
     asserted_in: str
 
@@ -302,12 +307,11 @@ class ClaimRead:
 
 
 @dataclass(frozen=True)
-class NamedClaimRead:
+class NamedClaimRead(NamedClaim):
     """One row of the named claims read, with `asserted_in` as on
-    ``ClaimRead``."""
+    ``ClaimRead``, and a ``NamedClaim`` as ``ClaimRead`` is a
+    ``ClaimInstance``."""
 
-    predicate: str
-    args: dict[str, object]
     asserted_in: str
 
     @classmethod
@@ -398,6 +402,11 @@ class Rejected:
     # The comparison the refusal blamed, with its two evaluated values.
     # None when it blamed none, or could not evaluate it.
     compared: Compared | None = None
+    # On a refusal by a named gate: the act's parameters the gate reads,
+    # in parameter order, possibly none. A static dependency, not a
+    # judgement of which input is wrong. None for an invariant or an
+    # unnamed gate.
+    related_parameters: list[str] | None = None
 
     @classmethod
     def from_json(cls, payload: object) -> Rejected:
@@ -405,7 +414,7 @@ class Rejected:
             "rejected outcome",
             payload,
             {"status", "reason"},
-            {"explanation", "rule", "witness", "compared"},
+            {"explanation", "rule", "witness", "compared", "related_parameters"},
         )
         data.constant("status", "rejected")
         return cls(
@@ -414,6 +423,11 @@ class Rejected:
             explanation=data.optional_nested("explanation", Explanation.from_json),
             witness=data.optional_array("witness", WitnessBinding.from_json, non_empty=True),
             compared=data.optional_nested("compared", Compared.from_json),
+            related_parameters=(
+                data.texts("related_parameters")
+                if "related_parameters" in data
+                else None
+            ),
         )
 
 
@@ -498,14 +512,16 @@ class AtomicCommitted:
 class AtomicRejected:
     """The first refused act, by 1-based position, and nothing written:
     the acts before it were staged and rolled back, and get no receipt.
-    ``rule``, ``witness`` and ``compared`` are as on ``Rejected``; they may
-    name values the rolled-back prefix staged."""
+    ``rule``, ``witness``, ``compared`` and ``related_parameters`` are as
+    on ``Rejected``, for the act that refused; the values may be ones the
+    rolled-back prefix staged."""
 
     act: int
     reason: str
     rule: str | None = None
     witness: list[WitnessBinding] = field(default_factory=list)
     compared: Compared | None = None
+    related_parameters: list[str] | None = None
 
     @classmethod
     def from_json(cls, payload: object) -> AtomicRejected:
@@ -513,7 +529,7 @@ class AtomicRejected:
             "atomic rejected",
             payload,
             {"status", "act", "reason"},
-            optional={"rule", "witness", "compared", "row"},
+            optional={"rule", "witness", "compared", "related_parameters", "row"},
         )
         data.constant("status", "rejected")
         data.optional_integer("row", minimum=1)
@@ -523,6 +539,11 @@ class AtomicRejected:
             rule=data.optional_text("rule"),
             witness=data.optional_array("witness", WitnessBinding.from_json, non_empty=True),
             compared=data.optional_nested("compared", Compared.from_json),
+            related_parameters=(
+                data.texts("related_parameters")
+                if "related_parameters" in data
+                else None
+            ),
         )
 
 
@@ -892,14 +913,23 @@ class TransitionRef:
     transformation: str
     args: list[object]
     actor: str
+    # The decision time the explanation used: the start of the read
+    # transaction its state came from. None where there was none.
+    decided_at: datetime | None = None
 
     @classmethod
     def from_json(cls, payload: object) -> TransitionRef:
-        data = _strict("transition ref", payload, {"transformation", "args", "actor"})
+        data = _strict(
+            "transition ref",
+            payload,
+            {"transformation", "args", "actor"},
+            {"decided_at"},
+        )
         return cls(
             transformation=data.text("transformation"),
             args=list(data.texts("args")),
             actor=data.text("actor"),
+            decided_at=data.optional_timestamp("decided_at"),
         )
 
 
@@ -1032,8 +1062,12 @@ class SessionReady:
     """The first and only unprompted line a ``morpholog session``
     emits. ``model_hash`` is the canonical rules-identity hash the
     programme was pinned at; ``protocol`` is the wire's own version,
-    distinct from the binary's."""
+    distinct from the binary's. ``identity`` is ``closed`` when every
+    actor needs a grant and ``open`` when an actor nobody restricted may
+    be asserted by any login: a host that promises enforced identity
+    refuses to start on ``open``."""
 
+    identity: str
     model_hash: str
     morpholog_version: str
     program: str
@@ -1044,15 +1078,20 @@ class SessionReady:
         data = _strict(
             "session ready",
             payload,
-            {"model_hash", "morpholog_version", "program", "protocol", "status"},
+            {"identity", "model_hash", "morpholog_version", "program", "protocol", "status"},
         )
         data.constant("status", "ready")
         return cls(
+            identity=data.member("identity", IDENTITIES),
             model_hash=_hash(data, "model_hash"),
             morpholog_version=data.text("morpholog_version"),
             program=data.text("program"),
             protocol=data.integer("protocol", minimum=1),
         )
+
+
+#: Whether a deployment needs a grant for every actor.
+IDENTITIES = frozenset({"open", "closed"})
 
 
 #: The codes a proposal can fail with - the schema's
@@ -1848,8 +1887,12 @@ class CoverageReport:
 
 @dataclass(frozen=True)
 class Diagnostic:
+    """One finding. One with a source anchor names the file it points
+    into, with offsets, line and column within that file."""
+
     severity: str
     message: str
+    file: str | None = None
     start: int | None = None
     end: int | None = None
     line: int | None = None
@@ -1861,11 +1904,12 @@ class Diagnostic:
             "diagnostic",
             payload,
             {"severity", "message"},
-            {"start", "end", "line", "column"},
+            {"file", "start", "end", "line", "column"},
         )
         return cls(
             severity=data.member("severity", {"error", "hint"}),
             message=data.text("message"),
+            file=data.optional_text("file"),
             start=data.optional_integer("start"),
             end=data.optional_integer("end"),
             line=data.optional_integer("line"),
@@ -1959,15 +2003,20 @@ class CheckedInvariant:
 
 @dataclass(frozen=True)
 class CheckReport:
-    """The findings for one file, and the route this binary plans for each
-    invariant. ``invariants`` is ``None`` only when parsing or validation
-    left no programme to plan; an empty list is a programme with no
-    invariants. The route belongs to the programme and the binary
-    together: another version may plan differently."""
+    """The findings for one programme, and the route this binary plans for
+    each invariant. ``invariants`` is ``None`` only when parsing or
+    validation left no programme to plan; an empty list is a programme with
+    no invariants. The route belongs to the programme and the binary
+    together: another version may plan differently. ``parts`` lists the
+    files of a programme in parts, in order, and is ``None`` for one
+    file. ``identity`` is ``closed`` or ``open`` for the ``--database-url``
+    deployment, and ``None`` without one."""
 
     file: str
     diagnostics: list[Diagnostic]
     invariants: list[CheckedInvariant] | None = None
+    parts: list[str] | None = None
+    identity: str | None = None
 
     @property
     def route(self) -> str | None:
@@ -1986,7 +2035,12 @@ class CheckReport:
 
     @classmethod
     def from_json(cls, payload: object) -> CheckReport:
-        data = _strict("check report", payload, {"file", "diagnostics"}, {"invariants"})
+        data = _strict(
+            "check report",
+            payload,
+            {"file", "diagnostics"},
+            {"identity", "invariants", "parts"},
+        )
         return cls(
             file=data.text("file"),
             diagnostics=data.array("diagnostics", Diagnostic.from_json),
@@ -1994,6 +2048,10 @@ class CheckReport:
                 data.array("invariants", CheckedInvariant.from_json)
                 if "invariants" in data
                 else None
+            ),
+            parts=data.texts("parts") if "parts" in data else None,
+            identity=(
+                data.member("identity", IDENTITIES) if "identity" in data else None
             ),
         )
 
@@ -3622,6 +3680,36 @@ class CheckpointRefusal:
         )
 
 
+#: Why ``check``, ``migrate`` or ``provision_indexes`` produced no report.
+PREFLIGHT_CODES = frozenset(
+    {
+        "connect_failed",
+        "not_initialised",
+        "schema_below_baseline",
+        "schema_ahead",
+        "schema_behind",
+        "schema_record_altered",
+    }
+)
+
+
+@dataclass(frozen=True)
+class PreflightError:
+    """What ``check`` with a database, ``migrate`` or ``provision_indexes``
+    met before its first query of the deployment, in place of its report.
+    Nothing durable happened. The client raises it as a
+    ``MorphologRequestError`` carrying the code."""
+
+    code: str
+    error: str
+
+    @classmethod
+    def from_json(cls, payload: object) -> PreflightError:
+        data = _strict("preflight error", payload, {"code", "error", "status"})
+        data.constant("status", "error")
+        return cls(code=data.member("code", PREFLIGHT_CODES), error=data.text("error"))
+
+
 @dataclass(frozen=True)
 class PrefixPackManifest:
     """Line 1 of a complete-prefix evidence pack. The next
@@ -4430,8 +4518,12 @@ def to_json(envelope: object) -> str:
 
 
 def _plain(value: object) -> object:
+    # Before the dataclass case: a duration prints as its wire text.
+    if isinstance(value, values.Duration):
+        return value.to_iso()
     if is_dataclass(value) and not isinstance(value, type):
-        return asdict(value)
+        # One level at a time, so json.dumps brings each field back here.
+        return {f.name: getattr(value, f.name) for f in fields(value)}
     if isinstance(value, Decimal):
         return values.encode_decimal(value)
     if isinstance(value, datetime):
@@ -4485,11 +4577,14 @@ class ViewColumn:
 
 @dataclass(frozen=True)
 class ViewDescription:
-    """One generated view. ``identity`` lists the field sets the programme
-    declares unique, as declared and possibly empty; whether one serves as
-    a key is the consumer's decision. A ``history`` view holds the
-    operations the audit log records on the predicate, and its identity
-    is the operation's place in the log."""
+    """One generated view. ``identity`` lists the column sets whose values
+    identify a row: the keys the programme guarantees, or every field when
+    it declares none, leaving out any set holding a timestamp or a
+    duration, whose columns keep microseconds; then the exact
+    ``_morpholog_arguments`` column where the view has one. A live derived
+    view may have none. A ``history`` view holds the operations the audit
+    log records on the predicate, and its identity is the operation's
+    place in the log."""
 
     predicate: str
     view: str
@@ -4517,9 +4612,9 @@ class ViewDescription:
         )
 
     def single_key(self) -> str | None:
-        """The one field a consumer may take as the row's identity: the
-        field of the only single-field ``identity`` clause, or ``None``
-        when the view has no clause, several single-field clauses, or only
+        """The one column a consumer may take as the row's identity: the
+        column of the only single-column ``identity`` set, or ``None``
+        when the view has none, several single-column sets, or only
         composite ones."""
         singles = [clause[0] for clause in self.identity if len(clause) == 1]
         return singles[0] if len(singles) == 1 else None
@@ -4546,12 +4641,12 @@ class ViewSurface:
             payload,
             {"format", "programme", "model_hash", "schema", "catalog", "seal_table", "views"},
         )
-        if data.raw("format") != 3:
+        if data.raw("format") != 4:
             raise EnvelopeError(
-                f"view_surface: format {data.raw('format')!r} is not the 3 this client reads"
+                f"view_surface: format {data.raw('format')!r} is not the 4 this client reads"
             )
         return cls(
-            format=3,
+            format=4,
             programme=data.text("programme"),
             model_hash=_hash(data, "model_hash"),
             schema=data.text("schema"),

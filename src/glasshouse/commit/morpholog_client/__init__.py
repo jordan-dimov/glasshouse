@@ -16,7 +16,7 @@ if sys.version_info < (3, 12):
 
 PROGRAM = "glasshouse"
 MODEL_HASH = "sha256:e039683926aa982565b28ab56c42703a9f044ad35cf4493189377892c52a169f"
-MORPHOLOG_VERSION = "0.0.19"
+MORPHOLOG_VERSION = "0.0.20"
 PYTHON_FLOOR = (3, 12)
 
 from . import envelopes, models, values  # noqa: E402
