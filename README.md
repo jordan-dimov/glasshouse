@@ -17,7 +17,7 @@ Glasshouse sits between them: a book of record you can read, run and check yours
 - **Nothing is overwritten.** A corrected curve or an amended trade is a new version beside the old one. The old figure, and every valuation made from it, stays on the record. Pick a past time and the trades and positions screens show the book as it stood then.
 - **Bad changes are refused, with a reason.** The rules live in [one readable file](src/glasshouse/commit/glasshouse.morph). A change that breaks one is not saved, and the refusal names the rule and the figures: this trader may not trade this book, this trade would take the book to 26 MW in this hour and its limit is 25.
 - **Every valuation shows its sources.** It records the exact curve version and trade terms it was computed from, so last week's number can be explained this week.
-- **You can check the records yourself.** One button, or one command, confirms the database still agrees with its own history. Another exports that history for an outsider to verify offline.
+- **You can check the records yourself.** One button, or one command, confirms the database still agrees with its own history. Another exports that history for an outsider to verify offline, and the Overview's totals come with a proof anyone can check the same way.
 - **Software is held to the same rules as people.** An AI agent can connect, read the book and propose trades under its own name. It is refused exactly where a trader would be, and gets the reason back as data. [docs/mcp.md](docs/mcp.md) shows how.
 
 ## How the rules are enforced

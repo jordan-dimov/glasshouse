@@ -1572,6 +1572,37 @@ class ValuationOnBusinessDateClaim:
 
 
 @dataclass(frozen=True)
+class BusinessDayTotalClaim:
+    """One admitted `BusinessDayTotal` claim, decoded by declared kind."""
+
+    PREDICATE: ClassVar[str] = "BusinessDayTotal"
+
+    org: str
+    business_date: date
+    currency: str
+    total: Decimal
+    valued: Decimal
+
+    @classmethod
+    def from_named(cls, args: dict[str, object]) -> BusinessDayTotalClaim:
+        values.named_fields(
+            "BusinessDayTotal",
+            args,
+            ("org", "business_date", "currency", "total", "valued"),
+        )
+        return cls(
+            org=values.named_text("BusinessDayTotal.org", args["org"]),
+            business_date=values.named_date(
+                "BusinessDayTotal.business_date",
+                args["business_date"],
+            ),
+            currency=values.named_text("BusinessDayTotal.currency", args["currency"]),
+            total=values.named_decimal("BusinessDayTotal.total", args["total"]),
+            valued=values.named_decimal("BusinessDayTotal.valued", args["valued"]),
+        )
+
+
+@dataclass(frozen=True)
 class ValuationGapClaim:
     """One admitted `ValuationGap` claim, decoded by declared kind."""
 

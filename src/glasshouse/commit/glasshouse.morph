@@ -463,6 +463,23 @@ derived InstructionStanding(org, instruction, book, market):
     value approval = if(InstructionApproved(org: org, instruction: instruction, ..), #approved, if(ApprovalRequired(org: org, book: book), #awaiting, #not_required))
     value approved_by = value InstructionApproved(org: org, instruction: instruction, approver: _) default #nobody
 
+-- What a trade is valued against on the organisation's business date:
+-- the official curve for that day in its market, and its terms in force
+-- on that day. One definition, so the per-trade read below and the
+-- totals after it can never pick different inputs.
+define valued_against_on_business_date(org, trade, market, business_date, curve_version, terms_version):
+    TradeCaptured(org: org, trade: trade, market: market, ..)
+    and BusinessDate(org: org, date: business_date)
+    and OfficialCurve(org: org, market: market, as_of: business_date, version: curve_version)
+    and trade_terms_in_force_on(trade: trade, as_of: business_date, org: org, version: terms_version, ..)
+
+-- A mark struck for the business date: against exactly those inputs, in
+-- the market's currency.
+define marked_on_business_date(org, trade, business_date, currency, mtm):
+    valued_against_on_business_date(org, trade, market, business_date, curve_version, terms_version)
+    and TradeValued(org: org, trade: trade, curve_version: curve_version, terms_version: terms_version, mtm: mtm, ..)
+    and MarketCurrency(org: org, market: market, currency: currency)
+
 -- Each trade's valuation for the organisation's business date: the
 -- official curve for that day in the trade's market, the terms in force
 -- on it, and whether a mark has been struck against those two yet (and
@@ -472,13 +489,21 @@ derived InstructionStanding(org, instruction, book, market):
 -- official curve for the day has no row.
 predicate ValuationOnBusinessDate(org: Subject, trade: Subject, market: Subject, business_date: Date, curve_version: Subject, terms_version: Subject, valued: Bool, mtm: Decimal, currency: Subject)
 derived ValuationOnBusinessDate(org, trade, market, business_date, curve_version, terms_version):
-    over TradeCaptured(org: org, trade: trade, market: market, ..)
-    and BusinessDate(org: org, date: business_date)
-    and OfficialCurve(org: org, market: market, as_of: business_date, version: curve_version)
-    and trade_terms_in_force_on(trade: trade, as_of: business_date, org: org, version: terms_version, ..)
+    over valued_against_on_business_date(org, trade, market, business_date, curve_version, terms_version)
     value valued = if(TradeValued(org: org, trade: trade, curve_version: curve_version, terms_version: terms_version, ..), true, false)
     value mtm = value TradeValued(org: org, trade: trade, curve_version: curve_version, terms_version: terms_version, mtm: _, ..) default 0
     value currency = value MarketCurrency(org: org, market: market, currency: _)
+
+-- What the organisation's trades are worth on its business date, one
+-- total per currency: the marks struck for that day, never a sum across
+-- currencies and never an earlier day's mark. This is the figure the
+-- Overview shows, and the one an audit receipt states, so the ledger,
+-- not the screen, is what adds it up. `valued` counts the marks in it.
+predicate BusinessDayTotal(org: Subject, business_date: Date, currency: Subject, total: Decimal, valued: Decimal)
+derived BusinessDayTotal(org, business_date, currency):
+    over marked_on_business_date(org, _, business_date, currency, _)
+    value total = sum(m | marked_on_business_date(org, t, business_date, currency, m))
+    value valued = sum(1 | marked_on_business_date(org, t, business_date, currency, m))
 
 -- Each trade that cannot be valued for the business date, and why: no
 -- official curve for that day in its market (`#missing_curve`), or no

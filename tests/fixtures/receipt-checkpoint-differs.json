@@ -1,0 +1,44 @@
+{
+  "passes": false,
+  "receipt": {
+    "status": "well_formed"
+  },
+  "verdict_kind": "prefix",
+  "evidence": {
+    "passes": true,
+    "verdict": {
+      "status": "intact",
+      "checkpoints": 2,
+      "tree_size": 79
+    },
+    "role_rebindings": {
+      "status": "evaluated",
+      "scope": "complete_prefix",
+      "rows_with_oid": 79,
+      "rows_without_oid": 0,
+      "changes": []
+    }
+  },
+  "completeness": {
+    "status": "complete"
+  },
+  "checkpoint": {
+    "status": "differs",
+    "receipt": {
+      "tree_size": 78,
+      "root_hash": "sha256:3f57787aa47981e68ec92e16b85dd88eeec596c39b4f516e4b7f7c992f9e2f6a",
+      "checkpoint_hash": "sha256:6f971aa046d8ec458b164dcc8034ac5122ca336c48e1f9ae048dd1720c8a48c5"
+    },
+    "pack": {
+      "tree_size": 79,
+      "root_hash": "sha256:ce8bc46b4faf59ef3d02051b433bf409c28d087b7a5349034ba2c8e6364c24b5",
+      "checkpoint_hash": "sha256:15a1e8d502e0103174b53ff82bf9876cb332882df7f8db9e1c748c2476105eb7"
+    }
+  },
+  "program": {
+    "status": "matches"
+  },
+  "evaluation": {
+    "status": "not_evaluated"
+  }
+}

@@ -70,6 +70,7 @@ from glasshouse.imports import (
 from glasshouse.logging import configure_logging, get_logger
 from glasshouse.projections import catch_up, follow
 from glasshouse.provision import ProvisionError, run_provision
+from glasshouse.receipts import ProofError, prove_totals
 from glasshouse.seed import SeedError, run_seed
 from glasshouse.sweep import lapsed, sweep_once
 from glasshouse.verify import verify
@@ -531,6 +532,35 @@ def evidence_export_command(
         f"evidence pack written to {out}: {manifest.tree_size} row(s) under "
         f"{manifest.checkpoint_count} checkpoint(s)"
     )
+
+
+@app.command(
+    "prove-totals",
+    help="Write a proof of what the trades are worth on the business date: an audit receipt "
+    "of the ledger's totals, the evidence pack it was taken over, the rule file and a README "
+    "saying how anyone checks it offline (`morpholog audit verify-receipt`). Recorded at a "
+    "checkpoint taken now, or at an existing one.",
+)
+def prove_totals_command(
+    out: Annotated[Path, typer.Argument(help="the directory to write the proof into")],
+    tree_size: Annotated[
+        int | None,
+        typer.Option(help="prove at the existing checkpoint of this size instead of now"),
+    ] = None,
+    database_url: DatabaseUrl = "",
+) -> None:
+    client = _client(_db(database_url))
+    try:
+        proof = prove_totals(client, out, tree_size=tree_size)
+    except ProofError as failed:
+        print(f"error: {failed}", file=sys.stderr)
+        raise typer.Exit(code=1) from failed
+    print(f"proof written to {out}: checkpoint over {proof.tree_size} transition(s)")
+    for row in proof.totals:
+        print(
+            f"  {row.org} {row.business_date.isoformat()} {row.currency} {row.total} "
+            f"({row.valued} mark(s))"
+        )
 
 
 @app.command(

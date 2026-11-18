@@ -1,0 +1,66 @@
+{
+  "receipt_format_version": 1,
+  "program_hash": "sha256:ba7374d421b11e15d97668b51018db0c7ec89ff9c5aa8107dd475ea05c4eb759",
+  "semantics_version": 6,
+  "checkpoint": {
+    "tree_size": 78,
+    "root_hash": "sha256:3f57787aa47981e68ec92e16b85dd88eeec596c39b4f516e4b7f7c992f9e2f6a",
+    "checkpoint_hash": "sha256:6f971aa046d8ec458b164dcc8034ac5122ca336c48e1f9ae048dd1720c8a48c5"
+  },
+  "query": {
+    "kind": "derived",
+    "predicate": "BusinessDayTotal"
+  },
+  "answer": [
+    {
+      "predicate": "BusinessDayTotal",
+      "args": [
+        {
+          "type": "subject",
+          "value": "acme-energy"
+        },
+        {
+          "type": "date",
+          "value": "2026-07-01"
+        },
+        {
+          "type": "subject",
+          "value": "EUR"
+        },
+        {
+          "type": "decimal",
+          "value": "390.5"
+        },
+        {
+          "type": "decimal",
+          "value": "8"
+        }
+      ]
+    },
+    {
+      "predicate": "BusinessDayTotal",
+      "args": [
+        {
+          "type": "subject",
+          "value": "acme-energy"
+        },
+        {
+          "type": "date",
+          "value": "2026-07-01"
+        },
+        {
+          "type": "subject",
+          "value": "GBP"
+        },
+        {
+          "type": "decimal",
+          "value": "140"
+        },
+        {
+          "type": "decimal",
+          "value": "2"
+        }
+      ]
+    }
+  ]
+}

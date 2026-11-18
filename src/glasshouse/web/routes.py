@@ -70,6 +70,7 @@ from glasshouse.imports import (
 )
 from glasshouse.logging import get_logger
 from glasshouse.projections import catch_up
+from glasshouse.receipts import bundle, prove_totals
 from glasshouse.verify import verify as run_verify
 from glasshouse.web.templating import templates
 
@@ -929,6 +930,30 @@ def evidence_pack_download(
         _stream_then_discard(scratch, path),
         media_type="application/x-ndjson",
         headers={"Content-Disposition": 'attachment; filename="glasshouse-evidence-pack.ndjson"'},
+    )
+
+
+@router.post("/ui/overview/proof")
+def totals_proof_download(
+    client: ClientDep,
+) -> Response:
+    # A POST: asking for a proof records a checkpoint (or reuses the
+    # unchanged head), which is a write to the audit log's anchors. The
+    # proof is verified before it is offered (`prove_totals` raises
+    # otherwise), and goes out as one zip: README, receipt, rule file and
+    # the pack, streamed from disk like the evidence pack.
+    scratch = tempfile.TemporaryDirectory()
+    try:
+        proof = prove_totals(client, Path(scratch.name) / "proof")
+        archive = bundle(proof, Path(scratch.name) / "proof.zip")
+    except BaseException:
+        scratch.cleanup()
+        raise
+    name = f"glasshouse-totals-proof-{proof.tree_size}.zip"
+    return StreamingResponse(
+        _stream_then_discard(scratch, archive),
+        media_type="application/zip",
+        headers={"Content-Disposition": f'attachment; filename="{name}"'},
     )
 
 
