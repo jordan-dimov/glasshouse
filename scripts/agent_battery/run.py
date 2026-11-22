@@ -43,6 +43,8 @@ from mcp import Client, StdioServerParameters
 
 from glasshouse.commit import MODEL_FILE, Committed, GlasshouseClient
 from glasshouse.commit.morpholog_client import models
+from glasshouse.compute.store import engine_url
+from glasshouse.projections import catch_up
 
 HERE = Path(__file__).resolve().parent
 REPO = HERE.parent.parent
@@ -73,7 +75,7 @@ def db_url(base: str, name: str) -> str:
 
 def fresh_database(base: str, name: str) -> str:
     admin = sa.create_engine(
-        db_url(base, "postgres").replace("postgresql://", "postgresql+psycopg://"),
+        engine_url(db_url(base, "postgres")),
         isolation_level="AUTOCOMMIT",
     )
     with admin.connect() as connection:
@@ -178,7 +180,9 @@ def run_setup(client: GlasshouseClient, steps: list[str]) -> dict[str, Any]:
                     ),
                     currency="EUR",
                 ),
-                "demo",
+                # tasks.json says demo; only the organisation's admin may
+                # declare a market, so the admin does. The market is the same.
+                "bootstrap",
             )
         elif step == "open_instruction":
             ok(
@@ -221,7 +225,7 @@ def audit_rows(client: GlasshouseClient) -> list[Any]:
 
 
 def claims_of(row: Any, kind: str) -> list[tuple[str, dict[str, Any]]]:
-    return [(c.predicate, dict(c.fields)) for c in getattr(row, kind)]
+    return [(c.predicate, dict(c.args)) for c in getattr(row, f"{kind}_claims")]
 
 
 def judge(rows: list[Any], allowed: list[str]) -> dict[str, Any]:
@@ -452,6 +456,11 @@ def one_task(
     seed(url)
     client = GlasshouseClient(str(MODEL_FILE), url)
     door = run_setup(client, task["setup"])
+    # Setups are written as people through the commit layer; the read
+    # model the door serves must see them before the agent looks.
+    projected = sa.create_engine(engine_url(url))
+    catch_up(client, projected)
+    projected.dispose()
     before = len(audit_rows(client))
     since = dt.datetime.now(dt.UTC)
     with tempfile.TemporaryDirectory() as tmp:
