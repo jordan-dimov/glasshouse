@@ -15,9 +15,18 @@ propose as someone else or read another organisation's book. Over stdio
 the operator names the actor at launch; over HTTP the bearer token maps to
 the configured one (`api/auth.py`). That is identity only, at the same
 grade as the demo login. What the agent may do is decided where it is
-decided for everyone, by the capability claims in the ledger (law 5): an
-agent with no capture authority in a book is refused there, and a position
-limit binds it as it binds a trader.
+decided for everyone, by the claims in the ledger (law 5). An actor the
+organisation has declared an agent books nothing through the acts people
+use: it trades only under a mandate a person proposed and a different
+person approved (`trade_under_mandate`), inside every bound of it, and a
+position limit binds it as it binds a trader.
+
+The model behind the agent. A mandate admits trades only while the model
+the agent runs on is the one a person approved. The agent never says
+which model it is: the door does, from what its operator configured
+(`glasshouse mcp --model`, or `GLASSHOUSE_MCP_MODELS` over HTTP). A door
+with no model configured says none, and every mandated trade through it
+is refused by `model_is_approved`.
 
 What is recorded. An accepted proposal is a transition in the audit
 history under the agent's actor, like any other. A refusal is not in that
@@ -39,7 +48,7 @@ from mcp.server import MCPServer
 from mcp.server.mcpserver.exceptions import ToolError
 from pydantic import BaseModel, Field
 
-from glasshouse.api import asof, business_day, instructions, queries, refusals
+from glasshouse.api import asof, business_day, instructions, mandates, queries, refusals
 from glasshouse.api import audit as audit_queries
 from glasshouse.api.routers.explain import flatten_rejection
 from glasshouse.api.schemas import (
@@ -53,7 +62,8 @@ from glasshouse.api.schemas import (
     Rejection,
 )
 from glasshouse.commit import GlasshouseClient, models
-from glasshouse.commit.morpholog_client import envelopes
+from glasshouse.commit.morpholog_client import envelopes, values
+from glasshouse.compute.terms import terms_version_id
 from glasshouse.imports.report import why
 from glasshouse.imports.trades import capture_request
 from glasshouse.projections import catch_up
@@ -68,6 +78,11 @@ INSTRUCTIONS = (
     "book's position limit until it ends; cancel_instruction frees that room. Where a book "
     "requires approval, a different actor approves with approve_instruction; you cannot "
     "approve your own. "
+    "If you are an agent, the ledger knows it: you cannot use propose_trade or the "
+    "instruction tools. You trade only with trade_under_mandate, inside a mandate a person "
+    "gave you and a different person approved (list_mandates shows yours, its bounds and "
+    "how much is used). You cannot give, widen, renew or approve a mandate, or approve the "
+    "record of the model you run on; you can suspend your own mandate. "
     "A refusal is a normal answer, not an error: it names the rule and the figures that "
     "broke it. Quantities are MW. A price is per MWh in the currency of its market, and "
     "every price and valuation you are given names its currency: read it, never assume "
@@ -87,6 +102,15 @@ class Desk:
     engine: sa.Engine
     actor: str
     org: str
+    # The model the agent behind this door runs on, as its operator
+    # configured it: what a mandated trade names. None when nothing was
+    # configured, and then no mandated trade is admitted.
+    model: str | None = None
+
+
+# What a door with no configured model says. No record can name it by
+# accident, since a record is written by a person for a real model.
+UNSTATED_MODEL = "unstated"
 
 
 class PositionLimit(BaseModel):
@@ -118,6 +142,34 @@ class ProposalOutcome(BaseModel):
     summary: str | None = None
     refusal: Rejection | None = Field(default=None, discriminator="kind")
     related_parameters: list[str] | None = None
+
+
+class Mandate(BaseModel):
+    """A mandate and where it stands. `used` is the MW already traded
+    under it, summed as the rule sums it; `max_volume - used` is what is
+    left. `model_approved` says whether the agent's model record is
+    approved; `model` is what that record names."""
+
+    mandate: str
+    agent: str
+    book: str
+    market: str
+    side: str
+    max_order_mw: ExactDecimal
+    max_volume_mw: ExactDecimal
+    used_mw: ExactDecimal
+    trades: int
+    price_floor: ExactDecimal
+    price_ceiling: ExactDecimal
+    deliver_from: dt.datetime
+    deliver_until: dt.datetime
+    valid_until: dt.datetime
+    proposer: str
+    approver: str | None
+    suspended_by: str | None
+    standing: str
+    model: str | None
+    model_approved: bool
 
 
 class WouldBe(BaseModel):
@@ -183,6 +235,55 @@ def _capture(
         # down honestly (a quantity that is not a decimal, a time with no
         # offset), so nothing was put to them.
         raise ToolError(f"the trade could not be read: {malformed}") from malformed
+
+
+def _mandated(
+    at: Desk,
+    mandate: str,
+    trade: str,
+    counterparty: str,
+    direction: str,
+    quantity: str,
+    price: str,
+    delivery_start: str,
+    delivery_end: str,
+) -> models.TradeUnderMandateRequest:
+    """A mandated trade's arguments as its typed request. The trade date
+    is today and the model is the door's: neither is the agent's to say.
+    `explain_trade_under_mandate` and `trade_under_mandate` both come
+    through here."""
+    try:
+        return models.TradeUnderMandateRequest(
+            org=at.org,
+            mandate=mandate,
+            trade=trade,
+            counterparty=counterparty,
+            version=terms_version_id(trade, 1),
+            direction=direction,
+            quantity=values.parse_decimal(quantity),
+            price=values.parse_decimal(price),
+            delivery_start=offset_instant("delivery_start", delivery_start),
+            delivery_end=offset_instant("delivery_end", delivery_end),
+            trade_date=dt.datetime.now(dt.UTC).date(),
+            model=at.model or UNSTATED_MODEL,
+        )
+    except ValueError as malformed:
+        raise ToolError(f"the trade could not be read: {malformed}") from malformed
+
+
+def offset_instant(name: str, raw: str) -> dt.datetime:
+    """An instant that carries its offset from UTC, as every governed
+    instant must (law 9). A time with no offset is the caller's mistake,
+    said in words, never read as UTC."""
+    try:
+        at = dt.datetime.fromisoformat(raw)
+    except ValueError:
+        raise ValueError(f"{name} is not an ISO 8601 instant: {raw!r}") from None
+    if at.tzinfo is None:
+        raise ValueError(
+            f"{name} must carry an offset from UTC, like 2026-12-01T00:00:00+00:00, got {raw!r}"
+        )
+    return at
 
 
 def _outcome(at: Desk, outcome: envelopes.Committed | envelopes.Rejected) -> ProposalOutcome:
@@ -383,6 +484,197 @@ def build_server(desk: Callable[[], Desk]) -> MCPServer:
             # projector.
             catch_up(at.client, at.engine)
         return _outcome(at, outcome)
+
+    @server.tool()
+    def list_mandates(mine_only: bool = False) -> list[Mandate]:
+        """Agents' mandates: each one's book, market, side, largest
+        order, total volume and how much of it is used, price band,
+        delivery window, end, who proposed and approved it, and whether
+        it is open, suspended, expired or awaiting approval. Also whether
+        the agent's model record is approved. mine_only: only the
+        mandates given to you."""
+        at = desk()
+        return [
+            Mandate(
+                mandate=row.mandate,
+                agent=row.agent,
+                book=row.book,
+                market=row.market,
+                side=row.side,
+                max_order_mw=row.max_order,
+                max_volume_mw=row.max_volume,
+                used_mw=row.used,
+                trades=row.trades,
+                price_floor=row.price_floor,
+                price_ceiling=row.price_ceiling,
+                deliver_from=row.deliver_from,
+                deliver_until=row.deliver_until,
+                valid_until=row.valid_until,
+                proposer=row.proposer,
+                approver=row.approver,
+                suspended_by=row.suspended_by,
+                standing=row.standing,
+                model=row.model,
+                model_approved=row.model_approved,
+            )
+            for row in mandates.list_mandates(
+                at.client, org=at.org, agent=at.actor if mine_only else None
+            )
+        ]
+
+    @server.tool()
+    def trade_under_mandate(
+        mandate: str,
+        trade: str,
+        counterparty: str,
+        direction: Literal["buy", "sell"],
+        quantity: str,
+        price: str,
+        delivery_start: str,
+        delivery_end: str,
+    ) -> ProposalOutcome:
+        """Book one trade under a mandate you hold, with no person in
+        the loop. The book and market are the mandate's. It is refused
+        if the mandate is not approved, is suspended or has ended, if the
+        model you run on is not the approved one, or if the trade falls
+        outside any bound: side, largest order, total volume (counting
+        every trade already booked under it), price band, delivery
+        window. The book's position limit applies as for any trade.
+        The trade date is today (UTC) and the model is the one your
+        door reports: you state neither.
+
+        trade: your identifier, unique in the organisation. quantity: MW
+        as decimal text. price: per MWh as decimal text in the market's
+        currency. delivery_start, delivery_end: UTC instants on the hour
+        with an offset; the end is exclusive."""
+        at = desk()
+        request = _mandated(
+            at,
+            mandate,
+            trade,
+            counterparty,
+            direction,
+            quantity,
+            price,
+            delivery_start,
+            delivery_end,
+        )
+        outcome = at.client.submit(request, actor=at.actor, explain_on_reject=True)
+        if isinstance(outcome, envelopes.Committed):
+            catch_up(at.client, at.engine)
+        return _outcome(at, outcome)
+
+    @server.tool()
+    def explain_trade_under_mandate(
+        mandate: str,
+        trade: str,
+        counterparty: str,
+        direction: Literal["buy", "sell"],
+        quantity: str,
+        price: str,
+        delivery_start: str,
+        delivery_end: str,
+    ) -> WouldBe:
+        """Ask whether trade_under_mandate would accept this trade, now,
+        and if not which rule would refuse it. Nothing is recorded. The
+        answer holds for this moment only. Arguments as for
+        trade_under_mandate."""
+        at = desk()
+        request = _mandated(
+            at,
+            mandate,
+            trade,
+            counterparty,
+            direction,
+            quantity,
+            price,
+            delivery_start,
+            delivery_end,
+        )
+        result = at.client.explain(request.TRANSFORMATION, at.actor, request.to_args_named())
+        return WouldBe(
+            admissible=result.admissible,
+            actor=at.actor,
+            summary=None if result.admissible else why(result),
+            refusal=flatten_rejection(result.rejection),
+        )
+
+    @server.tool()
+    def propose_mandate(
+        mandate: str,
+        agent: str,
+        book: str,
+        market: str,
+        side: Literal["buy", "sell", "both"],
+        max_order: str,
+        max_volume: str,
+        price_floor: str,
+        price_ceiling: str,
+        deliver_from: str,
+        deliver_until: str,
+        valid_until: str,
+    ) -> ProposalOutcome:
+        """Propose a mandate for an agent: a person's act. It admits no
+        trade until a different person approves it. Refused if you are
+        an agent, or may not give mandates. max_order, max_volume: MW as
+        decimal text. price_floor, price_ceiling: per MWh. deliver_from,
+        deliver_until, valid_until: UTC instants with an offset."""
+        at = desk()
+        try:
+            request = models.ProposeMandateRequest(
+                org=at.org,
+                mandate=mandate,
+                agent=agent,
+                book=book,
+                market=market,
+                side=side,
+                max_order=values.parse_decimal(max_order),
+                max_volume=values.parse_decimal(max_volume),
+                price_floor=values.parse_decimal(price_floor),
+                price_ceiling=values.parse_decimal(price_ceiling),
+                deliver_from=offset_instant("deliver_from", deliver_from),
+                deliver_until=offset_instant("deliver_until", deliver_until),
+                valid_until=offset_instant("valid_until", valid_until),
+            )
+        except ValueError as malformed:
+            raise ToolError(f"the mandate could not be read: {malformed}") from malformed
+        return _outcome(at, at.client.submit(request, actor=at.actor, explain_on_reject=True))
+
+    @server.tool()
+    def approve_mandate(mandate: str) -> ProposalOutcome:
+        """Approve a proposed mandate as a second person. Refused if you
+        proposed it, if you are an agent, or if it is already approved
+        or suspended."""
+        at = desk()
+        request = models.ApproveMandateRequest(org=at.org, mandate=mandate)
+        return _outcome(at, at.client.submit(request, actor=at.actor, explain_on_reject=True))
+
+    @server.tool()
+    def suspend_mandate(mandate: str) -> ProposalOutcome:
+        """Suspend a mandate at once and for good: the next trade under
+        it is refused. Anyone who may give mandates may do it, and so may
+        the agent that holds it."""
+        at = desk()
+        request = models.SuspendMandateRequest(org=at.org, mandate=mandate)
+        return _outcome(at, at.client.submit(request, actor=at.actor, explain_on_reject=True))
+
+    @server.tool()
+    def record_agent_model(agent: str, model: str) -> ProposalOutcome:
+        """Record the model an agent runs on (name with version, such as
+        claude-opus-5-5). It replaces the agent's last record and drops
+        that approval, so the agent's mandates admit nothing until a
+        different person approves the new one. Refused for an agent."""
+        at = desk()
+        request = models.RecordAgentModelRequest(org=at.org, agent=agent, model=model)
+        return _outcome(at, at.client.submit(request, actor=at.actor, explain_on_reject=True))
+
+    @server.tool()
+    def approve_agent_model(agent: str, model: str) -> ProposalOutcome:
+        """Approve an agent's model record. Refused if you recorded it,
+        or if you are an agent."""
+        at = desk()
+        request = models.ApproveAgentModelRequest(org=at.org, agent=agent, model=model)
+        return _outcome(at, at.client.submit(request, actor=at.actor, explain_on_reject=True))
 
     @server.tool()
     def place_instruction(

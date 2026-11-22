@@ -43,6 +43,14 @@ TOOLS = {
     "lapse_overdue_instructions",
     "audit_history",
     "recent_refusals",
+    "list_mandates",
+    "trade_under_mandate",
+    "explain_trade_under_mandate",
+    "propose_mandate",
+    "approve_mandate",
+    "suspend_mandate",
+    "record_agent_model",
+    "approve_agent_model",
 }
 TRADE = {
     "book": "spec-de",
@@ -81,7 +89,7 @@ def said(result: CallToolResult) -> str:
     return block.text
 
 
-def test_the_tools_are_the_thirteen_and_none_takes_an_actor_or_an_organisation() -> None:
+def test_the_tools_are_the_listed_ones_and_none_takes_an_actor_or_an_organisation() -> None:
     async def listed() -> dict[str, dict[str, Any]]:
         async with Client(build_server(desk)) as client:
             return {tool.name: tool.input_schema for tool in (await client.list_tools()).tools}
@@ -94,6 +102,12 @@ def test_the_tools_are_the_thirteen_and_none_takes_an_actor_or_an_organisation()
         assert not {"actor_as", "org", "organisation"} & set(schema["properties"]), name
     assert "actor" not in schemas["propose_trade"]["properties"]
     assert "actor" not in schemas["explain_trade"]["properties"]
+    # A mandated trade names neither its model nor its trade date: the
+    # door supplies both, so the agent cannot claim another model.
+    for tool in ("trade_under_mandate", "explain_trade_under_mandate"):
+        assert not {"actor", "model", "trade_date", "book", "market"} & set(
+            schemas[tool]["properties"]
+        ), tool
     assert set(schemas["propose_trade"]["required"]) == set(TRADE)
     # Quantities and prices cross as text, never as a float (law 8).
     assert schemas["propose_trade"]["properties"]["quantity"]["type"] == "string"

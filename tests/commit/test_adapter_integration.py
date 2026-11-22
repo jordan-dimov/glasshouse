@@ -638,11 +638,63 @@ def test_the_needle_lifecycle(morpholog: GlasshouseClient) -> None:
         "I-fill": "filled",
     }
 
+    # An agent and its mandate: declared, given a mandate by one person
+    # and approved by another, its model recorded and approved likewise,
+    # one trade under it, then suspended. The rules themselves are proved
+    # in test_mandates_integration.
+    winter = dt.datetime(2026, 12, 1, tzinfo=dt.UTC)
+    for request, actor in (
+        (models.DeclareAgentRequest(org=ORG, agent="bot"), "bootstrap"),
+        (models.GrantMandateAuthorityRequest(principal="risk", org=ORG), "bootstrap"),
+        (models.GrantMandateAuthorityRequest(principal="ops", org=ORG), "bootstrap"),
+        (
+            models.ProposeMandateRequest(
+                org=ORG,
+                mandate="M-1",
+                agent="bot",
+                book=BOOK,
+                market=MARKET,
+                side="both",
+                max_order=Decimal("1"),
+                max_volume=Decimal("2"),
+                price_floor=Decimal("1"),
+                price_ceiling=Decimal("500"),
+                deliver_from=winter,
+                deliver_until=winter + dt.timedelta(days=1),
+                valid_until=dt.datetime.now(dt.UTC) + dt.timedelta(days=1),
+            ),
+            "risk",
+        ),
+        (models.ApproveMandateRequest(org=ORG, mandate="M-1"), "ops"),
+        (models.RecordAgentModelRequest(org=ORG, agent="bot", model="m-1"), "risk"),
+        (models.ApproveAgentModelRequest(org=ORG, agent="bot", model="m-1"), "ops"),
+        (
+            models.TradeUnderMandateRequest(
+                org=ORG,
+                mandate="M-1",
+                trade="T-BOT",
+                counterparty="epex",
+                version="T-BOT/v1",
+                direction="buy",
+                quantity=Decimal("1"),
+                price=Decimal("90"),
+                delivery_start=winter,
+                delivery_end=winter + dt.timedelta(hours=1),
+                trade_date=TRADE_DATE,
+                model="m-1",
+            ),
+            "bot",
+        ),
+        (models.SuspendMandateRequest(org=ORG, mandate="M-1"), "ops"),
+    ):
+        outcome = morpholog.submit(request, actor=actor)
+        assert isinstance(outcome, Committed), (request.TRANSFORMATION, outcome)
+
     # The coverage surface (upstream #137): by the end of the needle
     # lifecycle every transformation in the programme has done work, and
     # no invariant's condition has gone unexercised by committed history.
     report = morpholog.coverage()
     in_programme = [t for t in report.transformations if not t.not_in_programme]
-    assert len(in_programme) == 28
+    assert len(in_programme) == 36
     assert all(t.transitions > 0 for t in in_programme)
     assert not [i.invariant for i in report.invariants if i.verdict == "never_fired"]

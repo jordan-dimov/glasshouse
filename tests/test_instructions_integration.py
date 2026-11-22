@@ -29,6 +29,10 @@ from glasshouse.compute.store import engine_url
 from glasshouse.seed import AGENT, ORG
 from tests.support import BINARY, DB, needs_live_stack, seeded_ledger
 
+# Who places the instructions below: a trader. An agent may not
+# (`actor_is_not_an_agent`); it trades only under a mandate.
+TRADER = "alice"
+
 pytestmark = needs_live_stack
 
 DAY = dt.datetime(2026, 7, 1, tzinfo=dt.UTC)
@@ -78,7 +82,7 @@ def desk() -> Any:
     client, engine = seeded_ledger()
     engine.dispose()
     reads = sa.create_engine(engine_url(DB))
-    yield Desk(client=client, engine=reads, actor=AGENT, org=ORG)
+    yield Desk(client=client, engine=reads, actor=TRADER, org=ORG)
     reads.dispose()
 
 
@@ -101,7 +105,7 @@ def test_the_walk_through_place_refuse_cancel_fit(desk: Desk) -> None:
     # instructed quantity against the room the trades leave.
     placed = call(desk, "place_instruction", instruction("WALK-1", 12, "4"))
     assert placed["accepted"], placed
-    assert placed["actor"] == AGENT
+    assert placed["actor"] == TRADER
 
     refused = call(desk, "propose_trade", trade("WALK-T", 12, "2"))
     assert refused["accepted"] is False
@@ -120,7 +124,11 @@ def test_the_walk_through_place_refuse_cancel_fit(desk: Desk) -> None:
     assert fits["accepted"], fits
 
     (listed,) = [row for row in call(desk, "list_instructions") if row["instruction"] == "WALK-1"]
-    assert (listed["status"], listed["holding_mw"], listed["proposer"]) == ("cancelled", "0", AGENT)
+    assert (listed["status"], listed["holding_mw"], listed["proposer"]) == (
+        "cancelled",
+        "0",
+        TRADER,
+    )
     assert listed["currency"] == "EUR"
     # A second cancel has nothing to cancel.
     again = call(desk, "cancel_instruction", {"instruction": "WALK-1"})
@@ -165,9 +173,19 @@ def test_open_instructions_are_never_set_against_the_other_side(desk: Desk) -> N
     assert past_it["refusal"]["compared"] == {"op": "<=", "left": "46 MW", "right": "45 MW"}
 
 
-def test_the_agent_may_not_instruct_where_it_was_not_given(desk: Desk) -> None:
-    refused = call(desk, "place_instruction", instruction("HEDGE-1", 2, "1") | {"book": "hedge-de"})
+def test_an_agent_may_not_instruct_even_with_the_right(desk: Desk) -> None:
+    # A trader without the right is refused by it; an agent given the right
+    # is refused for being an agent: instructions are a person's act.
+    carol = Desk(client=desk.client, engine=desk.engine, actor="carol", org=ORG)
+    refused = call(
+        carol, "place_instruction", instruction("HEDGE-1", 2, "1") | {"book": "hedge-de"}
+    )
     assert refused["refusal"]["rule"] == "may_instruct"
+    grant = models.GrantInstructAuthorityRequest(principal=AGENT, org=ORG, book="spec-de")
+    assert isinstance(desk.client.submit(grant, actor="bootstrap"), Committed)
+    agent = Desk(client=desk.client, engine=desk.engine, actor=AGENT, org=ORG)
+    refused = call(agent, "place_instruction", instruction("AG-I-1", 2, "1"))
+    assert refused["refusal"]["rule"] == "actor_is_not_an_agent"
 
 
 def test_an_instruction_that_cannot_be_read_is_the_callers_error(desk: Desk) -> None:
@@ -208,7 +226,7 @@ def test_an_overdue_instruction_frees_its_room_when_its_time_passes(desk: Desk) 
     assert call(desk, "explain_trade", trade("LAPSE-T", 16, "1"))["admissible"]
     assert call(desk, "propose_trade", trade("LAPSE-T", 16, "1"))["accepted"]
     lapse = models.LapseOverdueInstructionsRequest(org=ORG, book="spec-de")
-    assert isinstance(desk.client.submit(lapse, actor=AGENT), Committed)
+    assert isinstance(desk.client.submit(lapse, actor=TRADER), Committed)
     (ended,) = [r for r in call(desk, "list_instructions") if r["instruction"] == "LAPSE-1"]
     assert (ended["status"], ended["holding_mw"]) == ("lapsed", "0")
 

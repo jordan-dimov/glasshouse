@@ -121,6 +121,7 @@ def create_app() -> FastAPI:
             engine=app.state.engine,
             actor=actor,
             org=settings.demo_org,
+            model=settings.mcp_models.get(actor),
         )
 
     if agent_tokens:

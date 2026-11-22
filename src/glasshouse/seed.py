@@ -79,10 +79,20 @@ GB_MARKET = "gb-power"
 GB_CURRENCY = "GBP"
 GB_BOOK = "spec-gb"
 GB_CURVE = "crv-gb-2026-07-01-v1"
-# The actor an MCP client acts as by default, and the one book it may
-# trade in (`GLASSHOUSE_MCP_ACTOR`, `glasshouse mcp --actor`).
+# The actor an MCP client acts as by default (`GLASSHOUSE_MCP_ACTOR`,
+# `glasshouse mcp --actor`): declared an agent and given no mandate, so it
+# reads, explains and books nothing. An assistant, not a trader.
 AGENT = "agent"
 AGENT_BOOK = "spec-de"
+# A trading agent: declared an agent and given one approved mandate in
+# the speculative book, for the story's delivery day, and an approved
+# record of the model it runs on. It trades inside the mandate with no
+# person in the loop.
+ALGO = "algo"
+ALGO_MANDATE = "M-ALGO"
+ALGO_MODEL = "example-strategy-1"
+ALGO_MAX_ORDER = Decimal("2")
+ALGO_MAX_VOLUME = Decimal("20")
 # The per-hour position cap of each book, in MW.
 LIMITS = {"spec-de": Decimal("25"), "hedge-de": Decimal("20")}
 # Two versions, deliberately non-overlapping ids (neither is a substring
@@ -286,13 +296,18 @@ def seed_demo(
         *(models.GrantValuationAuthorityRequest(principal="demo", org=ORG, book=b) for b in BOOKS),
         models.GrantLimitAuthorityRequest(principal="risk-manager", org=ORG),
         models.GrantLimitAuthorityRequest(principal="demo", org=ORG),
-        # The agent (`glasshouse.agents`): capture authority in the
-        # speculative book and nothing else, so its cap binds it and the
-        # hedge book refuses it, both by the rules as written.
-        models.GrantCaptureAuthorityRequest(principal=AGENT, org=ORG, book=AGENT_BOOK),
-        # Who may place instructions (open orders): the agent in its one
-        # book, the desk and the demo login in every book.
-        models.GrantInstructAuthorityRequest(principal=AGENT, org=ORG, book=AGENT_BOOK),
+        # The agents (`glasshouse.agents`): declared, so the acts people
+        # use refuse them by name. Neither holds a right of its own.
+        models.DeclareAgentRequest(org=ORG, agent=AGENT),
+        models.DeclareAgentRequest(org=ORG, agent=ALGO),
+        # Who may give, approve and suspend mandates, and record and
+        # approve an agent's model: risk and the demo login.
+        *(
+            models.GrantMandateAuthorityRequest(principal=who, org=ORG)
+            for who in ("risk-manager", "demo")
+        ),
+        # Who may place instructions (open orders): the desk and the demo
+        # login in every book.
         *(
             models.GrantInstructAuthorityRequest(principal=who, org=ORG, book=book)
             for who in ("alice", "demo")
@@ -342,6 +357,44 @@ def seed_demo(
                 models.SetPositionLimitRequest(org=ORG, book=book, cap=cap), actor="risk-manager"
             )
         )
+
+    # The trading agent's mandate: proposed by risk, approved by the demo
+    # login, for the story's delivery day in the speculative book, so the
+    # book's cap still binds it there. It runs a year from the seed.
+    _committed(
+        client.submit(
+            models.ProposeMandateRequest(
+                org=ORG,
+                mandate=ALGO_MANDATE,
+                agent=ALGO,
+                book=AGENT_BOOK,
+                market=MARKET,
+                side="both",
+                max_order=ALGO_MAX_ORDER,
+                max_volume=ALGO_MAX_VOLUME,
+                price_floor=Decimal("50"),
+                price_ceiling=Decimal("150"),
+                deliver_from=DAY,
+                deliver_until=DAY + dt.timedelta(days=1),
+                valid_until=dt.datetime.now(dt.UTC) + dt.timedelta(days=365),
+            ),
+            actor="risk-manager",
+        )
+    )
+    _committed(
+        client.submit(models.ApproveMandateRequest(org=ORG, mandate=ALGO_MANDATE), actor="demo")
+    )
+    _committed(
+        client.submit(
+            models.RecordAgentModelRequest(org=ORG, agent=ALGO, model=ALGO_MODEL),
+            actor="risk-manager",
+        )
+    )
+    _committed(
+        client.submit(
+            models.ApproveAgentModelRequest(org=ORG, agent=ALGO, model=ALGO_MODEL), actor="demo"
+        )
+    )
 
     # The day the story's valuations are for: the curves' date.
     _committed(
