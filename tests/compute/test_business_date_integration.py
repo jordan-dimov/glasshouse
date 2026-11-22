@@ -363,8 +363,19 @@ def test_a_roll_racing_a_mark_never_admits_a_mark_for_a_day_already_left(
         marked, rolled = pool.map(submit, [(mark, "risk-engine"), (roll, "ops")])
     assert isinstance(rolled, Committed)
     if isinstance(marked, Committed):
-        order = [row.transition_id for row in client.audit_named(mentions=org)]
-        assert order.index(marked.transition_id) < order.index(rolled.transition_id)
+        # Decided against a snapshot that held day one, and admitted only
+        # against that day's official curve: a mark for day one, which
+        # serialises before the roll. Not asserted: where it sorts in the
+        # audit log. The audit order is the order of effects, not the
+        # serial order, so a mark that read the date before the roll
+        # removed it may commit after and sort after (Morpholog's
+        # runtime-semantics, the audit row; it happened once in CI).
+        (valued,) = [v for v in client.read(models.TradeValuedClaim) if v.org == org]
+        assert valued.curve_version == f"{org}/jul1"
+        (official,) = [
+            c for c in client.read(models.OfficialCurveClaim) if c.version == valued.curve_version
+        ]
+        assert official.as_of == DAY_ONE.date()
     else:
         assert isinstance(marked, Rejected)
         assert marked.rule == "valued_against_official_curve_and_terms_in_force"
