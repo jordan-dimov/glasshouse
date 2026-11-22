@@ -279,7 +279,13 @@ class GateRejection(BaseModel):
     statement_kind: str
     directly_missing_claims: list[MissingClaim]
     compared: Compared | None = None
+    # A refused `or` of comparisons: each branch's figures in the rule's
+    # order, and `compared` is then absent.
+    compared_branches: list[Compared] = []
     witness: list[WitnessBinding] = []
+    # The act's arguments the refusing gate reads: where to look first,
+    # not a verdict on which one is wrong. None for an unnamed gate.
+    related_parameters: list[str] | None = None
 
 
 class InvariantRejection(BaseModel):
@@ -287,6 +293,7 @@ class InvariantRejection(BaseModel):
     name: str
     rule: str
     compared: Compared | None = None
+    compared_branches: list[Compared] = []
     witness: list[WitnessBinding] = []
 
 
@@ -321,6 +328,7 @@ class RecordedRefusal(BaseModel):
     reason: str
     summary: str  # the rule's name, then the figures or the reason
     compared: Compared | None = None
+    compared_branches: list[Compared] = []
     # None means the values were not captured, never that there were none.
     witness: list[WitnessBinding] | None = None
 

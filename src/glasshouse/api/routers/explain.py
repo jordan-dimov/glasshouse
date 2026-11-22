@@ -54,6 +54,10 @@ def wire_witness(witness: list[envelopes.WitnessBinding]) -> list[WitnessBinding
     return [WitnessBinding(var=binding.var, value=wire_text(binding.value)) for binding in witness]
 
 
+def wire_branches(branches: list[envelopes.Compared]) -> list[Compared]:
+    return [Compared(op=b.op, left=wire_text(b.left), right=wire_text(b.right)) for b in branches]
+
+
 def flatten_rejection(rejection: object) -> Rejection | None:
     """The generated envelope's frozen dataclasses into the wire models."""
     match rejection:
@@ -75,13 +79,16 @@ def flatten_rejection(rejection: object) -> Rejection | None:
                     for claim in rejection.directly_missing_claims
                 ],
                 compared=wire_compared(rejection.compared),
+                compared_branches=wire_branches(rejection.compared_branches),
                 witness=wire_witness(rejection.witness),
+                related_parameters=rejection.related_parameters,
             )
         case envelopes.InvariantRejection():
             return InvariantRejection(
                 name=rejection.name,
                 rule=rejection.rule,
                 compared=wire_compared(rejection.compared),
+                compared_branches=wire_branches(rejection.compared_branches),
                 witness=wire_witness(rejection.witness),
             )
         case envelopes.ErrorRejection():

@@ -18,9 +18,10 @@ tool all come through `list_refusals`.
 
 from __future__ import annotations
 
-from glasshouse.api.schemas import Compared, RecordedRefusal, RefusalLog, WitnessBinding
+from glasshouse.api.routers.explain import wire_branches, wire_compared
+from glasshouse.api.schemas import RecordedRefusal, RefusalLog, WitnessBinding
 from glasshouse.commit import GlasshouseClient
-from glasshouse.imports.report import comparison, wire_text
+from glasshouse.imports.report import figures, wire_text
 
 CAVEAT = (
     "Best-effort log, not the audit history. A refusal is written at most once, after the "
@@ -52,16 +53,9 @@ def list_refusals(
                 reason=row.reason,
                 # Led by the rule's name, with the figures when the kernel
                 # pinned them: the same line an import receipt shows.
-                summary=f"{row.rule}: {comparison(row.compared)}"
-                if row.compared is not None
-                else f"{row.rule}: {row.reason}",
-                compared=None
-                if row.compared is None
-                else Compared(
-                    op=row.compared.op,
-                    left=wire_text(row.compared.left),
-                    right=wire_text(row.compared.right),
-                ),
+                summary=f"{row.rule}: {figures(row.compared, row.compared_branches) or row.reason}",
+                compared=wire_compared(row.compared),
+                compared_branches=wire_branches(row.compared_branches),
                 # None is "not captured" and stays None: an empty list
                 # would claim the rule was reading nothing.
                 witness=None

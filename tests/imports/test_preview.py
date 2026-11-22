@@ -89,6 +89,38 @@ def test_an_all_quarantined_preview_never_reaches_the_binary(tmp_path: Path) -> 
     assert not (tmp_path / "argv.txt").exists()
 
 
+def test_a_refused_or_names_every_branch_it_compared() -> None:
+    # From v0.0.21 a refusal at an `or` of comparisons carries each
+    # branch's figures and no single `compared`; the line names them all.
+    branches = envelopes.Explanation.from_json(
+        {
+            "transition": REFUSAL["transition"],
+            "verdict": {
+                "rejected": {
+                    "kind": "gate",
+                    "gate": "breach_shrinks(...)",
+                    "rule": "breach_must_shrink",
+                    "statement_kind": "require",
+                    "directly_missing_claims": [],
+                    "compared_branches": [
+                        {
+                            "op": "<=",
+                            "left": {"type": "decimal", "value": "120"},
+                            "right": {"type": "decimal", "value": "100"},
+                        },
+                        {
+                            "op": "<",
+                            "left": {"type": "decimal", "value": "120"},
+                            "right": {"type": "decimal", "value": "120"},
+                        },
+                    ],
+                }
+            },
+        }
+    )
+    assert why(branches) == "breach_must_shrink: none of 120 <= 100, 120 < 120 holds"
+
+
 def test_why_leads_with_the_named_rule_and_the_values_it_compared() -> None:
     # From v0.0.15 a refusal carries the two values its failing comparison
     # compared, and every Glasshouse gate has a name: the line a desk
