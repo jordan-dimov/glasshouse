@@ -322,6 +322,183 @@ class CaptureTradeRequest:
 
 
 @dataclass(frozen=True)
+class DeclareAgentRequest:
+    """Arguments for `declare_agent`."""
+
+    TRANSFORMATION: ClassVar[str] = "declare_agent"
+
+    org: str
+    agent: str
+
+    def to_args_named(self) -> dict[str, object]:
+        return {
+            "org": values.encode_named(self.org),
+            "agent": values.encode_named(self.agent),
+        }
+
+
+@dataclass(frozen=True)
+class GrantMandateAuthorityRequest:
+    """Arguments for `grant_mandate_authority`."""
+
+    TRANSFORMATION: ClassVar[str] = "grant_mandate_authority"
+
+    principal: str
+    org: str
+
+    def to_args_named(self) -> dict[str, object]:
+        return {
+            "principal": values.encode_named(self.principal),
+            "org": values.encode_named(self.org),
+        }
+
+
+@dataclass(frozen=True)
+class ProposeMandateRequest:
+    """Arguments for `propose_mandate`."""
+
+    TRANSFORMATION: ClassVar[str] = "propose_mandate"
+
+    org: str
+    mandate: str
+    agent: str
+    book: str
+    market: str
+    side: str
+    max_order: Decimal
+    # amount in MW (the declaration carries the unit)
+    max_volume: Decimal
+    # amount in MW (the declaration carries the unit)
+    price_floor: Decimal
+    price_ceiling: Decimal
+    deliver_from: datetime
+    deliver_until: datetime
+    valid_until: datetime
+
+    def to_args_named(self) -> dict[str, object]:
+        return {
+            "org": values.encode_named(self.org),
+            "mandate": values.encode_named(self.mandate),
+            "agent": values.encode_named(self.agent),
+            "book": values.encode_named(self.book),
+            "market": values.encode_named(self.market),
+            "side": values.encode_named(self.side),
+            "max_order": values.encode_named(self.max_order),
+            "max_volume": values.encode_named(self.max_volume),
+            "price_floor": values.encode_named(self.price_floor),
+            "price_ceiling": values.encode_named(self.price_ceiling),
+            "deliver_from": values.encode_named(self.deliver_from),
+            "deliver_until": values.encode_named(self.deliver_until),
+            "valid_until": values.encode_named(self.valid_until),
+        }
+
+
+@dataclass(frozen=True)
+class ApproveMandateRequest:
+    """Arguments for `approve_mandate`."""
+
+    TRANSFORMATION: ClassVar[str] = "approve_mandate"
+
+    org: str
+    mandate: str
+
+    def to_args_named(self) -> dict[str, object]:
+        return {
+            "org": values.encode_named(self.org),
+            "mandate": values.encode_named(self.mandate),
+        }
+
+
+@dataclass(frozen=True)
+class SuspendMandateRequest:
+    """Arguments for `suspend_mandate`."""
+
+    TRANSFORMATION: ClassVar[str] = "suspend_mandate"
+
+    org: str
+    mandate: str
+
+    def to_args_named(self) -> dict[str, object]:
+        return {
+            "org": values.encode_named(self.org),
+            "mandate": values.encode_named(self.mandate),
+        }
+
+
+@dataclass(frozen=True)
+class RecordAgentModelRequest:
+    """Arguments for `record_agent_model`."""
+
+    TRANSFORMATION: ClassVar[str] = "record_agent_model"
+
+    org: str
+    agent: str
+    model: str
+
+    def to_args_named(self) -> dict[str, object]:
+        return {
+            "org": values.encode_named(self.org),
+            "agent": values.encode_named(self.agent),
+            "model": values.encode_named(self.model),
+        }
+
+
+@dataclass(frozen=True)
+class ApproveAgentModelRequest:
+    """Arguments for `approve_agent_model`."""
+
+    TRANSFORMATION: ClassVar[str] = "approve_agent_model"
+
+    org: str
+    agent: str
+    model: str
+
+    def to_args_named(self) -> dict[str, object]:
+        return {
+            "org": values.encode_named(self.org),
+            "agent": values.encode_named(self.agent),
+            "model": values.encode_named(self.model),
+        }
+
+
+@dataclass(frozen=True)
+class TradeUnderMandateRequest:
+    """Arguments for `trade_under_mandate`."""
+
+    TRANSFORMATION: ClassVar[str] = "trade_under_mandate"
+
+    org: str
+    mandate: str
+    trade: str
+    counterparty: str
+    version: str
+    direction: str
+    quantity: Decimal
+    # amount in MW (the declaration carries the unit)
+    price: Decimal
+    delivery_start: datetime
+    delivery_end: datetime
+    trade_date: date
+    model: str
+
+    def to_args_named(self) -> dict[str, object]:
+        return {
+            "org": values.encode_named(self.org),
+            "mandate": values.encode_named(self.mandate),
+            "trade": values.encode_named(self.trade),
+            "counterparty": values.encode_named(self.counterparty),
+            "version": values.encode_named(self.version),
+            "direction": values.encode_named(self.direction),
+            "quantity": values.encode_named(self.quantity),
+            "price": values.encode_named(self.price),
+            "delivery_start": values.encode_named(self.delivery_start),
+            "delivery_end": values.encode_named(self.delivery_end),
+            "trade_date": values.encode_named(self.trade_date),
+            "model": values.encode_named(self.model),
+        }
+
+
+@dataclass(frozen=True)
 class AmendTradeRequest:
     """Arguments for `amend_trade`."""
 
@@ -1399,6 +1576,252 @@ class BreachAnsweredClaim:
             ),
             decision=values.named_text("BreachAnswered.decision", args["decision"]),
             note=values.named_text("BreachAnswered.note", args["note"]),
+        )
+
+
+@dataclass(frozen=True)
+class AgentActorClaim:
+    """One admitted `AgentActor` claim, decoded by declared kind."""
+
+    PREDICATE: ClassVar[str] = "AgentActor"
+
+    org: str
+    agent: str
+
+    @classmethod
+    def from_named(cls, args: dict[str, object]) -> AgentActorClaim:
+        values.named_fields("AgentActor", args, ("org", "agent"))
+        return cls(
+            org=values.named_text("AgentActor.org", args["org"]),
+            agent=values.named_text("AgentActor.agent", args["agent"]),
+        )
+
+
+@dataclass(frozen=True)
+class MayMandateClaim:
+    """One admitted `MayMandate` claim, decoded by declared kind."""
+
+    PREDICATE: ClassVar[str] = "MayMandate"
+
+    actor: str
+    org: str
+
+    @classmethod
+    def from_named(cls, args: dict[str, object]) -> MayMandateClaim:
+        values.named_fields("MayMandate", args, ("actor", "org"))
+        return cls(
+            actor=values.named_text("MayMandate.actor", args["actor"]),
+            org=values.named_text("MayMandate.org", args["org"]),
+        )
+
+
+@dataclass(frozen=True)
+class MandateClaim:
+    """One admitted `Mandate` claim, decoded by declared kind."""
+
+    PREDICATE: ClassVar[str] = "Mandate"
+
+    org: str
+    mandate: str
+    agent: str
+    book: str
+    market: str
+    side: str
+    max_order: Decimal
+    # amount in MW (the declaration carries the unit)
+    max_volume: Decimal
+    # amount in MW (the declaration carries the unit)
+    price_floor: Decimal
+    price_ceiling: Decimal
+    deliver_from: datetime
+    deliver_until: datetime
+    valid_until: datetime
+    proposer: str
+
+    @classmethod
+    def from_named(cls, args: dict[str, object]) -> MandateClaim:
+        values.named_fields(
+            "Mandate",
+            args,
+            (
+                "org",
+                "mandate",
+                "agent",
+                "book",
+                "market",
+                "side",
+                "max_order",
+                "max_volume",
+                "price_floor",
+                "price_ceiling",
+                "deliver_from",
+                "deliver_until",
+                "valid_until",
+                "proposer",
+            ),
+        )
+        return cls(
+            org=values.named_text("Mandate.org", args["org"]),
+            mandate=values.named_text("Mandate.mandate", args["mandate"]),
+            agent=values.named_text("Mandate.agent", args["agent"]),
+            book=values.named_text("Mandate.book", args["book"]),
+            market=values.named_text("Mandate.market", args["market"]),
+            side=values.named_text("Mandate.side", args["side"]),
+            max_order=values.named_decimal("Mandate.max_order", args["max_order"]),
+            max_volume=values.named_decimal("Mandate.max_volume", args["max_volume"]),
+            price_floor=values.named_decimal(
+                "Mandate.price_floor",
+                args["price_floor"],
+            ),
+            price_ceiling=values.named_decimal(
+                "Mandate.price_ceiling",
+                args["price_ceiling"],
+            ),
+            deliver_from=values.named_timestamp(
+                "Mandate.deliver_from",
+                args["deliver_from"],
+            ),
+            deliver_until=values.named_timestamp(
+                "Mandate.deliver_until",
+                args["deliver_until"],
+            ),
+            valid_until=values.named_timestamp(
+                "Mandate.valid_until",
+                args["valid_until"],
+            ),
+            proposer=values.named_text("Mandate.proposer", args["proposer"]),
+        )
+
+
+@dataclass(frozen=True)
+class MandateApprovedClaim:
+    """One admitted `MandateApproved` claim, decoded by declared kind."""
+
+    PREDICATE: ClassVar[str] = "MandateApproved"
+
+    org: str
+    mandate: str
+    approver: str
+
+    @classmethod
+    def from_named(cls, args: dict[str, object]) -> MandateApprovedClaim:
+        values.named_fields("MandateApproved", args, ("org", "mandate", "approver"))
+        return cls(
+            org=values.named_text("MandateApproved.org", args["org"]),
+            mandate=values.named_text("MandateApproved.mandate", args["mandate"]),
+            approver=values.named_text("MandateApproved.approver", args["approver"]),
+        )
+
+
+@dataclass(frozen=True)
+class MandateSuspendedClaim:
+    """One admitted `MandateSuspended` claim, decoded by declared kind."""
+
+    PREDICATE: ClassVar[str] = "MandateSuspended"
+
+    org: str
+    mandate: str
+    suspended_by: str
+
+    @classmethod
+    def from_named(cls, args: dict[str, object]) -> MandateSuspendedClaim:
+        values.named_fields(
+            "MandateSuspended",
+            args,
+            ("org", "mandate", "suspended_by"),
+        )
+        return cls(
+            org=values.named_text("MandateSuspended.org", args["org"]),
+            mandate=values.named_text("MandateSuspended.mandate", args["mandate"]),
+            suspended_by=values.named_text(
+                "MandateSuspended.suspended_by",
+                args["suspended_by"],
+            ),
+        )
+
+
+@dataclass(frozen=True)
+class TradeUnderMandateClaim:
+    """One admitted `TradeUnderMandate` claim, decoded by declared kind."""
+
+    PREDICATE: ClassVar[str] = "TradeUnderMandate"
+
+    org: str
+    mandate: str
+    trade: str
+    quantity: Decimal
+    # amount in MW (the declaration carries the unit)
+
+    @classmethod
+    def from_named(cls, args: dict[str, object]) -> TradeUnderMandateClaim:
+        values.named_fields(
+            "TradeUnderMandate",
+            args,
+            ("org", "mandate", "trade", "quantity"),
+        )
+        return cls(
+            org=values.named_text("TradeUnderMandate.org", args["org"]),
+            mandate=values.named_text("TradeUnderMandate.mandate", args["mandate"]),
+            trade=values.named_text("TradeUnderMandate.trade", args["trade"]),
+            quantity=values.named_decimal(
+                "TradeUnderMandate.quantity",
+                args["quantity"],
+            ),
+        )
+
+
+@dataclass(frozen=True)
+class AgentModelClaim:
+    """One admitted `AgentModel` claim, decoded by declared kind."""
+
+    PREDICATE: ClassVar[str] = "AgentModel"
+
+    org: str
+    agent: str
+    model: str
+    recorded_by: str
+
+    @classmethod
+    def from_named(cls, args: dict[str, object]) -> AgentModelClaim:
+        values.named_fields(
+            "AgentModel",
+            args,
+            ("org", "agent", "model", "recorded_by"),
+        )
+        return cls(
+            org=values.named_text("AgentModel.org", args["org"]),
+            agent=values.named_text("AgentModel.agent", args["agent"]),
+            model=values.named_text("AgentModel.model", args["model"]),
+            recorded_by=values.named_text(
+                "AgentModel.recorded_by",
+                args["recorded_by"],
+            ),
+        )
+
+
+@dataclass(frozen=True)
+class AgentModelApprovedClaim:
+    """One admitted `AgentModelApproved` claim, decoded by declared kind."""
+
+    PREDICATE: ClassVar[str] = "AgentModelApproved"
+
+    org: str
+    agent: str
+    model: str
+    approver: str
+
+    @classmethod
+    def from_named(cls, args: dict[str, object]) -> AgentModelApprovedClaim:
+        values.named_fields(
+            "AgentModelApproved",
+            args,
+            ("org", "agent", "model", "approver"),
+        )
+        return cls(
+            org=values.named_text("AgentModelApproved.org", args["org"]),
+            agent=values.named_text("AgentModelApproved.agent", args["agent"]),
+            model=values.named_text("AgentModelApproved.model", args["model"]),
+            approver=values.named_text("AgentModelApproved.approver", args["approver"]),
         )
 
 
