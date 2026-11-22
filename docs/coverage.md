@@ -15,10 +15,10 @@ Every new function arrives one of three ways: as rules in [the one rule file](..
 
 | Function | State | Notes |
 |---|---|---|
-| Capture a fixed-price power trade | Has | By CSV import, command line or agent. Whole hours only. |
+| Capture a fixed-price power trade | Has | By CSV import, command line or MCP. An agent only under a mandate. Whole hours only. |
 | Amend a trade, keeping the old version | Has | A new version beside the old one; nothing is overwritten. |
 | Enter a trade on the screen | Planned | [#119](https://github.com/jordan-dimov/glasshouse/issues/119) |
-| Open orders that hold room under a limit | Has | Called instructions. Placed and cancelled by agents. An overdue one holds no room; its lapse is recorded by a sweep, which the hosted demo runs every minute. |
+| Open orders that hold room under a limit | Has | Called instructions. Placed and cancelled by people, over MCP or the command line; an agent is refused. An overdue one holds no room; its lapse is recorded by a sweep, which the hosted demo runs every minute. |
 | Approval of an order by a second person | Has | The approver must hold the right and must not be whoever placed it. Recorded, not enforced on the market. |
 | Recording fills from the market, and breaches | Has | A reconciling service records each fill from the command line. The fill is booked even when it breaks a rule, and the breach is recorded with it: the limit broken, no approval, the order already ended, a worse price than its limit, more than it held. A book over its limit trades only back towards flat. Risk answers each breach, never the trader behind it; an answer records the decision, not that it was carried out. One execution is booked once, and a repeat with other figures is reported as a conflict. No HTTP endpoint records a fill yet, and an execution id is not yet scoped to the exchange or broker that issued it. |
 | Delivery periods of 15 and 30 minutes | Planned | [#116](https://github.com/jordan-dimov/glasshouse/issues/116). Needed for Great Britain and for intraday. |
@@ -114,7 +114,9 @@ Every new function arrives one of three ways: as rules in [the one rule file](..
 | Function | State | Notes |
 |---|---|---|
 | An AI agent reads the book | Has | Through MCP. See [mcp.md](mcp.md). |
-| An agent proposes trades and places orders, under the same rules as a person | Has | Refusals come back as data. |
+| An agent trades only under a standing mandate a person approved | Has | One book and market, side, largest order, total volume, price band, delivery window, end. Proposed by one person, approved by another, suspended by one at once. The total is summed by the ledger at each trade. Refusals come back as data. See [agent-authority.md](agent-authority.md). |
+| An agent's authority ends when its model changes | Has | A person records the model, another approves it; the server, not the agent, names the model in use. |
+| An agent books nothing through the acts people use | Has | Only for actors declared as agents. An AI using a person's token is that person to the ledger. |
 | Each agent under its own name | Has | A token per actor. A token does not prove who holds it: [#85](https://github.com/jordan-dimov/glasshouse/issues/85). |
 
 ## The order of work

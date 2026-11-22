@@ -18,7 +18,7 @@ Glasshouse sits between them: a book of record you can read, run and check yours
 - **Bad changes are refused, with a reason.** The rules live in [one readable file](src/glasshouse/commit/glasshouse.morph). A change that breaks one is not saved, and the refusal names the rule and the figures: this trader may not trade this book, this trade would take the book to 26 MW in this hour and its limit is 25.
 - **Every valuation shows its sources.** It records the exact curve version and trade terms it was computed from, so last week's number can be explained this week.
 - **You can check the records yourself.** One button, or one command, confirms the database still agrees with its own history. Another exports that history for an outsider to verify offline, and the Overview's totals come with a proof anyone can check the same way.
-- **Software is held to the same rules as people.** An AI agent can connect, read the book and propose trades under its own name. It is refused exactly where a trader would be, and gets the reason back as data. [docs/mcp.md](docs/mcp.md) shows how.
+- **Software trades only under a mandate a person approved.** An AI agent can connect and read the book under its own name. It books a trade only inside a standing mandate (book, side, largest order, total volume, price band, delivery window, end) that one person proposed and another approved, and only while the model it runs on is the approved one. Inside the mandate it trades without asking anyone. Outside it, it is refused, and gets the reason back as data. [docs/mcp.md](docs/mcp.md) shows how.
 
 ## How the rules are enforced
 
@@ -43,7 +43,7 @@ None of this exists yet. It is the road ahead.
 - **Every screen at any past moment.** Trades and positions can already be viewed as they stood at a chosen time. Next is the same for curves, the overview and the history screens.
 - **Run beside what you have.** Import your spreadsheet's or current system's exports, compare daily, and see exactly where the two differ.
 - **More of the lifecycle.** Counterparty confirmations, settlement, and products such as power purchase agreements and battery storage.
-- **More for software that trades.** Agents can read the book and propose a trade today. Next: amendments, prices and valuations as tools, and a sign-in of their own for each agent.
+- **More for software that trades.** Each agent already has a token and a name of its own, and trades under a mandate. Next: mandates on the screens, a bound on the hours of the day an agent may trade, and prices and valuations as tools.
 
 [The coverage table](docs/coverage.md) has every planned function with its issue. [DESIGN.md](DESIGN.md) has the full plan and the reasoning.
 

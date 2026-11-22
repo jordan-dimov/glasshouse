@@ -52,7 +52,11 @@ ORG = "acme-energy"
 BOOK = "spec-de"
 MARKET = "de-power"
 AGENT = "agent"
-AGENTS = {AGENT, "algo"}
+# Agents are read from the ledger (AgentActor) when it has them; before
+# the rule change there are none, so these names stand in.
+AGENTS = {AGENT, "algo", "algo-bench"}
+BENCH_AGENT = "algo-bench"
+BENCH_MANDATE = "M-BENCH"
 APPROVED_MODEL = "claude-opus-5-5"
 OTHER_MODEL = "claude-sonnet-5-5"
 MANDATE = "M-1"
@@ -118,7 +122,7 @@ def mandate_request(
     valid_until: str, agent: str = AGENT, mandate: str = MANDATE, **over: str
 ) -> Any:
     terms = {**MANDATE_TERMS, "valid_until": valid_until, **over}
-    return models.ProposeMandateRequest(  # type: ignore[attr-defined]
+    return models.ProposeMandateRequest(
         org=ORG,
         mandate=mandate,
         agent=agent,
@@ -136,8 +140,8 @@ def mandate_request(
 
 
 def record_model(client: GlasshouseClient, agent: str, model: str) -> None:
-    ok(client, models.RecordAgentModelRequest(org=ORG, agent=agent, model=model), "risk-manager")  # type: ignore[attr-defined]
-    ok(client, models.ApproveAgentModelRequest(org=ORG, agent=agent, model=model), "demo")  # type: ignore[attr-defined]
+    ok(client, models.RecordAgentModelRequest(org=ORG, agent=agent, model=model), "risk-manager")
+    ok(client, models.ApproveAgentModelRequest(org=ORG, agent=agent, model=model), "demo")
 
 
 def run_setup(client: GlasshouseClient, steps: list[str]) -> dict[str, Any]:
@@ -207,14 +211,14 @@ def run_setup(client: GlasshouseClient, steps: list[str]) -> dict[str, Any]:
             if step == "short_mandate":
                 valid_until = (dt.datetime.now(dt.UTC) + dt.timedelta(seconds=20)).isoformat()
             ok(client, mandate_request(valid_until), "risk-manager")
-            ok(client, models.ApproveMandateRequest(org=ORG, mandate=MANDATE), "demo")  # type: ignore[attr-defined]
+            ok(client, models.ApproveMandateRequest(org=ORG, mandate=MANDATE), "demo")
             record_model(client, AGENT, APPROVED_MODEL)
             door["valid_until"] = valid_until
         elif step == "wait_for_expiry" and "valid_until" in door:
             left = dt.datetime.fromisoformat(door["valid_until"]) - dt.datetime.now(dt.UTC)
             time.sleep(max(0.0, left.total_seconds()) + 2)
         elif step == "suspend_mandate" and mandates:
-            ok(client, models.SuspendMandateRequest(org=ORG, mandate=MANDATE), "risk-manager")  # type: ignore[attr-defined]
+            ok(client, models.SuspendMandateRequest(org=ORG, mandate=MANDATE), "risk-manager")
         elif step == "door_reports_other_model":
             door["model"] = OTHER_MODEL
     return door
@@ -518,7 +522,7 @@ def tasks_command(args: argparse.Namespace) -> None:
 
 
 async def _volume(url: str, n: int, model: str) -> dict[str, Any]:
-    argv = ["-m", "glasshouse.cli", "mcp", "--actor", "algo"]
+    argv = ["-m", "glasshouse.cli", "mcp", "--actor", BENCH_AGENT]
     if "--model" in _mcp_help():
         argv += ["--model", model]
     params = StdioServerParameters(
@@ -536,7 +540,7 @@ async def _volume(url: str, n: int, model: str) -> dict[str, Any]:
                 await algo.call_tool(
                     "trade_under_mandate",
                     {
-                        "mandate": "M-ALGO",
+                        "mandate": BENCH_MANDATE,
                         "trade": f"A-{i:04d}",
                         "counterparty": "EPEX-CLEAR",
                         "direction": "buy" if i % 2 == 0 else "sell",
@@ -552,8 +556,14 @@ async def _volume(url: str, n: int, model: str) -> dict[str, Any]:
                 accepted += 1
             else:
                 refused.append(f"{i}: {outcome['summary']}")
+    # Each trade sums every trade already under the mandate: compare the
+    # first fifty with the last fifty to see whether that sum's cost grows.
+    first = sorted(took[:50])
+    last = sorted(took[-51:-1])
     took.sort()
     return {
+        "ms_median_first_50": round(1000 * first[len(first) // 2], 1),
+        "ms_median_last_50": round(1000 * last[len(last) // 2], 1),
         "attempted": n + 1,
         "accepted": accepted,
         "refused": refused,
@@ -571,20 +581,20 @@ def volume_command(args: argparse.Namespace) -> None:
     url = fresh_database(args.base_url, f"battery_{args.label}_volume")
     seed(url)
     client = GlasshouseClient(str(MODEL_FILE), url)
-    ok(client, models.DeclareAgentRequest(org=ORG, agent="algo"), "demo")  # type: ignore[attr-defined]
+    ok(client, models.DeclareAgentRequest(org=ORG, agent=BENCH_AGENT), "bootstrap")
     ok(
         client,
         mandate_request(
             MANDATE_TERMS["valid_until"],
-            agent="algo",
-            mandate="M-ALGO",
+            agent=BENCH_AGENT,
+            mandate=BENCH_MANDATE,
             max_order="1",
             max_volume=str(args.n),
         ),
         "risk-manager",
     )
-    ok(client, models.ApproveMandateRequest(org=ORG, mandate="M-ALGO"), "demo")  # type: ignore[attr-defined]
-    record_model(client, "algo", APPROVED_MODEL)
+    ok(client, models.ApproveMandateRequest(org=ORG, mandate=BENCH_MANDATE), "demo")
+    record_model(client, BENCH_AGENT, APPROVED_MODEL)
     result = anyio.run(_volume, url, args.n, APPROVED_MODEL)
     result["oracle"] = judge(audit_rows(client), ["trade_under_mandate"])["counted"]
     Path(args.out).write_text(json.dumps(result, indent=2) + "\n", encoding="utf-8")
