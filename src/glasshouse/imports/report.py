@@ -66,6 +66,19 @@ def comparison(compared: envelopes.Compared) -> str:
     return f"{wire_text(compared.left)} {compared.op} {wire_text(compared.right)} does not hold"
 
 
+def figures(compared: envelopes.Compared | None, branches: list[envelopes.Compared]) -> str | None:
+    """What the refused rule compared: one comparison, or, for a refused
+    `or` of comparisons (v0.0.21 `compared_branches`), every branch in
+    the rule's order, none of which held. None when the ledger pinned
+    no figures."""
+    if compared is not None:
+        return comparison(compared)
+    if branches:
+        spelled = ", ".join(f"{wire_text(b.left)} {b.op} {wire_text(b.right)}" for b in branches)
+        return f"none of {spelled} holds"
+    return None
+
+
 # A quantifier's binder over a collection (`forall h in hours:`), not one
 # over a claim pattern (`forall cap in PositionLimit(..)`), whose value the
 # comparison already shows.
@@ -109,6 +122,7 @@ def why(explanation: envelopes.Explanation | None) -> str:
             gate=gate,
             rule=rule,
             compared=compared,
+            compared_branches=branches,
             witness=witness,
         ):
             parts = [
@@ -120,15 +134,16 @@ def why(explanation: envelopes.Explanation | None) -> str:
                 )
                 for claim in missing
             ]
-            if compared is not None:
-                parts.append(comparison(compared) + witnessed(gate, witness))
+            if (shown := figures(compared, branches)) is not None:
+                parts.append(shown + witnessed(gate, witness))
             detail = "; ".join(parts) or f"{gate} refused"
             return f"{rule}: {detail}" if rule else detail
-        case envelopes.InvariantRejection(name=name, rule=rule, compared=compared, witness=witness):
+        case envelopes.InvariantRejection(
+            name=name, rule=rule, compared=compared, compared_branches=branches, witness=witness
+        ):
+            shown = figures(compared, branches)
             return f"would break invariant {name}" + (
-                f": {comparison(compared)}{witnessed(rule, witness)}"
-                if compared is not None
-                else ""
+                f": {shown}{witnessed(rule, witness)}" if shown is not None else ""
             )
         case envelopes.ErrorRejection(message=message):
             return message

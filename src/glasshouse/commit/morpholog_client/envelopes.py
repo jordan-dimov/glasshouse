@@ -154,6 +154,12 @@ class _Fields:
         return parse(self.data[key])
 
 
+def _one_blame(data: _Fields) -> None:
+    """A refusal blames one comparison or reports every branch of an ``or``, never both."""
+    if "compared" in data and "compared_branches" in data:
+        raise EnvelopeError(f"{data.name}: carries both compared and compared_branches")
+
+
 def _strict(
     name: str,
     payload: object,
@@ -402,6 +408,9 @@ class Rejected:
     # The comparison the refusal blamed, with its two evaluated values.
     # None when it blamed none, or could not evaluate it.
     compared: Compared | None = None
+    # For a refused `or` of comparisons, each branch's two values in
+    # branch order; `compared` is then None.
+    compared_branches: list[Compared] = field(default_factory=list)
     # On a refusal by a named gate: the act's parameters the gate reads,
     # in parameter order, possibly none. A static dependency, not a
     # judgement of which input is wrong. None for an invariant or an
@@ -414,15 +423,26 @@ class Rejected:
             "rejected outcome",
             payload,
             {"status", "reason"},
-            {"explanation", "rule", "witness", "compared", "related_parameters"},
+            {
+                "explanation",
+                "rule",
+                "witness",
+                "compared",
+                "compared_branches",
+                "related_parameters",
+            },
         )
         data.constant("status", "rejected")
+        _one_blame(data)
         return cls(
             reason=data.text("reason"),
             rule=data.optional_text("rule"),
             explanation=data.optional_nested("explanation", Explanation.from_json),
             witness=data.optional_array("witness", WitnessBinding.from_json, non_empty=True),
             compared=data.optional_nested("compared", Compared.from_json),
+            compared_branches=data.optional_array(
+                "compared_branches", Compared.from_json, non_empty=True
+            ),
             related_parameters=(
                 data.texts("related_parameters")
                 if "related_parameters" in data
@@ -521,6 +541,7 @@ class AtomicRejected:
     rule: str | None = None
     witness: list[WitnessBinding] = field(default_factory=list)
     compared: Compared | None = None
+    compared_branches: list[Compared] = field(default_factory=list)
     related_parameters: list[str] | None = None
 
     @classmethod
@@ -529,16 +550,27 @@ class AtomicRejected:
             "atomic rejected",
             payload,
             {"status", "act", "reason"},
-            optional={"rule", "witness", "compared", "related_parameters", "row"},
+            optional={
+                "rule",
+                "witness",
+                "compared",
+                "compared_branches",
+                "related_parameters",
+                "row",
+            },
         )
         data.constant("status", "rejected")
         data.optional_integer("row", minimum=1)
+        _one_blame(data)
         return cls(
             act=data.integer("act", minimum=1),
             reason=data.text("reason"),
             rule=data.optional_text("rule"),
             witness=data.optional_array("witness", WitnessBinding.from_json, non_empty=True),
             compared=data.optional_nested("compared", Compared.from_json),
+            compared_branches=data.optional_array(
+                "compared_branches", Compared.from_json, non_empty=True
+            ),
             related_parameters=(
                 data.texts("related_parameters")
                 if "related_parameters" in data
@@ -965,6 +997,10 @@ class GateRejection:
     # same proposal would carry them. Empty when nothing was in scope.
     witness: list[WitnessBinding] = field(default_factory=list)
     compared: Compared | None = None
+    compared_branches: list[Compared] = field(default_factory=list)
+    # The act's parameters a named gate reads: possibly empty, None for an
+    # unnamed gate. Read by the gate, not judged wrong.
+    related_parameters: list[str] | None = None
 
     @classmethod
     def from_json(cls, payload: object) -> GateRejection:
@@ -972,9 +1008,10 @@ class GateRejection:
             "gate rejection",
             payload,
             {"kind", "gate", "statement_kind", "directly_missing_claims"},
-            {"rule", "witness", "compared"},
+            {"rule", "witness", "compared", "compared_branches", "related_parameters"},
         )
         data.constant("kind", "gate")
+        _one_blame(data)
         return cls(
             gate=data.text("gate"),
             statement_kind=data.member("statement_kind", {"require", "bind_one"}),
@@ -982,6 +1019,14 @@ class GateRejection:
             rule=data.optional_text("rule"),
             witness=data.optional_array("witness", WitnessBinding.from_json, non_empty=True),
             compared=data.optional_nested("compared", Compared.from_json),
+            compared_branches=data.optional_array(
+                "compared_branches", Compared.from_json, non_empty=True
+            ),
+            related_parameters=(
+                data.texts("related_parameters")
+                if "related_parameters" in data
+                else None
+            ),
         )
 
 
@@ -993,18 +1038,26 @@ class InvariantRejection:
     # would carry them. Empty when the failing part binds nothing.
     witness: list[WitnessBinding] = field(default_factory=list)
     compared: Compared | None = None
+    compared_branches: list[Compared] = field(default_factory=list)
 
     @classmethod
     def from_json(cls, payload: object) -> InvariantRejection:
         data = _strict(
-            "invariant rejection", payload, {"kind", "name", "rule"}, {"witness", "compared"}
+            "invariant rejection",
+            payload,
+            {"kind", "name", "rule"},
+            {"witness", "compared", "compared_branches"},
         )
         data.constant("kind", "invariant")
+        _one_blame(data)
         return cls(
             name=data.text("name"),
             rule=data.text("rule"),
             witness=data.optional_array("witness", WitnessBinding.from_json, non_empty=True),
             compared=data.optional_nested("compared", Compared.from_json),
+            compared_branches=data.optional_array(
+                "compared_branches", Compared.from_json, non_empty=True
+            ),
         )
 
 
@@ -1310,6 +1363,7 @@ class RejectionRow:
     # The comparison the refusal blamed. None when it blamed none, could
     # not evaluate it, or the row predates the column.
     compared: Compared | None = None
+    compared_branches: list[Compared] = field(default_factory=list)
 
     @classmethod
     def from_json(cls, payload: object) -> RejectionRow:
@@ -1326,7 +1380,7 @@ class RejectionRow:
                 "reason",
                 "rejected_at",
             },
-            {"invariant_version", "witness", "compared"},
+            {"invariant_version", "witness", "compared", "compared_branches"},
         )
         kind = data.member("kind", {"invariant", "require", "bind"})
         # Only an invariant refusal has a version, and it always has one. A
@@ -1336,6 +1390,7 @@ class RejectionRow:
             raise EnvelopeError(
                 f"rejection row: kind {kind!r} and invariant_version disagree in {payload!r}"
             )
+        _one_blame(data)
         return cls(
             rejection_id=data.text("rejection_id"),
             transformation_name=data.text("transformation_name"),
@@ -1352,6 +1407,9 @@ class RejectionRow:
                 else None
             ),
             compared=data.optional_nested("compared", Compared.from_json),
+            compared_branches=data.optional_array(
+                "compared_branches", Compared.from_json, non_empty=True
+            ),
         )
 
 
@@ -2304,6 +2362,7 @@ class RehearsalRow:
     kind: str | None = None
     witness: list[WitnessBinding] | None = None
     compared: Compared | None = None
+    compared_branches: list[Compared] = field(default_factory=list)
     error: str | None = None
     because: str | None = None
     reason: str | None = None
@@ -2320,6 +2379,7 @@ class RehearsalRow:
             base | required,
             optional | {"model_hash", "semantics_version"},
         )
+        _one_blame(data)
         return cls(
             transition_id=data.text("transition_id"),
             transformation=data.text("transformation"),
@@ -2343,6 +2403,9 @@ class RehearsalRow:
                 else None
             ),
             compared=data.optional_nested("compared", Compared.from_json),
+            compared_branches=data.optional_array(
+                "compared_branches", Compared.from_json, non_empty=True
+            ),
             error=data.optional_text("error"),
             because=(
                 data.member("because", _REHEARSAL_UNREPLAYABLE) if "because" in data else None
@@ -2353,7 +2416,10 @@ class RehearsalRow:
 
 _REHEARSAL_ROW_SHAPES: dict[str, tuple[frozenset[str], frozenset[str]]] = {
     "different_delta": (frozenset({"recorded", "candidate"}), frozenset()),
-    "would_reject": (frozenset({"rule", "kind"}), frozenset({"witness", "compared"})),
+    "would_reject": (
+        frozenset({"rule", "kind"}),
+        frozenset({"witness", "compared", "compared_branches"}),
+    ),
     "would_error": (frozenset({"error", "kind"}), frozenset()),
     "unreplayable": (frozenset({"because", "reason"}), frozenset()),
 }
@@ -2367,6 +2433,7 @@ _REHEARSAL_ROW_OPTIONAL = frozenset(
         "kind",
         "witness",
         "compared",
+        "compared_branches",
         "error",
         "because",
         "reason",
@@ -2776,6 +2843,28 @@ class RequiredElsewhere:
 
 
 @dataclass(frozen=True)
+class ProvisionedHistoryIndex:
+    """With ``--history``: the audit log's index that history views and
+    their lookups read through. A deployment's choice; no run prunes it."""
+
+    action: str
+    name: str
+    detail: str | None = None
+
+    @classmethod
+    def from_json(cls, payload: object) -> ProvisionedHistoryIndex:
+        data = _strict("history index", payload, {"action", "name"}, optional={"detail"})
+        return cls(
+            action=data.member(
+                "action",
+                {"keep", "create", "repair_invalid", "satisfied_externally", "conflict"},
+            ),
+            name=data.text("name"),
+            detail=data.optional_text("detail"),
+        )
+
+
+@dataclass(frozen=True)
 class ProvisionReport:
     """What `provision indexes` planned and did, over every programme the
     call named."""
@@ -2791,13 +2880,16 @@ class ProvisionReport:
     # position is not known. While any, no statistics object is stale;
     # provisioning them again records it.
     positions_unknown_for: list[str]
+    history: ProvisionedHistoryIndex | None = None
 
     @property
     def has_conflict(self) -> bool:
         """Something under Morpholog's own name has another definition. The
         run applied nothing and an operator has to look."""
-        return any(i.action == "conflict" for i in self.indexes) or any(
-            s.action == "conflict" for s in self.statistics
+        return (
+            any(i.action == "conflict" for i in self.indexes)
+            or any(s.action == "conflict" for s in self.statistics)
+            or (self.history is not None and self.history.action == "conflict")
         )
 
     @property
@@ -2810,8 +2902,10 @@ class ProvisionReport:
         did, so its actions read `create` and this is false straight after
         a successful apply. Gate an applying run on `applied` and not
         `has_conflict`, and a check run on this."""
-        return all(i.action in ("keep", "satisfied_externally") for i in self.indexes) and all(
-            s.action == "keep" for s in self.statistics
+        return (
+            all(i.action in ("keep", "satisfied_externally") for i in self.indexes)
+            and all(s.action == "keep" for s in self.statistics)
+            and (self.history is None or self.history.action in ("keep", "satisfied_externally"))
         )
 
     @property
@@ -2831,6 +2925,7 @@ class ProvisionReport:
             payload,
             {"applied", "dry_run", "prune", "programs", "indexes", "statistics",
              "required_elsewhere", "positions_unknown_for"},
+            optional={"history"},
         )
         return cls(
             applied=data.flag("applied"),
@@ -2841,6 +2936,7 @@ class ProvisionReport:
             statistics=data.array("statistics", ProvisionedStatistics.from_json),
             required_elsewhere=data.array("required_elsewhere", RequiredElsewhere.from_json),
             positions_unknown_for=data.texts("positions_unknown_for"),
+            history=data.optional_nested("history", ProvisionedHistoryIndex.from_json),
         )
 
 
@@ -4576,6 +4672,28 @@ class ViewColumn:
 
 
 @dataclass(frozen=True)
+class ViewLookup:
+    """A generated history lookup: the SQL function, in the view's schema,
+    and the key fields it takes as parameters, in order. It returns one
+    entity's rows of the history view."""
+
+    function: str
+    key: list[str] = field(default_factory=list)
+
+    @classmethod
+    def from_json(cls, payload: object) -> ViewLookup:
+        data = _strict("view_lookup", payload, {"function", "key"})
+        key = data.array("key", _key_item)
+        if not key:
+            raise EnvelopeError("view_lookup: key is empty")
+        return cls(function=data.text("function"), key=key)
+
+
+def _key_item(value: object) -> str:
+    return _text("key field", value)
+
+
+@dataclass(frozen=True)
 class ViewDescription:
     """One generated view. ``identity`` lists the column sets whose values
     identify a row: the keys the programme guarantees, or every field when
@@ -4584,7 +4702,8 @@ class ViewDescription:
     ``_morpholog_arguments`` column where the view has one. A live derived
     view may have none. A ``history`` view holds the operations the audit
     log records on the predicate, and its identity is the operation's
-    place in the log."""
+    place in the log; ``lookups`` names a function per declared key that
+    returns one entity's rows of it."""
 
     predicate: str
     view: str
@@ -4592,6 +4711,7 @@ class ViewDescription:
     columns: list[ViewColumn] = field(default_factory=list)
     identity: list[list[str]] = field(default_factory=list)
     source: str | None = None
+    lookups: list[ViewLookup] = field(default_factory=list)
 
     @classmethod
     def from_json(cls, payload: object) -> ViewDescription:
@@ -4599,9 +4719,10 @@ class ViewDescription:
             "view_description",
             payload,
             {"predicate", "view", "kind", "columns", "identity"},
-            {"source"},
+            {"source", "lookups"},
         )
         source = data.member("source", {"live", "cache"}) if "source" in data else None
+        lookups = data.array("lookups", ViewLookup.from_json) if "lookups" in data else []
         return cls(
             predicate=data.text("predicate"),
             view=data.text("view"),
@@ -4609,6 +4730,7 @@ class ViewDescription:
             columns=data.array("columns", ViewColumn.from_json),
             identity=data.array("identity", lambda item: parse_list(item, _text_item)),
             source=source,
+            lookups=lookups,
         )
 
     def single_key(self) -> str | None:
@@ -4641,12 +4763,12 @@ class ViewSurface:
             payload,
             {"format", "programme", "model_hash", "schema", "catalog", "seal_table", "views"},
         )
-        if data.raw("format") != 4:
+        if data.raw("format") != 5:
             raise EnvelopeError(
-                f"view_surface: format {data.raw('format')!r} is not the 4 this client reads"
+                f"view_surface: format {data.raw('format')!r} is not the 5 this client reads"
             )
         return cls(
-            format=4,
+            format=5,
             programme=data.text("programme"),
             model_hash=_hash(data, "model_hash"),
             schema=data.text("schema"),

@@ -35,6 +35,7 @@ from glasshouse.commit import (
     models,
 )
 from glasshouse.compute.terms import terms_version_id
+from glasshouse.imports.report import wire_text
 from glasshouse.sweep import overdue_books, sweep_once
 from tests.support import BINARY, DB, committed, login_role, needs_live_stack, refused
 
@@ -242,9 +243,16 @@ def test_a_book_over_its_cap_trades_only_towards_flat(ledger: GlasshouseClient) 
     assert asked(capture("breached", "B-FLIP", "sell", "240")) == "breach_must_shrink"
     # (An instruction cannot be asked about: placing one reads the clock,
     # and `explain` has none. A refusal records nothing either.)
-    assert refused(ledger, instruct("breached", "B-FLIP", "sell", "240"), "trader").rule == (
-        "breach_must_shrink"
-    )
+    flip = refused(ledger, instruct("breached", "B-FLIP", "sell", "240"), "trader")
+    assert flip.rule == "breach_must_shrink"
+    # The rule is an `or` of two comparisons, and from v0.0.21 the refusal
+    # names both, in the rule's order: within the cap, or smaller than
+    # before. Neither held.
+    assert flip.compared is None
+    assert [(b.op, wire_text(b.left), wire_text(b.right)) for b in flip.compared_branches] == [
+        ("<=", "120 MW", "100 MW"),
+        ("<", "120 MW", "120 MW"),
+    ]
     # Across flat but smaller, +120 to -110: admissible.
     assert asked(capture("breached", "B-CROSS", "sell", "230")) == "admissible"
     # Towards flat: an instruction to sell, judged as if it filled, and a

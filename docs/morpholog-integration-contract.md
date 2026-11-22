@@ -886,3 +886,37 @@ What the regenerated client changed, none of it breaking here: `check`, `migrate
 **Not done, with the reason.** The walk-back page from one trade's figure (#121's scope) is a different feature: a receipt certifies a read, a page explains a row. A receipt per trade waits for per-key completeness (morpholog#380). No checkpoint is recorded automatically after each roll or revaluation: the proof records its own, and a desk wanting yesterday's figures provable should checkpoint at its close (`glasshouse checkpoint --covering <transition> --wait 30`). Witnessed or signed checkpoints (#80, #42) would anchor a proof outside our own database.
 
 **Counts.** Pure 359 passed, 164 skipped. Live 523 passed (the one failure in the full run was the view count, 36 to 37, fixed and passing), coverage 95.0 percent.
+
+## 43. Each branch's figures, and repeated sums computed once: pin **v0.0.20** → **v0.0.21**, 22/11/2026, no model change
+
+Thirty-two merges upstream. Migration 032 (`compared_branches` on `morpholog.rejections`). Semantics stays 6.
+
+**The pin.** `scripts/install-morpholog.sh` names v0.0.21 with the three published checksums (fetched with `gh release download ... -O -`, not transcribed). On the unchanged programme `check --verbose` says `compiled`, `all bound` and `body read plan: 1 whole` (the same `establish_ledger` read), and `check --strict` is clean: neither of the two shapes v0.0.21 newly refuses (#908, a timestamp comparison in one branch of an `or` through a definition's parameters; #872, a derived `value` out of its column) is in our file. **MODEL_HASH is unchanged** (`ba7374d4…`). The client regenerated on four of six files (`__init__`, `adapter`, `envelopes`, `session`); `models` and `values` are byte-identical.
+
+**The views are byte-identical.** Format 5's new parts are for history views (`generate views --history`), which we do not generate, so there are no `<view>_by_<key>` lookups to grant `EXECUTE` on and no history view to drop with `CASCADE`. `provision indexes --history` is not run: it serves history views, and our Audit screen and refusals read the log through `audit_named(mentions=)` and `rejections(mentions=)`, which do not read history views. If a per-trade history page (#121) reads one later, the index and the lookups come with it.
+
+**`propose --batch` rows** (#884): the one batch caller, `imports/trades.py`, sends `transformation`, `actor` and `args_named` per row and passes `--explain-on-reject` as the flag, so no row carries a field the binary does not read.
+
+**Adopted: each branch's figures** (#910, our morpholog#862). A refusal at an `or` of comparisons carries `compared_branches` and no `compared`. Ours is `breach_must_shrink` (`abs(before) <= cap or abs(after) < abs(before)`), which used to refuse with no figures.
+- `imports/report.figures()` renders either shape. An import receipt, `/explain`'s prose and the CLI say `breach_must_shrink: none of 120 MW <= 100 MW, 120 MW < 120 MW holds`.
+- The API's `GateRejection`, `InvariantRejection` and `RecordedRefusal` gain `compared_branches` (a list, empty when there is one comparison or none). MCP's `ProposalOutcome.refusal` and `recent_refusals` carry it through the same models, and the refusal log's `summary` line names the branches.
+- `/explain`'s `GateRejection` also gains `related_parameters` (#882, our morpholog#861): what the refusing gate reads, as a commit refusal already said. The workbench does not mark a column with it yet.
+
+**Tests.** The flip from +120 to -120 in a book capped at 100 (`test_a_book_over_its_cap_trades_only_towards_flat`) now asserts the two branches and their figures, in the rule's order. A pure test pins the receipt line for a branched refusal.
+
+**A test that asserted what is not promised.** CI failed once on `test_a_roll_racing_a_mark_never_admits_a_mark_for_a_day_already_left` (0 of 20 locally on either binary): the mark and the roll both committed and the mark sorted after the roll in `audit_named`. The Morpholog agent confirmed this is documented, not a defect: a transaction takes its audit order when it writes its first audit row, after its reads, so the audit order is the order of effects, not SERIALIZABLE's order. The mark read day one before the roll removed it, so it serialises first (one rw-antidependency, no cycle) and still sorts after. What holds is that the committed mark is against day one's official curve, so the test now asserts that. A consequence worth knowing: `rehearse` and `evaluate` re-decide each row against its audit prefix, so such a mark could show as `would_reject` there; they promise the same answer only for a serial history.
+
+**Rehearsed on a kept ledger.** Main (8b83cca) on v0.0.20 seeded a fresh database (78 transitions). This branch on v0.0.21 then ran `provision`: migration 032 and everything after it in 2.1 s, indexes 112 keep and 12 statistics objects keep, `provision indexes --check` current, `audit verify` consistent, all six `glasshouse verify` legs ok, readiness caught up. It wrote one row (a limit change) and `audit verify` passed over 79. `rehearse` of the programme over those 79 rows: 79 `same`, nothing would be refused, nothing unreplayable. **Rollback is not a redeploy**: main's `provision` on v0.0.20 refuses by name before writing (`schema_ahead: this binary (migration 31) is older than the database (migration 32)`); recover with the previous commit's `seed --reset` or a restore of the pre-deploy dump.
+
+**Load, measured.** Section 41's benchmark: a fresh database books the 106 rows of `~/backups/glasshouse/bench-limit-rows.ndjson` (a book capped with 100 month-long trades), then `explain` asks about a one-year capture into it. Three runs each, same programme, nothing else running:
+
+| | book 106 rows | dry-run one-year capture |
+|---|---|---|
+| v0.0.20 | 4.6-4.7 s | 3.6-3.7 s |
+| v0.0.21 | 4.1-4.2 s | 0.19-0.20 s |
+
+The dry-run is about 19 times faster. This is #888 (one evaluation computes each repeated `sum` once for the same values and state), which upstream built from our morpholog#864: our limit definitions name figures with `let`, which is text substitution, so the same sums were computed many times per breakpoint. Each import preview row, `/explain` and MCP `explain_trade` takes this path. A commit judges the same gates, so capture into a large capped book should gain too; the 106-row booking is mostly small trades into an empty book and gains about 11 percent.
+
+**Not adopted, with the reason.** History views, their lookups and the history index (above). `local_days` / `business_days` in the client (#887): `placed_on` still comes from the caller (section 41). Live or cache per derived claim (#873): our derived claims stay on the cache for the same reason as before, and none is read hot enough to need a live view.
+
+**Counts.** Pure 360 passed, 164 skipped. Live 524 passed, coverage 95.0 percent.
