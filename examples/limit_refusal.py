@@ -1,14 +1,17 @@
-"""An agent meets the position limit.
+"""A trading agent meets the position limit.
 
-A plain MCP client, no model and no API key: it reads the cap on a book,
-reads the book's position in one delivery hour, then buys 2 MW in that
-hour again and again until the rules refuse, and prints the refusal.
+A plain MCP client, no model and no API key, acting as the seeded trading
+agent `algo`: it reads the cap on a book, reads the book's position in one
+delivery hour, then buys 2 MW in that hour under its mandate (`M-ALGO`)
+again and again, with no person in the loop, until the rules refuse, and
+prints the refusal.
 
 Against a local Glasshouse (the default; it starts the server itself):
 
     uv run python examples/limit_refusal.py
 
-Against a hosted one, with the token its operator gave you:
+Against a hosted one, with a token its operator gave you for `algo` (and
+`algo`'s model set in its GLASSHOUSE_MCP_MODELS):
 
     GLASSHOUSE_MCP_TOKEN=... uv run python examples/limit_refusal.py --url https://host/mcp
 """
@@ -26,6 +29,9 @@ from mcp import Client, StdioServerParameters
 from mcp.client.streamable_http import streamable_http_client
 
 BOOK = "spec-de"
+AGENT = "algo"
+MANDATE = "M-ALGO"
+MODEL = "example-strategy-1"  # the model the seed's approved record names
 HOUR = dt.datetime(2026, 7, 1, 12, tzinfo=dt.UTC)  # an hour the demo book already holds
 STEP_MW = "2"
 
@@ -36,7 +42,9 @@ def connect(url: str | None) -> Client:
         # stdout. It reads GLASSHOUSE_DATABASE_URL like every command.
         return Client(
             StdioServerParameters(
-                command=sys.executable, args=["-m", "glasshouse.cli", "mcp"], env=dict(os.environ)
+                command=sys.executable,
+                args=["-m", "glasshouse.cli", "mcp", "--actor", AGENT, "--model", MODEL],
+                env=dict(os.environ),
             )
         )
     token = os.environ["GLASSHOUSE_MCP_TOKEN"]
@@ -62,18 +70,16 @@ async def run(url: str | None) -> int:
         for attempt in range(1, 51):
             outcome = (
                 await agent.call_tool(
-                    "propose_trade",
+                    "trade_under_mandate",
                     {
-                        "book": BOOK,
+                        "mandate": MANDATE,
                         "trade": f"AGENT-{run_id}-{attempt}",
                         "counterparty": "nordkraft",
-                        "market": "de-power",
                         "direction": "buy",
                         "quantity": STEP_MW,
                         "price": "80",
                         "delivery_start": HOUR.isoformat(),
                         "delivery_end": hour_end.isoformat(),
-                        "trade_date": "2026-06-30",
                     },
                 )
             ).structured_content

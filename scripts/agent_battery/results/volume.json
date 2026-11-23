@@ -1,0 +1,14 @@
+{
+  "ms_median_first_50": 247.2,
+  "ms_median_last_50": 285.8,
+  "attempted": 501,
+  "accepted": 500,
+  "refused": [
+    "500: volume_within_mandate: 501 MWh <= 500 MWh does not hold"
+  ],
+  "seconds_total": 131.66,
+  "ms_median": 261.7,
+  "ms_p95": 290.4,
+  "ms_max": 318.4,
+  "oracle": []
+}

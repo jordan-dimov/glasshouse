@@ -28,8 +28,14 @@ import typer
 from pydantic import ValidationError
 from typer.main import get_command
 
-from glasshouse.agents import Desk, build_server
-from glasshouse.api import fills
+from glasshouse.agents import (
+    Desk,
+    NotAnAgentError,
+    build_server,
+    offset_instant,
+    require_declared_agent,
+)
+from glasshouse.api import fills, mandates
 from glasshouse.commit import (
     MODEL_FILE,
     VIEWS_SCHEMA,
@@ -40,6 +46,7 @@ from glasshouse.commit import (
     apply_views,
     exact_decimals,
 )
+from glasshouse.commit.morpholog_client import models
 from glasshouse.commit.morpholog_client.adapter import Request
 from glasshouse.commit.morpholog_client.envelopes import (
     CheckpointCreated,
@@ -274,6 +281,156 @@ def set_limit_command(
 
 
 @app.command(
+    "declare-agent",
+    help="Declare that an actor is an agent (an AI model or an algorithm). From then on it "
+    "books nothing through the acts people use, only under a mandate.",
+)
+def declare_agent_command(
+    org: Annotated[str, typer.Option(help="the organisation")],
+    agent: Annotated[str, typer.Option(help="the actor to declare an agent")],
+    actor: Annotated[str, typer.Option(help="who declares it (may grant permissions)")],
+    database_url: DatabaseUrl = "",
+) -> None:
+    client = _client(_db(database_url))
+    request = models.DeclareAgentRequest(org=org, agent=agent)
+    outcome = _committed_or_exit(client, request, actor)
+    print(f"{agent} is an agent in {org}; transition {outcome.transition_id}")
+
+
+@app.command(
+    "propose-mandate",
+    help="Propose a standing mandate for an agent: one book and market, a side, the largest "
+    "order (MW), the most energy in all (MWh), a price band, a delivery window and an end. "
+    "It admits no trade until a different person approves it.",
+)
+def propose_mandate_command(
+    org: Annotated[str, typer.Option(help="the organisation")],
+    mandate: Annotated[str, typer.Option(help="the mandate's id")],
+    agent: Annotated[str, typer.Option(help="the agent it is for")],
+    book: Annotated[str, typer.Option(help="the one book it may trade in")],
+    market: Annotated[str, typer.Option(help="the one market it may trade in")],
+    side: Annotated[str, typer.Option(help="buy, sell or both")],
+    max_order: Annotated[str, typer.Option(help="the largest single order, MW")],
+    max_volume: Annotated[str, typer.Option(help="the most energy it may trade in all, MWh")],
+    price_floor: Annotated[str, typer.Option(help="the lowest price, per MWh")],
+    price_ceiling: Annotated[str, typer.Option(help="the highest price, per MWh")],
+    deliver_from: Annotated[str, typer.Option(help="delivery no earlier than (UTC instant)")],
+    deliver_until: Annotated[str, typer.Option(help="delivery no later than (UTC instant)")],
+    valid_until: Annotated[str, typer.Option(help="when the mandate ends (UTC instant)")],
+    actor: Annotated[str, typer.Option(help="who proposes it (a person who may give mandates)")],
+    database_url: DatabaseUrl = "",
+) -> None:
+    client = _client(_db(database_url))
+    figures = _readable(
+        lambda: exact_decimals(
+            max_order=max_order,
+            max_volume=max_volume,
+            price_floor=price_floor,
+            price_ceiling=price_ceiling,
+        )
+    )
+    request = _readable(
+        lambda: models.ProposeMandateRequest(
+            org=org,
+            mandate=mandate,
+            agent=agent,
+            book=book,
+            market=market,
+            side=side,
+            max_order=figures["max_order"],
+            max_volume=figures["max_volume"],
+            price_floor=figures["price_floor"],
+            price_ceiling=figures["price_ceiling"],
+            deliver_from=offset_instant("deliver-from", deliver_from),
+            deliver_until=offset_instant("deliver-until", deliver_until),
+            valid_until=offset_instant("valid-until", valid_until),
+        )
+    )
+    outcome = _committed_or_exit(client, request, actor)
+    print(f"mandate {mandate} proposed for {agent}; transition {outcome.transition_id}")
+
+
+@app.command("approve-mandate", help="Approve a mandate, as a person who did not propose it.")
+def approve_mandate_command(
+    org: Annotated[str, typer.Option(help="the organisation")],
+    mandate: Annotated[str, typer.Option(help="the mandate's id")],
+    actor: Annotated[str, typer.Option(help="who approves it")],
+    database_url: DatabaseUrl = "",
+) -> None:
+    client = _client(_db(database_url))
+    request = models.ApproveMandateRequest(org=org, mandate=mandate)
+    outcome = _committed_or_exit(client, request, actor)
+    print(f"mandate {mandate} approved by {actor}; transition {outcome.transition_id}")
+
+
+@app.command(
+    "suspend-mandate",
+    help="Suspend a mandate at once and for good: the agent's next trade under it is refused.",
+)
+def suspend_mandate_command(
+    org: Annotated[str, typer.Option(help="the organisation")],
+    mandate: Annotated[str, typer.Option(help="the mandate's id")],
+    actor: Annotated[str, typer.Option(help="who suspends it")],
+    database_url: DatabaseUrl = "",
+) -> None:
+    client = _client(_db(database_url))
+    request = models.SuspendMandateRequest(org=org, mandate=mandate)
+    outcome = _committed_or_exit(client, request, actor)
+    print(f"mandate {mandate} suspended by {actor}; transition {outcome.transition_id}")
+
+
+@app.command(
+    "record-agent-model",
+    help="Record the model an agent runs on. It replaces the last record and drops its "
+    "approval: the agent's mandates admit nothing until a different person approves this one.",
+)
+def record_agent_model_command(
+    org: Annotated[str, typer.Option(help="the organisation")],
+    agent: Annotated[str, typer.Option(help="the agent")],
+    model: Annotated[str, typer.Option(help="the model with its version")],
+    actor: Annotated[str, typer.Option(help="who records it")],
+    database_url: DatabaseUrl = "",
+) -> None:
+    client = _client(_db(database_url))
+    request = models.RecordAgentModelRequest(org=org, agent=agent, model=model)
+    outcome = _committed_or_exit(client, request, actor)
+    print(f"{agent} runs on {model}, awaiting approval; transition {outcome.transition_id}")
+
+
+@app.command(
+    "approve-agent-model",
+    help="Approve an agent's model record, as a person who did not record it.",
+)
+def approve_agent_model_command(
+    org: Annotated[str, typer.Option(help="the organisation")],
+    agent: Annotated[str, typer.Option(help="the agent")],
+    model: Annotated[str, typer.Option(help="the model the record names")],
+    actor: Annotated[str, typer.Option(help="who approves it")],
+    database_url: DatabaseUrl = "",
+) -> None:
+    client = _client(_db(database_url))
+    request = models.ApproveAgentModelRequest(org=org, agent=agent, model=model)
+    outcome = _committed_or_exit(client, request, actor)
+    print(f"{agent} on {model} approved by {actor}; transition {outcome.transition_id}")
+
+
+@app.command("mandates", help="Every agent's mandate, where it stands and how much is used.")
+def mandates_command(
+    org: Annotated[str, typer.Option(help="the organisation")],
+    database_url: DatabaseUrl = "",
+) -> None:
+    client = _client(_db(database_url))
+    for row in mandates.list_mandates(client, org=org):
+        model = f"{row.model} ({'approved' if row.model_approved else 'not approved'})"
+        print(
+            f"{row.mandate}  {row.agent}  {row.book}/{row.market} {row.side}  "
+            f"order <= {row.max_order} MW  used {row.used} of {row.max_volume} MWh "
+            f"in {row.trades} trade(s)  {row.price_floor}-{row.price_ceiling}  "
+            f"until {row.valid_until.isoformat()}  {row.standing}  model {model}"
+        )
+
+
+@app.command(
     "roll-business-date",
     help="Roll an organisation's business date forward. From then on its valuations use that "
     "day's official curves; the days before keep their curves and marks.",
@@ -420,12 +577,27 @@ def sweep_command(
 def mcp_command(
     actor: Annotated[str, typer.Option(help="the actor the agent acts as")] = "agent",
     org: Annotated[str, typer.Option(help="the organisation it works in")] = "",
+    model: Annotated[
+        str,
+        typer.Option(
+            help="the model the agent runs on, as you know it: a mandated trade names it, "
+            "and is admitted only if a person approved a record naming the same model"
+        ),
+    ] = "",
     database_url: DatabaseUrl = "",
 ) -> None:
     settings = get_settings()
     db = _db(database_url)
     engine = sa.create_engine(engine_url(db))
-    desk = Desk(client=_client(db), engine=engine, actor=actor, org=org or settings.demo_org)
+    client = _client(db)
+    served = org or settings.demo_org
+    try:
+        require_declared_agent(client, org=served, actor=actor)
+    except NotAnAgentError as person:
+        engine.dispose()
+        print(f"error: {person}", file=sys.stderr)
+        raise typer.Exit(code=2) from None
+    desk = Desk(client=client, engine=engine, actor=actor, org=served, model=model or None)
     try:
         # stdout is the protocol's channel; our logs already go to stderr.
         build_server(lambda: desk).run("stdio")

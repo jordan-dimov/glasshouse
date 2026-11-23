@@ -29,6 +29,10 @@ from glasshouse.compute.store import engine_url
 from glasshouse.seed import AGENT, ORG
 from tests.support import BINARY, DB, needs_live_stack, seeded_ledger
 
+# Who places the instructions below: a trader. An agent may not
+# (`actor_is_not_an_agent`); it trades only under a mandate.
+TRADER = "alice"
+
 pytestmark = needs_live_stack
 
 DAY = dt.datetime(2026, 7, 1, tzinfo=dt.UTC)
@@ -78,7 +82,7 @@ def desk() -> Any:
     client, engine = seeded_ledger()
     engine.dispose()
     reads = sa.create_engine(engine_url(DB))
-    yield Desk(client=client, engine=reads, actor=AGENT, org=ORG)
+    yield Desk(client=client, engine=reads, actor=TRADER, org=ORG)
     reads.dispose()
 
 
@@ -101,7 +105,7 @@ def test_the_walk_through_place_refuse_cancel_fit(desk: Desk) -> None:
     # instructed quantity against the room the trades leave.
     placed = call(desk, "place_instruction", instruction("WALK-1", 12, "4"))
     assert placed["accepted"], placed
-    assert placed["actor"] == AGENT
+    assert placed["actor"] == TRADER
 
     refused = call(desk, "propose_trade", trade("WALK-T", 12, "2"))
     assert refused["accepted"] is False
@@ -120,7 +124,11 @@ def test_the_walk_through_place_refuse_cancel_fit(desk: Desk) -> None:
     assert fits["accepted"], fits
 
     (listed,) = [row for row in call(desk, "list_instructions") if row["instruction"] == "WALK-1"]
-    assert (listed["status"], listed["holding_mw"], listed["proposer"]) == ("cancelled", "0", AGENT)
+    assert (listed["status"], listed["holding_mw"], listed["proposer"]) == (
+        "cancelled",
+        "0",
+        TRADER,
+    )
     assert listed["currency"] == "EUR"
     # A second cancel has nothing to cancel.
     again = call(desk, "cancel_instruction", {"instruction": "WALK-1"})
@@ -165,9 +173,19 @@ def test_open_instructions_are_never_set_against_the_other_side(desk: Desk) -> N
     assert past_it["refusal"]["compared"] == {"op": "<=", "left": "46 MW", "right": "45 MW"}
 
 
-def test_the_agent_may_not_instruct_where_it_was_not_given(desk: Desk) -> None:
-    refused = call(desk, "place_instruction", instruction("HEDGE-1", 2, "1") | {"book": "hedge-de"})
+def test_an_agent_may_not_instruct_even_with_the_right(desk: Desk) -> None:
+    # A trader without the right is refused by it; an agent given the right
+    # is refused for being an agent: instructions are a person's act.
+    carol = Desk(client=desk.client, engine=desk.engine, actor="carol", org=ORG)
+    refused = call(
+        carol, "place_instruction", instruction("HEDGE-1", 2, "1") | {"book": "hedge-de"}
+    )
     assert refused["refusal"]["rule"] == "may_instruct"
+    grant = models.GrantInstructAuthorityRequest(principal=AGENT, org=ORG, book="spec-de")
+    assert isinstance(desk.client.submit(grant, actor="bootstrap"), Committed)
+    agent = Desk(client=desk.client, engine=desk.engine, actor=AGENT, org=ORG)
+    refused = call(agent, "place_instruction", instruction("AG-I-1", 2, "1"))
+    assert refused["refusal"]["rule"] == "actor_is_not_an_agent"
 
 
 def test_an_instruction_that_cannot_be_read_is_the_callers_error(desk: Desk) -> None:
@@ -208,7 +226,7 @@ def test_an_overdue_instruction_frees_its_room_when_its_time_passes(desk: Desk) 
     assert call(desk, "explain_trade", trade("LAPSE-T", 16, "1"))["admissible"]
     assert call(desk, "propose_trade", trade("LAPSE-T", 16, "1"))["accepted"]
     lapse = models.LapseOverdueInstructionsRequest(org=ORG, book="spec-de")
-    assert isinstance(desk.client.submit(lapse, actor=AGENT), Committed)
+    assert isinstance(desk.client.submit(lapse, actor=TRADER), Committed)
     (ended,) = [r for r in call(desk, "list_instructions") if r["instruction"] == "LAPSE-1"]
     assert (ended["status"], ended["holding_mw"]) == ("lapsed", "0")
 
@@ -246,11 +264,12 @@ def test_the_api_and_the_positions_screen_show_what_is_held(
 def test_a_second_person_approves_and_never_the_one_who_placed_it(
     desk: Desk, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    # The hosted way in, with a token per actor. spec-de requires
-    # approval. `demo` may both instruct and approve there, which is the
-    # case the rule is for: it places an instruction and cannot approve
-    # its own; `risk-manager` can; the agent, with no right to approve,
-    # is refused for that. Three tokens, three names in the record.
+    # spec-de requires approval. `demo` may both instruct and approve
+    # there, which is the case the rule is for: it places an instruction
+    # and cannot approve its own; `risk-manager` can; the agent, with no
+    # right to approve, is refused for that. Three names in the record.
+    # People act through the tools in-process here: the hosted door
+    # serves agents only, and refuses a person's token outright.
     tokens = {
         "demo": "token-of-the-demo-desk",
         "risk-manager": "token-of-risk-manager",
@@ -261,55 +280,47 @@ def test_a_second_person_approves_and_never_the_one_who_placed_it(
     monkeypatch.setenv("GLASSHOUSE_MCP_TOKENS", json.dumps(tokens))
     monkeypatch.delenv("GLASSHOUSE_DEMO_PASSWORD", raising=False)
 
-    def tool(client: TestClient, token: str, name: str, arguments: dict[str, Any]) -> Any:
-        answer = client.post(
+    demo = Desk(client=desk.client, engine=desk.engine, actor="demo", org=ORG)
+    risk = Desk(client=desk.client, engine=desk.engine, actor="risk-manager", org=ORG)
+    agent = Desk(client=desk.client, engine=desk.engine, actor=AGENT, org=ORG)
+    with TestClient(create_app()) as client:
+        person = client.post(
             "/mcp",
             json={
                 "jsonrpc": "2.0",
                 "id": 1,
                 "method": "tools/call",
-                "params": {"name": name, "arguments": arguments},
+                "params": {"name": "list_instructions", "arguments": {}},
             },
             headers={
                 "Accept": "application/json, text/event-stream",
                 "MCP-Protocol-Version": "2025-06-18",
-                "Authorization": f"Bearer {token}",
+                "Authorization": f"Bearer {tokens['demo']}",
             },
-        )
-        assert answer.status_code == 200, answer.text
-        structured = answer.json()["result"]["structuredContent"]
-        return structured.get("result", structured)
-
-    with TestClient(create_app()) as client:
-        placed = tool(client, tokens["demo"], "place_instruction", instruction("APPR-1", 5, "1"))
+        ).json()["result"]
+        assert person["isError"] is True
+        assert "not declared an agent" in person["content"][0]["text"]
+        placed = call(demo, "place_instruction", instruction("APPR-1", 5, "1"))
         assert (placed["accepted"], placed["actor"]) == (True, "demo")
         (waiting,) = [
             row
-            for row in tool(client, tokens["demo"], "list_instructions", {"open_only": True})
+            for row in call(demo, "list_instructions", {"open_only": True})
             if row["instruction"] == "APPR-1"
         ]
         assert (waiting["approval"], waiting["approved_by"]) == ("awaiting", None)
 
-        own = tool(client, tokens["demo"], "approve_instruction", {"instruction": "APPR-1"})
+        own = call(demo, "approve_instruction", {"instruction": "APPR-1"})
         assert own["accepted"] is False
         assert own["refusal"]["rule"] == "approver_is_not_proposer"
-        no_right = tool(
-            client, "token-of-the-agent", "approve_instruction", {"instruction": "APPR-1"}
-        )
+        no_right = call(agent, "approve_instruction", {"instruction": "APPR-1"})
         assert (no_right["actor"], no_right["refusal"]["rule"]) == (AGENT, "may_approve")
 
-        approved = tool(
-            client, tokens["risk-manager"], "approve_instruction", {"instruction": "APPR-1"}
-        )
+        approved = call(risk, "approve_instruction", {"instruction": "APPR-1"})
         assert (approved["accepted"], approved["actor"]) == (True, "risk-manager")
-        twice = tool(
-            client, tokens["risk-manager"], "approve_instruction", {"instruction": "APPR-1"}
-        )
+        twice = call(risk, "approve_instruction", {"instruction": "APPR-1"})
         assert twice["refusal"]["rule"] == "instruction_not_yet_approved"
         (done,) = [
-            row
-            for row in tool(client, "token-of-the-agent", "list_instructions", {})
-            if row["instruction"] == "APPR-1"
+            row for row in call(agent, "list_instructions", {}) if row["instruction"] == "APPR-1"
         ]
         assert (done["approval"], done["approved_by"], done["proposer"]) == (
             "approved",
@@ -317,10 +328,8 @@ def test_a_second_person_approves_and_never_the_one_who_placed_it(
             "demo",
         )
         # Turning one down ends it and frees its room.
-        tool(client, tokens["demo"], "place_instruction", instruction("APPR-2", 5, "1"))
-        rejected = tool(
-            client, tokens["risk-manager"], "reject_instruction", {"instruction": "APPR-2"}
-        )
+        call(demo, "place_instruction", instruction("APPR-2", 5, "1"))
+        rejected = call(risk, "reject_instruction", {"instruction": "APPR-2"})
         assert rejected["accepted"], rejected
         page = client.get("/ui/positions", params={"org": ORG}).text
 

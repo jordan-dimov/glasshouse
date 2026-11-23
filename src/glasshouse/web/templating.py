@@ -111,6 +111,39 @@ RULES_IN_PLAIN_WORDS = {
     "delivery_is_forward": "Delivery must end after it starts.",
     "delivery_is_whole_hours": "Delivery must start and end on the hour.",
     "delivery_is_at_most_a_year": "Delivery can last at most a year.",
+    "actor_is_not_an_agent": (
+        "This name is an agent. An agent does not do this; it trades only under a mandate."
+    ),
+    "principal_is_not_an_agent": "That name is an agent, and an agent cannot hold this right.",
+    "agent_is_new": "That name is already declared an agent.",
+    "agent_cannot_grant": "That name may grant rights, so it cannot be declared an agent.",
+    "agent_cannot_mandate": "That name may give mandates, so it cannot be declared an agent.",
+    "may_mandate": "This name is not allowed to give, approve or suspend mandates.",
+    "mandate_is_for_an_agent": "A mandate is for a name declared an agent.",
+    "mandate_is_new": "A mandate with this id already exists.",
+    "mandate_runs_into_the_future": "The mandate's end has already passed.",
+    "mandate_not_yet_approved": "This mandate has already been approved.",
+    "mandate_not_suspended": "This mandate has been suspended.",
+    "mandate_not_already_suspended": "This mandate is already suspended.",
+    "may_suspend": "Only someone who may give mandates, or the agent itself, may suspend one.",
+    "model_is_of_an_agent": "A model is recorded only for a name declared an agent.",
+    "approver_is_not_recorder": "The person who recorded a model cannot approve it themselves.",
+    "model_not_yet_approved": "This agent's model has already been approved.",
+    "actor_holds_the_mandate": "This mandate was given to another agent.",
+    "mandate_is_approved": "Nobody has approved this mandate yet.",
+    "mandate_has_not_expired": "This mandate has run out.",
+    "model_is_approved": (
+        "The model this agent runs on is not the one a person approved, so its mandates "
+        "admit nothing until the new model is approved."
+    ),
+    "side_within_mandate": "The mandate does not allow this direction.",
+    "order_within_mandate": "This order is larger than the mandate's largest order.",
+    "volume_within_mandate": "This would take the mandate past the most it may trade in all.",
+    "price_not_below_mandate": "The price is below the mandate's price band.",
+    "price_not_above_mandate": "The price is above the mandate's price band.",
+    "delivery_not_before_mandate": "Delivery starts before the mandate's delivery window.",
+    "delivery_not_after_mandate": "Delivery ends after the mandate's delivery window.",
+    "mandate_was_given": "There is no such mandate.",
 }
 
 # Each act of the rule file in a few plain words, for the Audit screen;
@@ -145,6 +178,14 @@ ACTS_IN_PLAIN_WORDS = {
     "register_curve": "Enter prices",
     "correct_curve": "Correct prices",
     "admit_valuation": "Value a trade",
+    "declare_agent": "Declare an agent",
+    "grant_mandate_authority": "Allow giving mandates",
+    "propose_mandate": "Propose an agent's mandate",
+    "approve_mandate": "Approve an agent's mandate",
+    "suspend_mandate": "Suspend an agent's mandate",
+    "record_agent_model": "Record an agent's model",
+    "approve_agent_model": "Approve an agent's model",
+    "trade_under_mandate": "Trade under a mandate",
 }
 
 # What each kind of breach means, for the Positions screen. The kinds

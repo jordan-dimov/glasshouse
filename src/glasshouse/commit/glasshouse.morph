@@ -192,6 +192,74 @@ predicate BreachAnswered(org: Subject, trade: Subject, kind: Subject, answered_b
     unique by (trade, kind)
     append only
 
+-- Agents and their mandates.
+--
+-- An agent is an actor the organisation has declared to be software
+-- acting on its own judgement: an AI model, an algorithm. Within a
+-- book's limits is not the same as authorised. So an agent books
+-- nothing through the acts people use (capture, amend, instruct,
+-- approve, set a cap, answer a breach, ...): each of those refuses an
+-- agent by name (`actor_is_not_an_agent`). An agent trades only under a
+-- mandate, in trade_under_mandate.
+--
+-- A mandate is what a desk approves for an algorithm once, so that it
+-- can then trade freely inside it: one book and market, buy, sell or
+-- both, the largest single order (power, MW), the most energy it may
+-- trade in all (MWh), a price band, a delivery window, and how long it
+-- lasts. A person proposes it,
+-- a different person approves it, and either may suspend it at once.
+-- The agent can do none of those for itself: it can only suspend its
+-- own mandate. Widening or renewing a mandate is a new mandate, with
+-- its own approval.
+--
+-- A mandate also holds only while the model the agent runs on is the
+-- one a person approved (AgentModel below). A new model means no trade
+-- is admitted until someone other than whoever recorded it approves the
+-- new record. Reading is never stopped.
+predicate AgentActor(org: Subject, agent: Subject)
+    append only
+
+-- Who may propose, approve and suspend mandates, and record and approve
+-- the model an agent runs on. Never an agent.
+predicate MayMandate(actor: Subject, org: Subject)
+
+predicate Mandate(org: Subject, mandate: Subject, agent: Subject, book: Subject, market: Subject, side: Subject, max_order: Decimal[MW], max_volume: Decimal[MWh], price_floor: Decimal, price_ceiling: Decimal, deliver_from: Timestamp, deliver_until: Timestamp, valid_until: Timestamp, proposer: Subject)
+    unique by (org, mandate)
+    append only
+
+-- A mandate's approval. Given once, by a person who neither proposed it
+-- nor holds it.
+predicate MandateApproved(org: Subject, mandate: Subject, approver: Subject)
+    unique by (org, mandate)
+    append only
+
+-- A suspended mandate admits no more trades. Final: to trade again, a
+-- new mandate is proposed and approved.
+predicate MandateSuspended(org: Subject, mandate: Subject, suspended_by: Subject)
+    unique by (org, mandate)
+    append only
+
+-- A trade an agent booked under a mandate, and the energy it books: its
+-- MW times its delivery hours, so a four-hour order counts four times a
+-- one-hour one. The mandate's running total is the sum of these, worked
+-- out at each trade, never stored: splitting one large order into small
+-- ones gains nothing. (A later amendment, by a person, does not change
+-- the energy counted here.)
+predicate TradeUnderMandate(org: Subject, mandate: Subject, trade: Subject, energy: Decimal[MWh])
+    unique by (trade)
+    append only
+
+-- The model an agent runs on, as recorded by a person: its name with
+-- its version (`claude-opus-5-5`). One record stands per agent;
+-- recording another replaces it and drops its approval.
+predicate AgentModel(org: Subject, agent: Subject, model: Subject, recorded_by: Subject)
+    unique by (org, agent)
+
+-- A model record's approval, by someone other than whoever recorded it
+-- and never the agent.
+predicate AgentModelApproved(org: Subject, agent: Subject, model: Subject, approver: Subject)
+    unique by (org, agent)
+
 -- Rules that hold for every claim, whichever act wrote it.
 -- (Uniqueness, the single official pointer and the version chains are
 -- generated from the clauses on the predicates above.)
@@ -258,6 +326,39 @@ invariant breach_names_a_booked_trade:
 invariant answer_names_a_recorded_breach:
     BreachAnswered(org: org, trade: trade, kind: kind, ..)
     implies Breach(org: org, trade: trade, kind: kind, ..)
+
+invariant mandate_side_is_buy_sell_or_both:
+    Mandate(org: org, mandate: mandate, side: side, ..)
+    implies side in (#buy, #sell, #both)
+
+invariant mandate_order_cap_is_positive:
+    Mandate(org: org, mandate: mandate, max_order: most, ..) implies most > 0 MW
+
+-- The largest order, held for one hour, fits in the total.
+invariant mandate_order_cap_fits_its_volume:
+    Mandate(org: org, mandate: mandate, max_order: most, max_volume: total, ..)
+    implies (most / 1 MW) * 1 MWh <= total
+
+invariant mandate_price_band_is_ordered:
+    Mandate(org: org, mandate: mandate, price_floor: floor, price_ceiling: ceiling, ..)
+    implies floor <= ceiling
+
+invariant mandate_delivery_window_is_ordered:
+    Mandate(org: org, mandate: mandate, deliver_from: first, deliver_until: last, ..)
+    implies first strictly_before last
+
+invariant approved_mandate_was_proposed:
+    MandateApproved(org: org, mandate: mandate, ..) implies Mandate(org: org, mandate: mandate, ..)
+
+invariant suspended_mandate_was_proposed:
+    MandateSuspended(org: org, mandate: mandate, ..) implies Mandate(org: org, mandate: mandate, ..)
+
+invariant mandated_trade_was_booked:
+    TradeUnderMandate(org: org, trade: trade, ..) implies TradeCaptured(org: org, trade: trade, ..)
+
+invariant approved_model_is_the_recorded_one:
+    AgentModelApproved(org: org, agent: agent, model: model, ..)
+    implies AgentModel(org: org, agent: agent, model: model, ..)
 
 invariant terms_belong_to_captured_trade:
     TradeTerms(org: org, trade: trade, ..) implies TradeCaptured(org: org, trade: trade, ..)
@@ -552,6 +653,7 @@ transformation establish_organisation(org):
 -- to be them and grant themselves anything.
 transformation grant_grant_authority(principal, org, login_role):
     require may_grant_authority: MayGrantAuthority(actor, org)
+    require principal_is_not_an_agent: not AgentActor(org: org, agent: principal)
     admit MayGrantAuthority(principal, org)
     admit ActorAssertionRestricted(principal)
     admit ActorAssertionAuthority(principal, login_role)
@@ -604,6 +706,7 @@ transformation grant_date_authority(principal, org):
 -- and their marks; nothing about them changes.
 transformation roll_business_date(org, date):
     require may_roll_business_date: MayRollBusinessDate(actor, org)
+    require actor_is_not_an_agent: not AgentActor(org: org, agent: actor)
     require date_moves_forward: (forall current in BusinessDate(org, current): date after current)
     retract BusinessDate(org: org, ..)
     admit BusinessDate(org, date)
@@ -622,6 +725,7 @@ transformation declare_market(org, market, currency):
 -- already in the book. It only limits the next one.
 transformation set_position_limit(org, book, cap):
     require may_set_limit: MaySetLimit(actor, org)
+    require actor_is_not_an_agent: not AgentActor(org: org, agent: actor)
     retract PositionLimit(org: org, book: book, ..)
     admit PositionLimit(org, book, cap)
 
@@ -637,6 +741,7 @@ transformation set_position_limit(org, book, cap):
 -- the gate that refuses says which it was. With no cap set, both pass.
 transformation capture_trade(org, book, trade, counterparty, market, direction, version, quantity, price, delivery_start, delivery_end, trade_date):
     require may_capture_trade: MayCaptureTrade(actor, org, book)
+    require actor_is_not_an_agent: not AgentActor(org: org, agent: actor)
     require market_has_a_currency: MarketCurrency(org: org, market: market, ..)
     require trade_is_new: not TradeCaptured(trade: trade, ..)
     require terms_version_is_new: not TradeTerms(version: version, ..)
@@ -655,6 +760,115 @@ transformation capture_trade(org, book, trade, counterparty, market, direction, 
     admit TradeCaptured(org, book, trade, counterparty, market, direction)
     admit TradeTerms(org, trade, version, quantity, price, delivery_start, delivery_end, trade_date)
 
+-- Declare that an actor is an agent. From then on it books nothing
+-- through the acts people use, only under a mandate. Refused for an
+-- actor that may grant permissions or mandates: an agent must never
+-- hold either, so that it can never widen its own authority.
+transformation declare_agent(org, agent):
+    require may_grant_authority: MayGrantAuthority(actor, org)
+    require agent_is_new: not AgentActor(org: org, agent: agent)
+    require agent_cannot_grant: not MayGrantAuthority(agent, org)
+    require agent_cannot_mandate: not MayMandate(agent, org)
+    admit AgentActor(org, agent)
+
+transformation grant_mandate_authority(principal, org):
+    require may_grant_authority: MayGrantAuthority(actor, org)
+    require principal_is_not_an_agent: not AgentActor(org: org, agent: principal)
+    admit MayMandate(principal, org)
+
+-- Propose a mandate for an agent. A person proposes it; it admits no
+-- trade until a different person approves it.
+transformation propose_mandate(org, mandate, agent, book, market, side, max_order, max_volume, price_floor, price_ceiling, deliver_from, deliver_until, valid_until):
+    require may_mandate: MayMandate(actor, org)
+    require actor_is_not_an_agent: not AgentActor(org: org, agent: actor)
+    require mandate_is_for_an_agent: AgentActor(org: org, agent: agent)
+    require mandate_is_new: not Mandate(org: org, mandate: mandate, ..)
+    require market_has_a_currency: MarketCurrency(org: org, market: market, ..)
+    let now = decided_at
+    require mandate_runs_into_the_future: now strictly_before valid_until
+    admit Mandate(org, mandate, agent, book, market, side, max_order, max_volume, price_floor, price_ceiling, deliver_from, deliver_until, valid_until, actor)
+
+-- Approve a mandate: the second pair of eyes. Not the proposer, not the
+-- agent, and not once it is suspended.
+transformation approve_mandate(org, mandate):
+    bind mandate_was_proposed: Mandate(org: org, mandate: mandate, agent: agent, proposer: proposer, ..)
+    require may_mandate: MayMandate(actor, org)
+    require actor_is_not_an_agent: not AgentActor(org: org, agent: actor)
+    require approver_is_not_proposer: actor != proposer
+    require mandate_not_yet_approved: not MandateApproved(org: org, mandate: mandate, ..)
+    require mandate_not_suspended: not MandateSuspended(org: org, mandate: mandate, ..)
+    admit MandateApproved(org, mandate, actor)
+
+-- Suspend a mandate, at once and for good. One person is enough: taking
+-- authority away needs no second pair of eyes. The agent may suspend
+-- its own mandate too, never anyone else's.
+transformation suspend_mandate(org, mandate):
+    bind mandate_was_proposed: Mandate(org: org, mandate: mandate, agent: agent, ..)
+    require may_suspend: MayMandate(actor, org) or actor = agent
+    require mandate_not_already_suspended: not MandateSuspended(org: org, mandate: mandate, ..)
+    admit MandateSuspended(org, mandate, actor)
+
+-- Record the model an agent runs on. It replaces any record before it,
+-- and that record's approval goes with it, so the agent's mandates
+-- admit nothing until the new record is approved.
+transformation record_agent_model(org, agent, model):
+    require may_mandate: MayMandate(actor, org)
+    require actor_is_not_an_agent: not AgentActor(org: org, agent: actor)
+    require model_is_of_an_agent: AgentActor(org: org, agent: agent)
+    retract AgentModelApproved(org: org, agent: agent, ..)
+    retract AgentModel(org: org, agent: agent, ..)
+    admit AgentModel(org, agent, model, actor)
+
+transformation approve_agent_model(org, agent, model):
+    bind model_was_recorded: AgentModel(org: org, agent: agent, model: model, recorded_by: recorder)
+    require may_mandate: MayMandate(actor, org)
+    require actor_is_not_an_agent: not AgentActor(org: org, agent: actor)
+    require approver_is_not_recorder: actor != recorder
+    require model_not_yet_approved: not AgentModelApproved(org: org, agent: agent, ..)
+    admit AgentModelApproved(org, agent, model, actor)
+
+-- An agent books a trade under its mandate. Every bound of the mandate
+-- is a gate, and then every rule a person's capture meets: the window,
+-- the book's cap in each hour, the room instructions hold. The total is
+-- energy: the trade's MW times its hours, added to the energy already
+-- booked under the mandate. `model` is the model the agent runs on, as
+-- the door it came through says (never the agent); it must be the
+-- approved one.
+transformation trade_under_mandate(org, mandate, trade, counterparty, version, direction, quantity, price, delivery_start, delivery_end, trade_date, model):
+    bind mandate_was_given: Mandate(org: org, mandate: mandate, agent: agent, book: book, market: market, side: side, max_order: most, max_volume: total, price_floor: floor, price_ceiling: ceiling, deliver_from: first, deliver_until: last, valid_until: expiry, ..)
+    require actor_holds_the_mandate: actor = agent
+    require mandate_is_approved: MandateApproved(org: org, mandate: mandate, ..)
+    require mandate_not_suspended: not MandateSuspended(org: org, mandate: mandate, ..)
+    let now = decided_at
+    require mandate_has_not_expired: now at_or_before expiry
+    require model_is_approved: AgentModelApproved(org: org, agent: actor, model: model, ..)
+    require side_within_mandate: side = #both or direction = side
+    require order_within_mandate: quantity <= most
+    require price_not_below_mandate: price >= floor
+    require price_not_above_mandate: price <= ceiling
+    require delivery_not_before_mandate: delivery_start at_or_after first
+    require delivery_not_after_mandate: delivery_end at_or_before last
+    require market_has_a_currency: MarketCurrency(org: org, market: market, ..)
+    require trade_is_new: not TradeCaptured(trade: trade, ..)
+    require terms_version_is_new: not TradeTerms(version: version, ..)
+    require delivery_is_forward: delivery_start strictly_before delivery_end
+    require delivery_is_at_most_a_year: delivery_end - delivery_start no_longer_than duration(PT8784H)
+    let hours = periods(delivery_start, delivery_end, duration(PT1H))
+    require delivery_is_whole_hours: (delivery_end - delivery_start) / duration(PT1H) = sum(1 | h in hours)
+    let energy = ((quantity / 1 MW) * ((delivery_end - delivery_start) / duration(PT1H)) * 1 MWh)
+    let traded = (sum(e | TradeUnderMandate(org: org, mandate: mandate, energy: e, ..)))
+    require volume_within_mandate: traded + energy <= total
+    let signed = if(direction = #buy, quantity, 0 MW - quantity)
+    require hour_within_limit: (forall cap in PositionLimit(org, book, cap):
+        keeps_to_cap(org, book, trade_date, trade, signed, delivery_start, delivery_end, cap))
+    require breach_must_shrink: (forall cap in PositionLimit(org, book, cap):
+        shrinks_where_breached(org, book, trade_date, trade, signed, delivery_start, delivery_end, cap))
+    require room_not_held_by_instructions: (forall cap in PositionLimit(org, book, cap):
+        has_room_at_breakpoints(org, book, trade_date, trade, signed, 0 MW, 0 MW, delivery_start, delivery_end, cap, now))
+    admit TradeCaptured(org, book, trade, counterparty, market, direction)
+    admit TradeTerms(org, trade, version, quantity, price, delivery_start, delivery_end, trade_date)
+    admit TradeUnderMandate(org, mandate, trade, energy)
+
 -- Amend a trade's terms. The new version sits beside the old one and
 -- takes effect on a later date. Only the latest version can be amended.
 -- Whoever may capture in the book may amend in it. The window and the
@@ -662,6 +876,7 @@ transformation capture_trade(org, book, trade, counterparty, market, direction, 
 transformation amend_trade(org, trade, prior_version, new_version, quantity, price, delivery_start, delivery_end, effective_from):
     bind trade_is_captured: TradeCaptured(org, book, trade, _, _, direction)
     require may_amend_trade: MayCaptureTrade(actor, org, book)
+    require actor_is_not_an_agent: not AgentActor(org: org, agent: actor)
     require amendment_takes_effect_later: TradeTerms(org: org, trade: trade, version: prior_version, effective_from: prior_from, ..)
     and effective_from after prior_from
     require prior_terms_are_the_latest: not TradeTermsSupersedes(prior_version: prior_version, ..)
@@ -689,6 +904,7 @@ transformation amend_trade(org, trade, prior_version, new_version, quantity, pri
 -- yet connected to fills: that rule comes later.
 transformation place_instruction(org, book, instruction, market, direction, quantity, limit_price, delivery_start, delivery_end, placed_on, valid_until):
     require may_instruct: MayInstruct(actor, org, book)
+    require actor_is_not_an_agent: not AgentActor(org: org, agent: actor)
     require market_has_a_currency: MarketCurrency(org: org, market: market, ..)
     require instruction_is_new: not Instruction(instruction: instruction, ..)
     let now = decided_at
@@ -712,6 +928,7 @@ transformation place_instruction(org, book, instruction, market, direction, quan
 transformation cancel_instruction(org, instruction):
     bind instruction_is_open: InstructionOpen(org: org, book: book, instruction: instruction, ..)
     require may_instruct: MayInstruct(actor, org, book)
+    require actor_is_not_an_agent: not AgentActor(org: org, agent: actor)
     retract InstructionOpen(org: org, instruction: instruction, ..)
     admit InstructionEnded(org, instruction, #cancelled)
 
@@ -724,6 +941,7 @@ transformation approve_instruction(org, instruction):
     bind instruction_is_open: InstructionOpen(org: org, book: book, instruction: instruction, ..)
     bind instruction_was_placed: Instruction(org: org, instruction: instruction, proposer: proposer, ..)
     require may_approve: MayApprove(actor, org, book)
+    require actor_is_not_an_agent: not AgentActor(org: org, agent: actor)
     require approver_is_not_proposer: actor != proposer
     require instruction_not_yet_approved: not InstructionApproved(instruction: instruction, ..)
     admit InstructionApproved(org, instruction, actor)
@@ -735,6 +953,7 @@ transformation reject_instruction(org, instruction):
     bind instruction_is_open: InstructionOpen(org: org, book: book, instruction: instruction, ..)
     bind instruction_was_placed: Instruction(org: org, instruction: instruction, proposer: proposer, ..)
     require may_approve: MayApprove(actor, org, book)
+    require actor_is_not_an_agent: not AgentActor(org: org, agent: actor)
     require approver_is_not_proposer: actor != proposer
     retract InstructionOpen(org: org, instruction: instruction, ..)
     admit InstructionEnded(org, instruction, #rejected)
@@ -772,6 +991,7 @@ transformation lapse_overdue_instructions(org, book):
 -- lower for a sale); more than it still held.
 transformation record_fill(org, instruction, execution, trade, counterparty, version, quantity, price, trade_date):
     require may_record_fills: MayRecordFills(actor, org)
+    require actor_is_not_an_agent: not AgentActor(org: org, agent: actor)
     bind instruction_was_placed: Instruction(org: org, book: book, instruction: instruction, market: market, direction: direction, limit_price: limit_price, delivery_start: delivery_start, delivery_end: delivery_end, valid_until: valid_until, ..)
     require execution_is_new: not InstructionFill(org: org, execution: execution, ..)
     require trade_is_new: not TradeCaptured(trade: trade, ..)
@@ -806,6 +1026,7 @@ transformation record_fill(org, instruction, execution, trade, counterparty, ver
 -- own breach.
 transformation answer_breach(org, trade, kind, decision, note):
     require may_answer_breach: MayAnswerBreach(actor, org)
+    require actor_is_not_an_agent: not AgentActor(org: org, agent: actor)
     require breach_was_recorded: Breach(org: org, trade: trade, kind: kind, ..)
     require breach_not_yet_answered: not BreachAnswered(org: org, trade: trade, kind: kind, ..)
     bind breach_came_from_a_fill: InstructionFill(org: org, instruction: instruction, trade: trade, ..)
@@ -817,6 +1038,7 @@ transformation answer_breach(org, trade, kind, decision, note):
 -- If one is already official, this is refused: use correct_curve.
 transformation register_curve(org, market, as_of, version, payload_hash):
     require may_register_curve: MayRegisterCurve(actor, org, market)
+    require actor_is_not_an_agent: not AgentActor(org: org, agent: actor)
     require market_has_a_currency: MarketCurrency(org: org, market: market, ..)
     require curve_version_is_new: not CurveRegistered(version: version, ..)
     require no_official_curve_yet: not OfficialCurve(org: org, market: market, as_of: as_of, ..)
@@ -828,6 +1050,7 @@ transformation register_curve(org, market, as_of, version, payload_hash):
 -- mark made against it stay on the record.
 transformation correct_curve(org, market, as_of, prior_version, new_version, payload_hash):
     require may_register_curve: MayRegisterCurve(actor, org, market)
+    require actor_is_not_an_agent: not AgentActor(org: org, agent: actor)
     require prior_curve_is_official: OfficialCurve(org, market, as_of, prior_version)
     require prior_curve_is_the_latest: not CurveSupersedes(prior_version: prior_version, ..)
     require curve_version_is_new: not CurveRegistered(version: new_version, ..)

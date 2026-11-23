@@ -46,6 +46,11 @@ class Settings(BaseSettings):
     # secret, not a sign-in: it does not prove who holds it, or that two
     # tokens are held by two people.
     mcp_tokens: dict[str, str] = {}
+    # The model each agent behind the HTTP door runs on, by actor, as the
+    # operator knows it (`GLASSHOUSE_MCP_MODELS`, JSON). A mandated trade
+    # names it, and the ledger admits it only if a person approved a
+    # record naming the same model. An actor with no entry names none.
+    mcp_models: dict[str, str] = {}
     # The reconciling service's actor: in the demo profile it records the
     # lapse of overdue instructions every minute (`glasshouse.sweep`),
     # with the right the ledger grants it (MayRecordFills) and no more.

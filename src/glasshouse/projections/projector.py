@@ -108,6 +108,19 @@ IGNORED = frozenset(
         "MayRecordFills",
         "MayAnswerBreach",
         "InstructionFill",
+        # Agents, their mandates and the models they run on: read from
+        # governed state (`api/mandates.py`). A mandated trade arrives as
+        # the ordinary `TradeCaptured` and `TradeTerms`, projected above.
+        # The model record and its approval are retracted when a new
+        # model is recorded, which is lawful: neither is projected.
+        "AgentActor",
+        "MayMandate",
+        "Mandate",
+        "MandateApproved",
+        "MandateSuspended",
+        "TradeUnderMandate",
+        "AgentModel",
+        "AgentModelApproved",
         "Breach",
         "BreachAnswered",
         # The business date and who may roll it: read from governed state

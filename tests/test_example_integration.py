@@ -33,7 +33,7 @@ def test_the_example_buys_until_the_limit_refuses_and_prints_the_refusal() -> No
     out = ran.stdout
     # What docs/mcp.md shows, line for line.
     assert "spec-de, hour 2026-07-01 12:00 UTC: holding 20 MW, cap 25 MW" in out
-    assert out.count("buy 2 MW: accepted as agent") == 2
+    assert out.count("buy 2 MW: accepted as algo") == 2
     assert "buy 2 MW: REFUSED" in out
     assert "rule:     hour_within_limit" in out
     assert "figures:  26 MW <= 25 MW does not hold" in out
