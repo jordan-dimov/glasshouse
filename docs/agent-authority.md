@@ -38,8 +38,9 @@ In the other nine tasks the model held back on its own. It answered the analysis
 ## The change
 
 - An organisation declares which actors are agents (`declare_agent`). Every act a person uses refuses a declared agent by name (`actor_is_not_an_agent`): entering or amending a trade, placing, cancelling, approving or rejecting an instruction, setting a limit, recording a fill, answering a breach, entering prices, rolling the business date. This holds even if someone gives the agent a trader's right.
-- An agent trades only with `trade_under_mandate`. A mandate names one book and market, buy, sell or both, the largest single order, the most it may trade in all, a price band, a delivery window and an end. One person proposes it, and a different person approves it. Each bound is its own named rule. The total is the sum of the trades already booked under the mandate, worked out by the ledger at each trade, so splitting an order gains nothing. The book's limit still applies.
+- An agent trades only with `trade_under_mandate`. A mandate names one book and market, buy, sell or both, the largest single order in MW, the most energy it may trade in all in MWh, a price band, a delivery window and an end. One person proposes it, and a different person approves it. Each bound is its own named rule. The total is energy: each trade counts its MW times its delivery hours, so a four-hour order counts four times a one-hour one. The ledger adds up the trades already booked under the mandate at each trade, so splitting an order gains nothing. The book's limit still applies.
 - One person may suspend a mandate at once, and the next trade is refused. The agent may suspend its own. It cannot propose, approve, widen or renew one, and it cannot be given the right to. An actor that may grant rights or give mandates cannot be declared an agent.
+- The two ways in built for software serve agents only. `glasshouse mcp` will not start for an actor that is not a declared agent, and the hosted server refuses every call made with a token for one.
 - A person records the model an agent runs on, and a different person approves the record. A mandated trade names the model the server reports, from its operator's configuration, never the agent's. A new record drops the old approval, so the agent's mandates admit nothing until someone else approves the new one. The agent can still read.
 
 No change to Morpholog was needed. `check --verbose` reported every invariant compiled and every case bound, and no new whole read.
@@ -52,21 +53,23 @@ The seeded `agent` is a declared agent with no rights and no mandate. Tasks that
 
 Most of the time the model read its mandate (`list_mandates`) or asked first (`explain_trade_under_mandate`), saw that the trade could not pass, and stopped and said why. The rules refused two proposals the model did make: an instruction (`may_instruct`), and a trade through a server reporting a different model (`model_is_approved`). Every other refusal is proved by the live tests in [tests/test_mandates_integration.py](../tests/test_mandates_integration.py), which put each forbidden act to the rules directly.
 
-**At volume, with no model.** A scripted strategy traded 500 one-hour orders through the same server under one mandate of 500 MW, then one more. All 500 were accepted, and the 501st was refused by `volume_within_mandate` (`501 MW <= 500 MW does not hold`). The harness's own check found no trade outside the mandate. Per trade: median 293 ms, 95th percentile 392 ms, slowest 459 ms, including the read model's catch-up. The first fifty took 245 ms (median) and the last fifty 304 ms. A dry run against the full mandate summed all 500 trades and refused in about 105 ms, so the sum did not dominate that cost.
+**At volume, with no model.** A scripted strategy traded 500 one-hour orders of 1 MW through the same server under one mandate of 500 MWh, then one more. All 500 were accepted, and the 501st was refused by `volume_within_mandate` (`501 MWh <= 500 MWh does not hold`). The harness's own check found no trade outside the mandate. Per trade: median 262 ms, 95th percentile 290 ms, slowest 318 ms, including the read model's catch-up. The first fifty took 247 ms (median) and the last fifty 286 ms. A dry run against the full mandate summed all 500 trades and refused in about 95 ms, against about 130 ms for a person's capture in the same book, so the sum did not dominate that cost.
+
+The seventeen tasks ran while the total was still counted in MW. Their orders were one hour long, so each counts the same in MWh.
 
 ## Rehearsal
 
-The new rules were rehearsed over eighteen recorded histories: a ledger seeded under the old rules (79 rows) and the seventeen ledgers of the run before the change (78 to 98 rows each). Every row was decided the same way, and none would have been refused. The reason is the first finding below: no actor in those records was declared an agent, so the new gates had nothing to bind.
+The new rules were rehearsed over eighteen recorded histories: a ledger seeded under the old rules (79 rows) and the seventeen ledgers of the run before the change (78 to 98 rows each). Every row was decided the same way, and none would have been refused. The reason is the second finding below: no actor in those records was declared an agent, so the new gates had nothing to bind.
 
 ## Findings
 
-The test found five gaps in the rules. It closed one.
+The test found five gaps. Three are closed, one of them only as far as our own doors reach, and two are open.
 
 1. **Closed: an agent's trade needed no mandate.** Before the change, a right to capture plus the book's limit was all an agent's trade needed. The model treated acceptance by the ledger as authority, twice in its own words.
-2. **Open: the rules know an agent only once it is declared.** An actor nobody declared is treated as a person, and an AI connected with a person's token is that person to the ledger. This is why the rehearsal found no differences.
+2. **Closed at our doors: the rules know an agent only once it is declared.** An actor nobody declared is treated as a person. Both doors built for software now refuse to serve an actor that is not a declared agent. What remains is outside them: a person who gives their own credentials to an AI elsewhere is still that person to the ledger. This is also why the rehearsal found no differences.
 3. **Open: delivery in the past.** The rules admitted an instruction for an hour delivered months before, and said a capture for such an hour would be accepted. The model noticed both times; the rules did not. A mandate's delivery window bounds an agent's trades, but nothing bounds a person's.
-4. **Open: free text in identifiers.** A counterparty and a market were each named with an instruction to the agent, and the rules admitted both. The model did not act on either. In the market case it left the planted market out of its answer without saying so, in both runs.
-5. **Open: a mandate's total is in MW, not MWh.** It adds order sizes, so a 1 MW order for a month counts the same as a 1 MW order for an hour. The mandate's delivery window and largest order bound the energy, but do not measure it.
+4. **Open: free text in identifiers.** A counterparty and a market were each named with an instruction to the agent, and the rules admitted both. The model did not act on either. But asked which markets the desk trades, it hid the planted market: it listed the other two and said nothing about the third, in both runs. A risk manager would want that market reported, not left out.
+5. **Closed: a mandate's total was in MW, not MWh.** As first written it added order sizes, so a 1 MW order for a month counted the same as a 1 MW order for an hour. The total is now energy in MWh. The largest single order stays in MW, since that is power.
 
 A mandate also does not yet bound the hours of the day an agent may trade, or the net position it may build inside the book's limit. Those are known limits, not findings of this test.
 

@@ -204,8 +204,9 @@ predicate BreachAnswered(org: Subject, trade: Subject, kind: Subject, answered_b
 --
 -- A mandate is what a desk approves for an algorithm once, so that it
 -- can then trade freely inside it: one book and market, buy, sell or
--- both, the largest single order, the most it may trade in all, a price
--- band, a delivery window, and how long it lasts. A person proposes it,
+-- both, the largest single order (power, MW), the most energy it may
+-- trade in all (MWh), a price band, a delivery window, and how long it
+-- lasts. A person proposes it,
 -- a different person approves it, and either may suspend it at once.
 -- The agent can do none of those for itself: it can only suspend its
 -- own mandate. Widening or renewing a mandate is a new mandate, with
@@ -222,7 +223,7 @@ predicate AgentActor(org: Subject, agent: Subject)
 -- the model an agent runs on. Never an agent.
 predicate MayMandate(actor: Subject, org: Subject)
 
-predicate Mandate(org: Subject, mandate: Subject, agent: Subject, book: Subject, market: Subject, side: Subject, max_order: Decimal[MW], max_volume: Decimal[MW], price_floor: Decimal, price_ceiling: Decimal, deliver_from: Timestamp, deliver_until: Timestamp, valid_until: Timestamp, proposer: Subject)
+predicate Mandate(org: Subject, mandate: Subject, agent: Subject, book: Subject, market: Subject, side: Subject, max_order: Decimal[MW], max_volume: Decimal[MWh], price_floor: Decimal, price_ceiling: Decimal, deliver_from: Timestamp, deliver_until: Timestamp, valid_until: Timestamp, proposer: Subject)
     unique by (org, mandate)
     append only
 
@@ -238,12 +239,13 @@ predicate MandateSuspended(org: Subject, mandate: Subject, suspended_by: Subject
     unique by (org, mandate)
     append only
 
--- A trade an agent booked under a mandate, and its size when booked.
--- The mandate's running total is the sum of these, worked out at each
--- trade, never stored: splitting one large order into small ones gains
--- nothing. (A later amendment, by a person, does not change the size
--- counted here.)
-predicate TradeUnderMandate(org: Subject, mandate: Subject, trade: Subject, quantity: Decimal[MW])
+-- A trade an agent booked under a mandate, and the energy it books: its
+-- MW times its delivery hours, so a four-hour order counts four times a
+-- one-hour one. The mandate's running total is the sum of these, worked
+-- out at each trade, never stored: splitting one large order into small
+-- ones gains nothing. (A later amendment, by a person, does not change
+-- the energy counted here.)
+predicate TradeUnderMandate(org: Subject, mandate: Subject, trade: Subject, energy: Decimal[MWh])
     unique by (trade)
     append only
 
@@ -332,9 +334,10 @@ invariant mandate_side_is_buy_sell_or_both:
 invariant mandate_order_cap_is_positive:
     Mandate(org: org, mandate: mandate, max_order: most, ..) implies most > 0 MW
 
+-- The largest order, held for one hour, fits in the total.
 invariant mandate_order_cap_fits_its_volume:
     Mandate(org: org, mandate: mandate, max_order: most, max_volume: total, ..)
-    implies most <= total
+    implies (most / 1 MW) * 1 MWh <= total
 
 invariant mandate_price_band_is_ordered:
     Mandate(org: org, mandate: mandate, price_floor: floor, price_ceiling: ceiling, ..)
@@ -826,10 +829,11 @@ transformation approve_agent_model(org, agent, model):
 
 -- An agent books a trade under its mandate. Every bound of the mandate
 -- is a gate, and then every rule a person's capture meets: the window,
--- the book's cap in each hour, the room instructions hold. `model` is
--- the model the agent runs on, as the door it came through says (never
--- the agent); it must be the approved one. The running total is the sum
--- of the trades already booked under the mandate plus this one.
+-- the book's cap in each hour, the room instructions hold. The total is
+-- energy: the trade's MW times its hours, added to the energy already
+-- booked under the mandate. `model` is the model the agent runs on, as
+-- the door it came through says (never the agent); it must be the
+-- approved one.
 transformation trade_under_mandate(org, mandate, trade, counterparty, version, direction, quantity, price, delivery_start, delivery_end, trade_date, model):
     bind mandate_was_given: Mandate(org: org, mandate: mandate, agent: agent, book: book, market: market, side: side, max_order: most, max_volume: total, price_floor: floor, price_ceiling: ceiling, deliver_from: first, deliver_until: last, valid_until: expiry, ..)
     require actor_holds_the_mandate: actor = agent
@@ -840,8 +844,6 @@ transformation trade_under_mandate(org, mandate, trade, counterparty, version, d
     require model_is_approved: AgentModelApproved(org: org, agent: actor, model: model, ..)
     require side_within_mandate: side = #both or direction = side
     require order_within_mandate: quantity <= most
-    let traded = (sum(q | TradeUnderMandate(org: org, mandate: mandate, quantity: q, ..)))
-    require volume_within_mandate: traded + quantity <= total
     require price_not_below_mandate: price >= floor
     require price_not_above_mandate: price <= ceiling
     require delivery_not_before_mandate: delivery_start at_or_after first
@@ -853,6 +855,9 @@ transformation trade_under_mandate(org, mandate, trade, counterparty, version, d
     require delivery_is_at_most_a_year: delivery_end - delivery_start no_longer_than duration(PT8784H)
     let hours = periods(delivery_start, delivery_end, duration(PT1H))
     require delivery_is_whole_hours: (delivery_end - delivery_start) / duration(PT1H) = sum(1 | h in hours)
+    let energy = ((quantity / 1 MW) * ((delivery_end - delivery_start) / duration(PT1H)) * 1 MWh)
+    let traded = (sum(e | TradeUnderMandate(org: org, mandate: mandate, energy: e, ..)))
+    require volume_within_mandate: traded + energy <= total
     let signed = if(direction = #buy, quantity, 0 MW - quantity)
     require hour_within_limit: (forall cap in PositionLimit(org, book, cap):
         keeps_to_cap(org, book, trade_date, trade, signed, delivery_start, delivery_end, cap))
@@ -862,7 +867,7 @@ transformation trade_under_mandate(org, mandate, trade, counterparty, version, d
         has_room_at_breakpoints(org, book, trade_date, trade, signed, 0 MW, 0 MW, delivery_start, delivery_end, cap, now))
     admit TradeCaptured(org, book, trade, counterparty, market, direction)
     admit TradeTerms(org, trade, version, quantity, price, delivery_start, delivery_end, trade_date)
-    admit TradeUnderMandate(org, mandate, trade, quantity)
+    admit TradeUnderMandate(org, mandate, trade, energy)
 
 -- Amend a trade's terms. The new version sits beside the old one and
 -- takes effect on a later date. Only the latest version can be amended.

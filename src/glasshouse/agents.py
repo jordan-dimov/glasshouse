@@ -9,6 +9,12 @@ layer (law 1); a refusal is the rules' own account of itself, handed back
 as data. No tool writes to the database any other way and no rule is
 relaxed to make a tool work.
 
+Agents only. Both doors here serve only an actor the ledger declares an
+agent (`AgentActor`): `glasshouse mcp` refuses to start for any other,
+and the HTTP door refuses every call from one. So every way in that is
+built for software binds the agent rules by construction. What no door
+can stop is a person giving their own credentials to an AI elsewhere.
+
 Who the agent is. One server is bound to one actor and one organisation
 when it is built, and no tool takes either as an argument: an agent cannot
 propose as someone else or read another organisation's book. Over stdio
@@ -145,9 +151,11 @@ class ProposalOutcome(BaseModel):
 
 
 class Mandate(BaseModel):
-    """A mandate and where it stands. `used` is the MW already traded
-    under it, summed as the rule sums it; `max_volume - used` is what is
-    left. `model_approved` says whether the agent's model record is
+    """A mandate and where it stands. `max_order_mw` is the largest
+    single order (power). `max_volume_mwh` is the most energy it may
+    trade in all, and `used_mwh` the energy already traded under it (each
+    trade's MW times its delivery hours), summed as the rule sums it; the
+    difference is what is left. `model_approved` says whether the agent's model record is
     approved; `model` is what that record names."""
 
     mandate: str
@@ -156,8 +164,8 @@ class Mandate(BaseModel):
     market: str
     side: str
     max_order_mw: ExactDecimal
-    max_volume_mw: ExactDecimal
-    used_mw: ExactDecimal
+    max_volume_mwh: ExactDecimal
+    used_mwh: ExactDecimal
     trades: int
     price_floor: ExactDecimal
     price_ceiling: ExactDecimal
@@ -269,6 +277,25 @@ def _mandated(
         )
     except ValueError as malformed:
         raise ToolError(f"the trade could not be read: {malformed}") from malformed
+
+
+class NotAnAgentError(ValueError):
+    """The actor a door was asked to serve is not a declared agent."""
+
+
+def declared_agent(client: GlasshouseClient, *, org: str, actor: str) -> bool:
+    """Whether the ledger declares `actor` an agent in `org`. Declarations
+    are append only, so a yes stays a yes."""
+    return bool(client.claims_named("AgentActor", where={"org": org, "agent": actor}))
+
+
+def require_declared_agent(client: GlasshouseClient, *, org: str, actor: str) -> None:
+    if not declared_agent(client, org=org, actor=actor):
+        raise NotAnAgentError(
+            f"{actor} is not declared an agent in {org}: this door serves agents only. "
+            "Declare it with `glasshouse declare-agent`, or use the screens or the "
+            "command line as a person."
+        )
 
 
 def offset_instant(name: str, raw: str) -> dt.datetime:
@@ -488,7 +515,7 @@ def build_server(desk: Callable[[], Desk]) -> MCPServer:
     @server.tool()
     def list_mandates(mine_only: bool = False) -> list[Mandate]:
         """Agents' mandates: each one's book, market, side, largest
-        order, total volume and how much of it is used, price band,
+        order (MW), total energy (MWh) and how much of it is used, price band,
         delivery window, end, who proposed and approved it, and whether
         it is open, suspended, expired or awaiting approval. Also whether
         the agent's model record is approved. mine_only: only the
@@ -502,8 +529,8 @@ def build_server(desk: Callable[[], Desk]) -> MCPServer:
                 market=row.market,
                 side=row.side,
                 max_order_mw=row.max_order,
-                max_volume_mw=row.max_volume,
-                used_mw=row.used,
+                max_volume_mwh=row.max_volume,
+                used_mwh=row.used,
                 trades=row.trades,
                 price_floor=row.price_floor,
                 price_ceiling=row.price_ceiling,
@@ -537,9 +564,10 @@ def build_server(desk: Callable[[], Desk]) -> MCPServer:
         the loop. The book and market are the mandate's. It is refused
         if the mandate is not approved, is suspended or has ended, if the
         model you run on is not the approved one, or if the trade falls
-        outside any bound: side, largest order, total volume (counting
-        every trade already booked under it), price band, delivery
-        window. The book's position limit applies as for any trade.
+        outside any bound: side, largest order (MW), total energy in MWh
+        (this trade's MW times its hours, added to every trade already
+        booked under it), price band, delivery window. The book's
+        position limit applies as for any trade.
         The trade date is today (UTC) and the model is the one your
         door reports: you state neither.
 
@@ -616,7 +644,8 @@ def build_server(desk: Callable[[], Desk]) -> MCPServer:
     ) -> ProposalOutcome:
         """Propose a mandate for an agent: a person's act. It admits no
         trade until a different person approves it. Refused if you are
-        an agent, or may not give mandates. max_order, max_volume: MW as
+        an agent, or may not give mandates. max_order: the largest order,
+        MW as decimal text. max_volume: the most energy in all, MWh as
         decimal text. price_floor, price_ceiling: per MWh. deliver_from,
         deliver_until, valid_until: UTC instants with an offset."""
         at = desk()

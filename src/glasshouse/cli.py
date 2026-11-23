@@ -28,7 +28,13 @@ import typer
 from pydantic import ValidationError
 from typer.main import get_command
 
-from glasshouse.agents import Desk, build_server, offset_instant
+from glasshouse.agents import (
+    Desk,
+    NotAnAgentError,
+    build_server,
+    offset_instant,
+    require_declared_agent,
+)
 from glasshouse.api import fills, mandates
 from glasshouse.commit import (
     MODEL_FILE,
@@ -294,8 +300,8 @@ def declare_agent_command(
 @app.command(
     "propose-mandate",
     help="Propose a standing mandate for an agent: one book and market, a side, the largest "
-    "order, the most in all, a price band, a delivery window and an end. It admits no trade "
-    "until a different person approves it.",
+    "order (MW), the most energy in all (MWh), a price band, a delivery window and an end. "
+    "It admits no trade until a different person approves it.",
 )
 def propose_mandate_command(
     org: Annotated[str, typer.Option(help="the organisation")],
@@ -305,7 +311,7 @@ def propose_mandate_command(
     market: Annotated[str, typer.Option(help="the one market it may trade in")],
     side: Annotated[str, typer.Option(help="buy, sell or both")],
     max_order: Annotated[str, typer.Option(help="the largest single order, MW")],
-    max_volume: Annotated[str, typer.Option(help="the most it may trade in all, MW")],
+    max_volume: Annotated[str, typer.Option(help="the most energy it may trade in all, MWh")],
     price_floor: Annotated[str, typer.Option(help="the lowest price, per MWh")],
     price_ceiling: Annotated[str, typer.Option(help="the highest price, per MWh")],
     deliver_from: Annotated[str, typer.Option(help="delivery no earlier than (UTC instant)")],
@@ -418,7 +424,7 @@ def mandates_command(
         model = f"{row.model} ({'approved' if row.model_approved else 'not approved'})"
         print(
             f"{row.mandate}  {row.agent}  {row.book}/{row.market} {row.side}  "
-            f"order <= {row.max_order} MW  used {row.used} of {row.max_volume} MW "
+            f"order <= {row.max_order} MW  used {row.used} of {row.max_volume} MWh "
             f"in {row.trades} trade(s)  {row.price_floor}-{row.price_ceiling}  "
             f"until {row.valid_until.isoformat()}  {row.standing}  model {model}"
         )
@@ -583,13 +589,15 @@ def mcp_command(
     settings = get_settings()
     db = _db(database_url)
     engine = sa.create_engine(engine_url(db))
-    desk = Desk(
-        client=_client(db),
-        engine=engine,
-        actor=actor,
-        org=org or settings.demo_org,
-        model=model or None,
-    )
+    client = _client(db)
+    served = org or settings.demo_org
+    try:
+        require_declared_agent(client, org=served, actor=actor)
+    except NotAnAgentError as person:
+        engine.dispose()
+        print(f"error: {person}", file=sys.stderr)
+        raise typer.Exit(code=2) from None
+    desk = Desk(client=client, engine=engine, actor=actor, org=served, model=model or None)
     try:
         # stdout is the protocol's channel; our logs already go to stderr.
         build_server(lambda: desk).run("stdio")

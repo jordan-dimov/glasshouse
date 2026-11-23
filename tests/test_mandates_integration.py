@@ -164,8 +164,9 @@ def test_every_bound_of_the_mandate_is_a_gate(ledger: GlasshouseClient) -> None:
 
 
 def test_splitting_an_order_gains_nothing(ledger: GlasshouseClient) -> None:
-    # 6 MW in all, 2 an order: three orders, and a fourth of any size is
-    # refused, with the ledger's own running total in the figures.
+    # 6 MWh in all, 2 MW an order: three one-hour orders, and a fourth of
+    # any size is refused, with the ledger's own running total in the
+    # figures.
     name = given(ledger, mandate("M-SPLIT"))
     for k in range(3):
         committed(ledger, trade(name, hour=WINTER + dt.timedelta(hours=10 + k), quantity="2"), ALGO)
@@ -179,10 +180,25 @@ def test_splitting_an_order_gains_nothing(ledger: GlasshouseClient) -> None:
         fourth.compared.op,
         wire_text(fourth.compared.right),
     ) == (
-        "6.1 MW",
+        "6.1 MWh",
         "<=",
-        "6 MW",
+        "6 MWh",
     )
+
+
+def test_the_total_is_energy_so_a_longer_order_counts_for_more(ledger: GlasshouseClient) -> None:
+    # 6 MWh in all: one 1 MW order for four hours uses 4 MWh, so a second
+    # for three hours (3 MWh) does not fit, and one for two hours does.
+    name = given(ledger, mandate("M-ENERGY", max_order="1"))
+    start = WINTER + dt.timedelta(days=2)
+    committed(ledger, trade(name, hour=start, hours=4), ALGO)
+    three = refused(ledger, trade(name, hour=start + dt.timedelta(hours=4), hours=3), ALGO)
+    assert three.rule == "volume_within_mandate"
+    assert three.compared is not None
+    assert (wire_text(three.compared.left), wire_text(three.compared.right)) == ("7 MWh", "6 MWh")
+    committed(ledger, trade(name, hour=start + dt.timedelta(hours=4), hours=2), ALGO)
+    (row,) = [m for m in mandates.list_mandates(ledger, org=ORG) if m.mandate == "M-ENERGY"]
+    assert (row.used, row.trades) == (Decimal("6"), 2)
 
 
 def test_a_suspended_mandate_refuses_the_next_trade(ledger: GlasshouseClient) -> None:
@@ -318,7 +334,7 @@ def test_people_give_approve_and_suspend_over_mcp_and_the_agent_sees_it(
     (mine,) = [
         m for m in _tool(algo, "list_mandates", {"mine_only": True}) if m["mandate"] == "M-MCP"
     ]
-    assert (mine["used_mw"], mine["trades"], mine["standing"], mine["model_approved"]) == (
+    assert (mine["used_mwh"], mine["trades"], mine["standing"], mine["model_approved"]) == (
         "1",
         1,
         "open",
@@ -394,7 +410,7 @@ def test_the_command_line_gives_approves_lists_and_suspends(ledger: GlasshouseCl
     )
     listed = run("mandates")
     line = next(row for row in listed.splitlines() if row.startswith("M-CLI"))
-    assert "used 0 of 4 MW" in line
+    assert "used 0 of 4 MWh" in line
     assert "open" in line
     assert "m-9 (approved)" in line
     assert "suspended by risk-manager" in run(
@@ -440,3 +456,11 @@ def test_the_command_line_gives_approves_lists_and_suspends(ledger: GlasshouseCl
         ],
     )
     assert naive.exit_code == 2, naive.output
+
+
+def test_the_stdio_door_will_not_start_for_a_person(ledger: GlasshouseClient) -> None:
+    # Every way in built for software serves declared agents only: a
+    # person's name gets an error and no server.
+    result = CliRunner().invoke(cli.app, ["mcp", "--actor", "alice", "--database-url", DB])
+    assert result.exit_code == 2
+    assert "not declared an agent" in result.output

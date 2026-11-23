@@ -1,12 +1,13 @@
 """Agents' mandates as one read: each mandate's bounds, who proposed and
 approved it, whether it stands (open, suspended, expired, or awaiting
-approval), how much of its volume is used, and whether the model its
+approval), how much of its energy is used, and whether the model its
 agent runs on is the approved one.
 
 Nothing here decides anything. The rules decide at each trade
 (`trade_under_mandate` in the rule file); this read says what a person,
-or the agent itself, needs to know before asking them. `used` is the sum
-of the trades booked under the mandate, as the rule sums it.
+or the agent itself, needs to know before asking them. `used` is the
+energy (MWh) of the trades booked under the mandate, summed as the rule
+sums it; `max_order` is power (MW).
 """
 
 from __future__ import annotations
@@ -58,7 +59,7 @@ class MandateRow:
 
 
 def _amount(raw: object) -> Decimal:
-    """A quantity as the named read spells it (`"2 MW"` or `"2"`)."""
+    """A quantity as the named read spells it (`"2 MW"`, `"6 MWh"`, `"2"`)."""
     return values.parse_decimal(str(raw).split()[0])
 
 
@@ -87,7 +88,7 @@ def list_mandates(
     used: dict[str, tuple[Decimal, int]] = {}
     for r in rows["TradeUnderMandate"]:
         total, count = used.get(str(r["mandate"]), (Decimal(0), 0))
-        used[str(r["mandate"])] = (total + _amount(r["quantity"]), count + 1)
+        used[str(r["mandate"])] = (total + _amount(r["energy"]), count + 1)
     recorded = {str(r["agent"]): str(r["model"]) for r in rows["AgentModel"]}
     approved_models = {(str(r["agent"]), str(r["model"])) for r in rows["AgentModelApproved"]}
     out = []

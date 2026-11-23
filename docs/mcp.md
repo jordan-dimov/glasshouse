@@ -13,21 +13,21 @@ An agent trades only with `trade_under_mandate`, inside a **mandate**. A mandate
 - one book and one market;
 - buy, sell or both;
 - the largest single order, in MW;
-- the most it may trade in all, in MW;
+- the most energy it may trade in all, in MWh: each trade counts its MW times its delivery hours;
 - a price band;
 - a delivery window;
 - when the mandate ends.
 
-A person proposes the mandate (`propose_mandate`, or `glasshouse propose-mandate`), and a different person approves it (`approve_mandate`). The agent then trades inside it as often as its strategy calls for, with no person in the loop. Each trade is checked against every bound. The total is the sum of the trades already booked under the mandate, worked out by the ledger at each trade, so splitting one large order into many small ones gains nothing. The book's position limit applies as well.
+A person proposes the mandate (`glasshouse propose-mandate`), and a different person approves it (`glasshouse approve-mandate`). The agent then trades inside it as often as its strategy calls for, with no person in the loop. Each trade is checked against every bound. The total is energy: each trade counts its MW times its delivery hours, added by the ledger to the trades already booked under the mandate, so splitting one large order into many small ones gains nothing. The book's position limit applies as well.
 
-Anyone who may give mandates can suspend one at once (`suspend_mandate`), and the next trade is refused. The agent may suspend its own mandate. It cannot propose, approve, widen or renew one: each of those is a new mandate, proposed by a person and approved by another. An agent cannot be given the right to give mandates or grant permissions, and an actor that holds either cannot be declared an agent.
+Anyone who may give mandates can suspend one at once (`glasshouse suspend-mandate`), and the next trade is refused. The agent may suspend its own mandate. It cannot propose, approve, widen or renew one: each of those is a new mandate, proposed by a person and approved by another. An agent cannot be given the right to give mandates or grant permissions, and an actor that holds either cannot be declared an agent.
 
-**The model behind the agent.** A mandate admits trades only while the model the agent runs on is the one a person approved. A person records the model, with its version (`record_agent_model`), and a different person approves the record (`approve_agent_model`). Recording a new model drops the old approval, so the agent's mandates admit nothing until the new record is approved. The agent can still read the book. The agent never says which model it is. The server it connects through says it, from what its operator configured: `glasshouse mcp --model`, or `GLASSHOUSE_MCP_MODELS` for a hosted server. A server with no model configured names none, and every mandated trade through it is refused by `model_is_approved`.
+**The model behind the agent.** A mandate admits trades only while the model the agent runs on is the one a person approved. A person records the model, with its version (`glasshouse record-agent-model`), and a different person approves the record (`glasshouse approve-agent-model`). Recording a new model drops the old approval, so the agent's mandates admit nothing until the new record is approved. The agent can still read the book. The agent never says which model it is. The server it connects through says it, from what its operator configured: `glasshouse mcp --model`, or `GLASSHOUSE_MCP_MODELS` for a hosted server. A server with no model configured names none, and every mandated trade through it is refused by `model_is_approved`.
 
 Two kinds of agent, two answers:
 
 - **An assistant** asked a question holds no mandate. It reads, explains and books nothing. The seeded `agent` is one.
-- **A trading agent** holds a mandate and books everything inside it without asking anyone. The seeded `algo` is one: mandate `M-ALGO` in `spec-de`, buy or sell, 2 MW an order, 20 MW in all, prices 50 to 150, delivery on 1 July 2026, model `example-strategy-1`.
+- **A trading agent** holds a mandate and books everything inside it without asking anyone. The seeded `algo` is one: mandate `M-ALGO` in `spec-de`, buy or sell, 2 MW an order, 20 MWh in all, prices 50 to 150, delivery on 1 July 2026, model `example-strategy-1`.
 
 [Agent authority, tested](agent-authority.md) reports a test of these rules against a strong model given tasks designed to get round them.
 
@@ -41,14 +41,15 @@ Two kinds of agent, two answers:
 | `business_date` | The business date (the day valuations are for), how many trades are valued for it, and why the others are not. Read only. |
 | `position_limits` | The cap on each book's position in any one hour. |
 | `explain_trade` | Asks whether a trade would be accepted. Records nothing. |
+| `explain_trade_under_mandate` | Asks whether a trade under a mandate would be accepted now. Records nothing. |
 | `propose_trade` | Proposes one trade, for a person. An agent is refused. |
 | `list_mandates` | Agents' mandates: the bounds of each, how much is used, whether it is open, suspended, expired or awaiting approval, and whether the agent's model record is approved. |
 | `trade_under_mandate` | An agent books one trade under its mandate. The book and market are the mandate's; the trade date is today and the model is the one the server reports. |
-| `propose_mandate` | A person proposes a mandate for an agent. |
-| `approve_mandate` | A different person approves it. |
-| `suspend_mandate` | Suspends a mandate at once and for good. |
-| `record_agent_model` | A person records the model an agent runs on. |
-| `approve_agent_model` | A different person approves that record. |
+| `propose_mandate` | A person's act: an agent that calls it is refused. People use `glasshouse propose-mandate`. |
+| `approve_mandate` | A person's act, refused for an agent (`glasshouse approve-mandate`). |
+| `suspend_mandate` | Suspends a mandate at once and for good. An agent may suspend its own. |
+| `record_agent_model` | A person's act, refused for an agent (`glasshouse record-agent-model`). |
+| `approve_agent_model` | A person's act, refused for an agent (`glasshouse approve-agent-model`). |
 | `place_instruction` | Records an intention to buy or sell that has not happened yet, and holds room for it under the book's limit. For a person: an agent is refused. |
 | `cancel_instruction` | Cancels an instruction. Its room is free again at once. |
 | `approve_instruction` | Approves an instruction as a second person. Refused if you placed it yourself. |
@@ -96,7 +97,9 @@ claude mcp add --transport http glasshouse https://your-host/mcp --header "Autho
 
 Whoever holds the token acts as one actor (`agent`, or the name in `GLASSHOUSE_MCP_ACTOR`).
 
-An operator can give out more tokens, each for its own named actor, with `GLASSHOUSE_MCP_TOKENS`: a JSON object of actor and token, such as `{"risk-manager": "a-long-secret", "alice": "another-long-secret"}`. Each caller is then one name in the record, and the rules can tell who placed an instruction from who approved it.
+**This door serves agents only.** Every call made with a token for an actor the ledger has not declared an agent is refused, and the server names such tokens in its log when it starts. `glasshouse mcp` will not start for one either. People use the screens and the command line.
+
+An operator can give out more tokens, each for its own named actor, with `GLASSHOUSE_MCP_TOKENS`: a JSON object of actor and token, such as `{"risk-manager": "a-long-secret", "alice": "another-long-secret"}`. Each caller is then one name in the record. Each must be a declared agent.
 
 `GLASSHOUSE_MCP_MODELS` says which model each agent behind the hosted server runs on: a JSON object of actor and model, such as `{"algo": "example-strategy-1"}`. An agent with no entry names no model, and its mandated trades are refused.
 
@@ -199,7 +202,7 @@ Two rules decide who may approve:
 - they must hold the right to approve in that book (`may_approve`);
 - they must not be the one who placed the instruction (`approver_is_not_proposer`).
 
-With three tokens (for `demo`, who may both instruct and approve, for `risk-manager`, who may approve, and for `agent`, an agent):
+Approving is a person's act, so it is done on the command line or by code calling the tools directly, not through the agents' door. With three names (`demo`, who may both instruct and approve, `risk-manager`, who may approve, and `agent`, an agent):
 
 1. **`demo` places an instruction.** Accepted. It holds its room at once and awaits approval.
 2. **`demo` tries to approve it.** Refused by `approver_is_not_proposer`.
@@ -235,7 +238,7 @@ A refusal is not in the audit history. The audit history holds only what was acc
 
 Each of these is enforced by the rules in the ledger, not by the MCP server, with one exception: the model a trade names comes from the server's configuration. The server has no way round the rest.
 
-What the ledger cannot know: that an actor is an agent until someone declares it one, and that a token for a person's name is held by that person. An AI connected with a person's token is that person to the ledger.
+What the ledger cannot know: that an actor is an agent until someone declares it one. Both doors here refuse any actor that is not a declared agent, so software that comes in through them is bound by the agent rules. What no door can stop is a person giving their own credentials to an AI somewhere else: to the ledger, that is the person.
 
 ## Limits of this first version
 
@@ -246,5 +249,5 @@ What the ledger cannot know: that an actor is an agent until someone declares it
 - A trade takes the currency of its market. You do not state one, and a trade in a market that has not been declared is refused.
 - A token per actor (`GLASSHOUSE_MCP_TOKENS`), not a sign-in. Everyone holding one token shares one name and one limit, so a class should run local copies.
 - A mandate bounds one book and market, its orders, its total in MW and its delivery window. It does not yet bound the hours of the day it may trade, or the net position it may build within the book's limit.
-- Mandates are given and suspended through MCP and the command line. The screens do not show them yet.
+- Mandates are given, approved and suspended on the command line; over MCP an agent can only read its mandate and suspend it. The screens do not show them yet.
 - The hosted demo resets every night.

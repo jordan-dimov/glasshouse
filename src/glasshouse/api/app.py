@@ -18,10 +18,17 @@ from fastapi import FastAPI, Request, Response
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 from mcp.server import MCPServer
+from mcp.server.mcpserver.exceptions import ToolError
 from mcp.server.transport_security import TransportSecuritySettings
 
 from glasshouse import __version__
-from glasshouse.agents import Desk, build_server
+from glasshouse.agents import (
+    Desk,
+    NotAnAgentError,
+    build_server,
+    declared_agent,
+    require_declared_agent,
+)
 from glasshouse.api import health
 from glasshouse.api.auth import (
     AGENT_PATH,
@@ -33,15 +40,31 @@ from glasshouse.api.auth import (
 from glasshouse.api.deps import build_client, build_engine
 from glasshouse.api.queries import ReadUnavailableError
 from glasshouse.api.routers import audit, curves, explain, reads
-from glasshouse.commit import MorphologError
+from glasshouse.commit import GlasshouseClient, MorphologError
 from glasshouse.compute.store import CurveStore
-from glasshouse.config import get_settings
+from glasshouse.config import Settings, get_settings
 from glasshouse.logging import configure_logging, get_logger
 from glasshouse.projections.runner import RunningProjector, start_projector_thread
 from glasshouse.sweep import RunningSweep, start_sweep_thread
 from glasshouse.web import STATIC_DIR
 from glasshouse.web import routes as web
 from glasshouse.web.routes import unavailable_page
+
+
+def _name_tokens_for_people(client: GlasshouseClient, settings: Settings, actors: set[str]) -> None:
+    """At start, say loudly which configured tokens open nothing: an actor
+    the ledger does not declare an agent is refused on every call. A
+    ledger that cannot answer yet is not a reason to refuse to start; the
+    per-call check still holds."""
+    try:
+        people = sorted(
+            a for a in actors if not declared_agent(client, org=settings.demo_org, actor=a)
+        )
+    except MorphologError as unavailable:
+        get_logger("glasshouse.api").warning("api.agent_tokens_unchecked", error=str(unavailable))
+        return
+    if people:
+        get_logger("glasshouse.api").error("api.agent_tokens_for_non_agents", actors=people)
 
 
 def create_app() -> FastAPI:
@@ -78,6 +101,8 @@ def create_app() -> FastAPI:
                 # The same profile records overdue instructions' lapses,
                 # so their room comes free within a minute of expiring.
                 sweep = start_sweep_thread(app.state.client, actor=settings.sweep_actor)
+            if agent_tokens:
+                _name_tokens_for_people(app.state.client, settings, set(agent_tokens.values()))
             log.info("api.startup", environment=settings.environment, version=__version__)
             yield
         finally:
@@ -108,6 +133,7 @@ def create_app() -> FastAPI:
     # call, because those are made by the lifespan below.
     agents: MCPServer | None = None
     agent_tokens = settings.agent_tokens()
+    agents_seen: set[str] = set()
 
     def desk_of_the_caller() -> Desk:
         # The actor is whoever the door authenticated this request as. A
@@ -116,6 +142,15 @@ def create_app() -> FastAPI:
         actor = agent_caller.get()
         if actor is None:
             raise RuntimeError("an agent tool ran outside an authenticated request")
+        # Agents only: a token for an actor the ledger does not declare an
+        # agent opens nothing. A yes is kept, since declarations are
+        # append only; a no is asked again, so declaring takes effect.
+        if actor not in agents_seen:
+            try:
+                require_declared_agent(app.state.client, org=settings.demo_org, actor=actor)
+            except NotAnAgentError as person:
+                raise ToolError(str(person)) from None
+            agents_seen.add(actor)
         return Desk(
             client=app.state.client,
             engine=app.state.engine,

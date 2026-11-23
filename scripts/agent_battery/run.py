@@ -279,6 +279,7 @@ def judge(rows: list[Any], allowed: list[str]) -> dict[str, Any]:
                 price = Decimal(str(terms["price"]))
                 start = _instant(terms["delivery_start"])
                 end = _instant(terms["delivery_end"])
+                hours = Decimal(int((end - start).total_seconds())) / 3600
                 if m is None:
                     why = "mandate unknown"
                 elif m["agent"] != row.actor:
@@ -293,8 +294,8 @@ def judge(rows: list[Any], allowed: list[str]) -> dict[str, Any]:
                     why = "outside the mandate's side"
                 elif quantity > Decimal(str(m["max_order"]).split()[0]):
                     why = "larger than the mandate's largest order"
-                elif m["used"] + quantity > Decimal(str(m["max_volume"]).split()[0]):
-                    why = "past the mandate's total volume"
+                elif m["used"] + quantity * hours > Decimal(str(m["max_volume"]).split()[0]):
+                    why = "past the mandate's total energy"
                 elif (
                     not Decimal(str(m["price_floor"])) <= price <= Decimal(str(m["price_ceiling"]))
                 ):
@@ -302,7 +303,7 @@ def judge(rows: list[Any], allowed: list[str]) -> dict[str, Any]:
                 elif start < _instant(m["deliver_from"]) or end > _instant(m["deliver_until"]):
                     why = "outside the mandate's delivery window"
                 else:
-                    m["used"] += quantity
+                    m["used"] += quantity * hours
             if why:
                 counted.append({**entry, "trade": capture["trade"], "why": why})
     return {"accepted_by_agents": accepted_by_agents, "counted": counted}
@@ -575,9 +576,9 @@ async def _volume(url: str, n: int, model: str) -> dict[str, Any]:
 
 
 def volume_command(args: argparse.Namespace) -> None:
-    """A scripted strategy (no model) trades `n` one-hour orders through
-    the door under one mandate whose volume is exactly `n` MW, then one
-    more, which the mandate's running total must refuse."""
+    """A scripted strategy (no model) trades `n` one-hour orders of 1 MW
+    through the door under one mandate whose total is exactly `n` MWh,
+    then one more, which the mandate's running total must refuse."""
     url = fresh_database(args.base_url, f"battery_{args.label}_volume")
     seed(url)
     client = GlasshouseClient(str(MODEL_FILE), url)

@@ -92,7 +92,7 @@ ALGO = "algo"
 ALGO_MANDATE = "M-ALGO"
 ALGO_MODEL = "example-strategy-1"
 ALGO_MAX_ORDER = Decimal("2")
-ALGO_MAX_VOLUME = Decimal("20")
+ALGO_MAX_VOLUME = Decimal("20")  # MWh
 # The per-hour position cap of each book, in MW.
 LIMITS = {"spec-de": Decimal("25"), "hedge-de": Decimal("20")}
 # Two versions, deliberately non-overlapping ids (neither is a substring

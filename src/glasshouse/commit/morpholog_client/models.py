@@ -368,7 +368,7 @@ class ProposeMandateRequest:
     max_order: Decimal
     # amount in MW (the declaration carries the unit)
     max_volume: Decimal
-    # amount in MW (the declaration carries the unit)
+    # amount in MWh (the declaration carries the unit)
     price_floor: Decimal
     price_ceiling: Decimal
     deliver_from: datetime
@@ -1630,7 +1630,7 @@ class MandateClaim:
     max_order: Decimal
     # amount in MW (the declaration carries the unit)
     max_volume: Decimal
-    # amount in MW (the declaration carries the unit)
+    # amount in MWh (the declaration carries the unit)
     price_floor: Decimal
     price_ceiling: Decimal
     deliver_from: datetime
@@ -1749,24 +1749,21 @@ class TradeUnderMandateClaim:
     org: str
     mandate: str
     trade: str
-    quantity: Decimal
-    # amount in MW (the declaration carries the unit)
+    energy: Decimal
+    # amount in MWh (the declaration carries the unit)
 
     @classmethod
     def from_named(cls, args: dict[str, object]) -> TradeUnderMandateClaim:
         values.named_fields(
             "TradeUnderMandate",
             args,
-            ("org", "mandate", "trade", "quantity"),
+            ("org", "mandate", "trade", "energy"),
         )
         return cls(
             org=values.named_text("TradeUnderMandate.org", args["org"]),
             mandate=values.named_text("TradeUnderMandate.mandate", args["mandate"]),
             trade=values.named_text("TradeUnderMandate.trade", args["trade"]),
-            quantity=values.named_decimal(
-                "TradeUnderMandate.quantity",
-                args["quantity"],
-            ),
+            energy=values.named_decimal("TradeUnderMandate.energy", args["energy"]),
         )
 
 

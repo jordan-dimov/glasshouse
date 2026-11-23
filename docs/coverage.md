@@ -114,9 +114,9 @@ Every new function arrives one of three ways: as rules in [the one rule file](..
 | Function | State | Notes |
 |---|---|---|
 | An AI agent reads the book | Has | Through MCP. See [mcp.md](mcp.md). |
-| An agent trades only under a standing mandate a person approved | Has | One book and market, side, largest order, total volume, price band, delivery window, end. Proposed by one person, approved by another, suspended by one at once. The total is summed by the ledger at each trade. Refusals come back as data. See [agent-authority.md](agent-authority.md). |
+| An agent trades only under a standing mandate a person approved | Has | One book and market, side, largest order (MW), total energy (MWh), price band, delivery window, end. Proposed by one person, approved by another, suspended by one at once. The total is summed by the ledger at each trade. Refusals come back as data. See [agent-authority.md](agent-authority.md). |
 | An agent's authority ends when its model changes | Has | A person records the model, another approves it; the server, not the agent, names the model in use. |
-| An agent books nothing through the acts people use | Has | Only for actors declared as agents. An AI using a person's token is that person to the ledger. |
+| An agent books nothing through the acts people use | Has | For actors declared as agents. The doors for software serve declared agents only. A person who gives their own credentials to an AI elsewhere is still that person to the ledger. |
 | Each agent under its own name | Has | A token per actor. A token does not prove who holds it: [#85](https://github.com/jordan-dimov/glasshouse/issues/85). |
 
 ## The order of work
