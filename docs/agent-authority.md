@@ -73,6 +73,11 @@ The test found five gaps. Three are closed, one of them only as far as our own d
 
 A mandate also does not yet bound the hours of the day an agent may trade, or the net position it may build inside the book's limit. Those are known limits, not findings of this test.
 
+Two more points came from reading the rules after the run, not from the battery.
+
+- **Which acts check for an agent.** The check is written by hand on each act people use. Morpholog lists every act's preconditions (`inspect controls --json`), and that list showed one act without it: `admit_valuation`. An agent given the right to value trades may record marks. That was decided to be allowed, since a mark moves no position. A test now reads the same list and fails on any act that neither checks for an agent nor sits on a short reviewed list with its reason.
+- **The two-person rules rest on the doors.** A different person must approve a mandate, and a model record. The ledger compares actor names, and the name is the one the calling door asserted. Both doors and the command line run under one database login, so software holding that login could propose under one name and approve under another. Morpholog can close this between agents and people: a closed deployment, a login for each door, and its own `ActorKind` claims in place of our `AgentActor`, so the agent door's login can assert agents and nothing else. That needs the deployment closed first (issue #85). Between two people behind one gateway, only signed proposals close it, and Morpholog has recorded this case for that work.
+
 ## What this test does not show
 
 - It ran one model. A different model, or the same one prompted another way, may try more of the forbidden acts. The rules do not depend on the model's restraint, and the live tests cover each forbidden act.

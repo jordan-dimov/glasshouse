@@ -939,6 +939,10 @@ The dry-run is about 19 times faster. This is #888 (one evaluation computes each
 
 **Rehearsed.** `rehearse` of this programme over a ledger seeded under the previous rules (79 rows) and the seventeen ledgers of the before run (78 to 98 rows): every row `same`, none `would_reject`. The old records declare no agent, so the new gates bind nobody in them. A kept ledger would therefore keep an undeclared agent's rights until someone declares it; the demo resets, so its `agent` is declared by the seed.
 
+**The control matrix as a test.** `tests/commit/test_agent_controls_integration.py` reads `inspect controls --json` and fails on any act that consults no `AgentActor` and is not on its reviewed list (each entry with a reason), and on a reviewed entry that is stale. It found `admit_valuation` unchecked; an agent may value trades (decided 23/11/2026), so it is listed. Removing the check from `amend_trade` makes it fail. There is no generated method for `inspect controls`, so this is a test-only call of the binary with its argv in the test; nothing in `src/` calls it.
+
+**Identity, from Morpholog (morpholog-d3, 23/11/2026).** A rule cannot read how an actor was attested, by design. The next rung for us is a closed deployment (`init --root-actor --root-login`), a login per door, and Morpholog's `ActorKind(actor, #agent)` with `ActorKindAuthority(#agent, <agent door login>)` in place of our `AgentActor`, so the binary, not our door, keeps agents to the agent door; `morpholog serve` can choose the login by the socket peer's uid. This does not make proposer != approver strong between two people behind one gateway login; signature mode does, and our shape is recorded on morpholog#417. Closing waits on reworking `grant_grant_authority`, which writes identity policy as a non-root (#85).
+
 **Not done.** Mandates on the screens. A bound on the hours of the day an agent may trade, or on the net position it builds within the book's cap. Bounding a person's capture or instruction to delivery that has not happened yet, and the shape of identifiers (both findings of the test, agent-authority.md).
 
-**Counts.** Pure 365 passed, 178 skipped. Live 543 passed, coverage 95.3 percent.
+**Counts.** Pure 365 passed, 180 skipped. Live 545 passed, coverage 95.2 percent.
