@@ -30,9 +30,9 @@ dev = [
     "pytest>=9.2.0",
     "pytest-cov>=7.0",
     "pytest-randomly>=5.1.0",
-    "hypothesis>=6.170.15",
-    "httpx2>=2.16.0",
-    "ruff>=0.17.5",
+    "hypothesis>=6.170.17",
+    "httpx2>=2.16.2",
+    "ruff>=0.17.6",
     "mypy>=2.4.1",
 ]
 
